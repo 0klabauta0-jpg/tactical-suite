@@ -38,7 +38,7 @@ const GROUP_LABELS: Record<string, string> = {
 // image: Pfad unter /public/maps/ (leer = Auto-Karte wird angezeigt)
 // x/y: Position des Markers auf der Hauptkarte (0-1)
 const SUBMAPS: SubMap[] = [
-  { id: "pyro1_base",   label: "Fallow Field",  image: "/maps/Fallow Field 500m.png",  x: 0.25, y: 0.35 },
+  { id: "pyro1_base",   label: "Pyro I Base",  image: "/maps/pyro1-base.png",  x: 0.25, y: 0.35 },
   { id: "ruin_station", label: "Ruin Station",  image: "",                      x: 0.55, y: 0.45 },
   { id: "checkmate",    label: "Checkmate",     image: "/maps/checkmate.png",  x: 0.70, y: 0.60 },
 ];
@@ -567,9 +567,20 @@ function BoardApp() {
     const unsub = onSnapshot(ref, snap => {
       const data = snap.data() as any;
       if (!data) return;
-      if (data.board)      setBoard(data.board);
-      if (data.tokens)     setTokens(data.tokens);
-      if (data.aliveState) setAliveState(data.aliveState);
+      if (data.board) {
+        // Fehlende Gruppen automatisch ergänzen (Schutz gegen alten State)
+        const safeBoard: BoardState = {
+          unassigned: data.board.unassigned ?? [],
+          g1: data.board.g1 ?? [],
+          g2: data.board.g2 ?? [],
+          g3: data.board.g3 ?? [],
+          g4: data.board.g4 ?? [],
+          g5: data.board.g5 ?? [],
+        };
+        setBoard(safeBoard);
+      }
+      if (data.tokens)     setTokens(data.tokens     ?? []);
+      if (data.aliveState) setAliveState(data.aliveState ?? {});
     });
     return () => unsub();
   }, [user, roomId]);
