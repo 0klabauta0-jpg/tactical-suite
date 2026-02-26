@@ -269,7 +269,8 @@ function DroppableColumn({
   onToggleAlive: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
-  const deadCount = ids.filter(pid => aliveState[pid] === "dead").length;
+  const safeIds   = ids ?? [];
+  const deadCount = safeIds.filter(pid => aliveState[pid] === "dead").length;
 
   return (
     <div ref={setNodeRef}
@@ -278,7 +279,7 @@ function DroppableColumn({
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold text-sm text-white">
           {title}
-          <span className="ml-1 text-gray-500 font-normal">({ids.length})</span>
+          <span className="ml-1 text-gray-500 font-normal">({safeIds.length})</span>
           {deadCount > 0 && <span className="ml-1 text-red-500 text-xs"> ☠{deadCount}</span>}
         </div>
         {onClear && canWrite && (
@@ -287,14 +288,14 @@ function DroppableColumn({
           </button>
         )}
       </div>
-      <SortableContext items={ids} strategy={rectSortingStrategy}>
+      <SortableContext items={safeIds} strategy={rectSortingStrategy}>
         <div className="space-y-1 min-h-[150px]">
-          {ids.length === 0 && (
+          {safeIds.length === 0 && (
             <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-4 text-center">
               hierher ziehen
             </div>
           )}
-          {ids.map(pid => playersById[pid] ? (
+          {safeIds.map(pid => playersById[pid] ? (
             <Card key={pid} player={playersById[pid]}
               aliveState={aliveState} currentPlayerId={currentPlayerId}
               onToggleAlive={onToggleAlive} />
