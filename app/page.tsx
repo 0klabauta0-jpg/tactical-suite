@@ -185,7 +185,14 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
 function InlineEdit({ value, onSave, className = "" }: { value: string; onSave: (v: string) => void; className?: string; }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+
+  // Wenn value sich von außen ändert (z.B. Firestore-Sync) und wir nicht editieren → übernehmen
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
   function commit() { if (draft.trim()) onSave(draft.trim()); setEditing(false); }
+
   if (editing) return (
     <input className={`bg-gray-700 border border-gray-500 text-white rounded px-1 text-sm focus:outline-none ${className}`}
       value={draft} autoFocus
@@ -223,20 +230,23 @@ function Card({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: player.id });
 
-  const isDead = aliveState[player.id] === "dead";
-  const isSelf = player.id === currentPlayerId;
-  // Commander/Admin können auch andere als tot markieren
+  const isDead    = aliveState[player.id] === "dead";
+  const isSelf    = player.id === currentPlayerId;
   const canToggle = isSelf || canWrite;
+  // Spawn-Dropdown: eigener Spieler ODER Commander/Admin
+  const canSetSpawn = isSelf || canWrite;
   const playerSpawn = spawnState[player.id] ?? "";
 
   return (
     <div ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
-      className={`rounded-xl border p-2 shadow-sm cursor-grab active:cursor-grabbing transition-all
+      className={`rounded-xl border shadow-sm transition-all
         ${isDead ? "bg-gray-900 border-red-900 opacity-70" : "bg-gray-800 border-gray-700"}`}
-      {...attributes} {...listeners}
     >
-      <div style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 6 }}>
+      {/* Drag-Handle – nur dieser Bereich ist draggable */}
+      <div {...attributes} {...listeners}
+        className="px-2 pt-2 pb-1 cursor-grab active:cursor-grabbing"
+        style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
         <div className="flex items-center justify-between gap-1">
           <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>
             {player.name}
@@ -246,6 +256,7 @@ function Card({
               className={`text-xs px-1.5 py-0.5 rounded border transition-colors flex-shrink-0
                 ${isDead ? "bg-red-950 border-red-700 text-red-400 hover:bg-red-900"
                          : "bg-green-950 border-green-700 text-green-400 hover:bg-green-900"}`}
+              onPointerDown={e => e.stopPropagation()}
               onClick={e => { e.stopPropagation(); onToggleAlive(player.id); }}>
               {isDead ? "☠" : "✓"}
             </button>
@@ -256,27 +267,29 @@ function Card({
           {player.area}{player.role ? ` · ${player.role}` : ""}
           {player.homeLocation ? ` · 📍${player.homeLocation}` : ""}
         </div>
-        {/* Spawn-Dropdown – nur für den Spieler selbst */}
-        {isSelf && spawnGroups.length > 0 && (
+      </div>
+
+      {/* Interaktiver Bereich – NICHT draggable */}
+      {canSetSpawn && spawnGroups.length > 0 && (
+        <div className="px-2 pb-2" onPointerDown={e => e.stopPropagation()}>
           <select
-            className="mt-1 w-full bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
+            className="w-full bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
             value={playerSpawn}
-            onChange={e => { e.stopPropagation(); onSetSpawn(player.id, e.target.value); }}
-            onClick={e => e.stopPropagation()}
+            onChange={e => onSetSpawn(player.id, e.target.value)}
           >
-            <option value="">Spawn wählen…</option>
+            <option value="">⚓ Spawn wählen…</option>
             {spawnGroups.map(sg => (
               <option key={sg.id} value={sg.id}>{sg.label}</option>
             ))}
           </select>
-        )}
-        {/* Für andere: gewählten Spawn anzeigen */}
-        {!isSelf && playerSpawn && (
-          <div className="text-xs text-yellow-600 mt-0.5">
-            ⚓ {spawnGroups.find(sg => sg.id === playerSpawn)?.label ?? ""}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+      {/* Viewer: gewählten Spawn nur anzeigen */}
+      {!canSetSpawn && playerSpawn && (
+        <div className="px-2 pb-2 text-xs text-yellow-600">
+          ⚓ {spawnGroups.find(sg => sg.id === playerSpawn)?.label ?? ""}
+        </div>
+      )}
     </div>
   );
 }
@@ -1067,6 +1080,28 @@ function BoardApp() {
   const spawnGroups = board.groups.filter(g => g.isSpawn);
   const tacticalGroups = board.groups.filter(g => g.id !== "unassigned" && !g.isSpawn);
 
+  // Sortierung für Unzugeteilt
+  const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "ampel" | null>(null);
+  const [sortDir,   setSortDir]   = useState<"asc" | "desc">("asc");
+
+  function toggleSort(field: typeof sortField) {
+    if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDir("asc"); }
+  }
+
+  const sortedUnassigned = useMemo(() => {
+    const ids = [...(board.columns["unassigned"] ?? [])];
+    if (!sortField) return ids;
+    return ids.sort((a, b) => {
+      const pa = playersById[a];
+      const pb = playersById[b];
+      if (!pa || !pb) return 0;
+      const va = (pa[sortField] ?? "").toLowerCase();
+      const vb = (pb[sortField] ?? "").toLowerCase();
+      return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+  }, [board.columns, sortField, sortDir, playersById]);
+
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="text-gray-400">Laden...</div>
@@ -1119,19 +1154,47 @@ function BoardApp() {
         {tab === "board" && (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <div className="space-y-4">
-              {/* Taktische Gruppen + Unzugeteilt */}
               <div className="grid gap-4" style={{
-                gridTemplateColumns: `200px repeat(${Math.max(1, tacticalGroups.length)}, 1fr)`
+                gridTemplateColumns: `220px repeat(${Math.max(1, tacticalGroups.length)}, 1fr)`
               }}>
-                <DroppableColumn
-                  group={board.groups.find(g => g.id === "unassigned")!}
-                  ids={board.columns["unassigned"] ?? []}
-                  playersById={playersById} aliveState={aliveState}
-                  currentPlayerId={currentPlayer.id} canWrite={canWrite}
-                  onToggleAlive={toggleAlive} onRename={renameGroup}
-                  onDelete={deleteGroup} spawnGroups={spawnGroups}
-                  spawnState={spawnState} onSetSpawn={setSpawn}
-                />
+                {/* Unzugeteilt mit Sortier-Buttons */}
+                <div className="flex flex-col gap-2">
+                  {/* Sortier-Buttons */}
+                  <div className="rounded-xl border border-gray-700 bg-gray-900 p-2">
+                    <div className="text-xs text-gray-500 mb-1.5">Sortieren nach:</div>
+                    <div className="flex flex-wrap gap-1">
+                      {([
+                        { f: "name",     l: "Name" },
+                        { f: "area",     l: "Bereich" },
+                        { f: "role",     l: "Rolle" },
+                        { f: "squadron", l: "Staffel" },
+                        { f: "ampel",    l: "Ampel" },
+                      ] as const).map(({ f, l }) => (
+                        <button key={f}
+                          className={`text-xs px-2 py-0.5 rounded border transition-colors
+                            ${sortField === f
+                              ? "bg-blue-700 border-blue-500 text-white"
+                              : "bg-gray-800 border-gray-600 text-gray-400 hover:text-white"}`}
+                          onClick={() => toggleSort(f)}>
+                          {l}{sortField === f ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                        </button>
+                      ))}
+                      {sortField && (
+                        <button className="text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-red-400"
+                          onClick={() => setSortField(null)}>✕</button>
+                      )}
+                    </div>
+                  </div>
+                  <DroppableColumn
+                    group={board.groups.find(g => g.id === "unassigned")!}
+                    ids={sortedUnassigned}
+                    playersById={playersById} aliveState={aliveState}
+                    currentPlayerId={currentPlayer.id} canWrite={canWrite}
+                    onToggleAlive={toggleAlive} onRename={renameGroup}
+                    onDelete={deleteGroup} spawnGroups={spawnGroups}
+                    spawnState={spawnState} onSetSpawn={setSpawn}
+                  />
+                </div>
                 {tacticalGroups.map(g => (
                   <DroppableColumn key={g.id} group={g}
                     ids={board.columns[g.id] ?? []}
