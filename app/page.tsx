@@ -23,27 +23,6 @@ import {
 } from "firebase/auth";
 
 // ─────────────────────────────────────────────────────────────
-// KONFIGURATION – Gruppenbezeichnungen hier anpassen
-// ─────────────────────────────────────────────────────────────
-
-const GROUP_LABELS: Record<string, string> = {
-  g1: "Marines",
-  g2: "Air",
-  g3: "Subradar",
-  g4: "SAR",
-  g5: "Command",
-};
-
-// Unterkarten-Definitionen
-// image: Pfad unter /public/maps/ (leer = Auto-Karte wird angezeigt)
-// x/y: Position des Markers auf der Hauptkarte (0-1)
-const SUBMAPS: SubMap[] = [
-  { id: "pyro1_base",   label: "Fallow-Field",  image: "/maps/Fallow-Field-500m.png",  x: 0.25, y: 0.35 },
-  { id: "ruin_station", label: "Ruin Station",  image: "",                      x: 0.55, y: 0.45 },
-  { id: "checkmate",    label: "Checkmate",     image: "/maps/checkmate.png",  x: 0.70, y: 0.60 },
-];
-
-// ─────────────────────────────────────────────────────────────
 // TYPEN
 // ─────────────────────────────────────────────────────────────
 
@@ -59,18 +38,24 @@ type Player = {
   homeLocation?: string;
 };
 
-type GroupId = "unassigned" | "g1" | "g2" | "g3" | "g4" | "g5";
+// Gruppe: id + label + optional spawn-Gruppe
+type Group = {
+  id: string;
+  label: string;
+  isSpawn?: boolean; // Spawn-Gruppen nehmen tote Spieler auf
+};
 
-type BoardState = Record<GroupId, string[]>;
+type BoardState = {
+  groups: Group[];
+  columns: Record<string, string[]>; // groupId → playerIds
+};
 
 type Token = {
-  groupId: Exclude<GroupId, "unassigned">;
+  groupId: string;
   x: number;
   y: number;
   mapId?: string;
 };
-
-type PlayerAliveState = Record<string, "alive" | "dead">;
 
 type SubMap = {
   id: string;
@@ -80,10 +65,25 @@ type SubMap = {
   y: number;
 };
 
+type PlayerAliveState = Record<string, "alive" | "dead">;
 type Role = "admin" | "commander" | "viewer";
 
 const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
 const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
+
+// Standard-Gruppen beim ersten Start
+const DEFAULT_GROUPS: Group[] = [
+  { id: "unassigned", label: "Unzugeteilt" },
+  { id: "g1", label: "Marines" },
+  { id: "g2", label: "Air" },
+  { id: "g3", label: "Subradar" },
+  { id: "spawn1", label: "Spawn", isSpawn: true },
+];
+
+// Standard-Unterkarten
+const DEFAULT_SUBMAPS: SubMap[] = [
+  { id: "ruin_station", label: "Ruin Station", image: "", x: 0.55, y: 0.45 },
+];
 
 // ─────────────────────────────────────────────────────────────
 // CSV
@@ -122,8 +122,7 @@ async function loadPlayers(): Promise<Player[]> {
 // ─────────────────────────────────────────────────────────────
 
 function nameToFakeEmail(name: string): string {
-  const clean = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return `${clean}@tcs.internal`;
+  return `${name.toLowerCase().replace(/[^a-z0-9]/g, "")}@tcs.internal`;
 }
 
 function ampelColor(ampel?: string): string {
@@ -132,11 +131,24 @@ function ampelColor(ampel?: string): string {
   return "#dc2626";
 }
 
+function uid(): string {
+  return Math.random().toString(36).slice(2, 9);
+}
+
+// Sichert BoardState gegen fehlende Felder
+function safeBoard(data: any, groups: Group[]): BoardState {
+  const cols: Record<string, string[]> = {};
+  for (const g of groups) {
+    cols[g.id] = Array.isArray(data?.columns?.[g.id]) ? data.columns[g.id] : [];
+  }
+  return { groups, columns: cols };
+}
+
 // ─────────────────────────────────────────────────────────────
 // LOGIN
 // ─────────────────────────────────────────────────────────────
 
-function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
+function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password,   setPassword]   = useState("");
   const [msg,        setMsg]        = useState("");
@@ -145,20 +157,14 @@ function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
   async function handleLogin() {
     setMsg(""); setLoading(true);
     try {
-      if (password !== TEAM_PASSWORD) {
-        setMsg("Falsches Team-Passwort."); setLoading(false); return;
-      }
+      if (password !== TEAM_PASSWORD) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
       const players = await loadPlayers();
-      const found   = players.find(
-        p => p.name.toLowerCase() === playerName.trim().toLowerCase()
-      );
-      if (!found) {
-        setMsg(`Spieler "${playerName}" nicht gefunden.`); setLoading(false); return;
-      }
-      const fakeEmail  = nameToFakeEmail(found.name);
-      const firebasePw = TEAM_PASSWORD + "_tcs_internal";
-      try { await signInWithEmailAndPassword(auth, fakeEmail, firebasePw); }
-      catch { await createUserWithEmailAndPassword(auth, fakeEmail, firebasePw); }
+      const found   = players.find(p => p.name.toLowerCase() === playerName.trim().toLowerCase());
+      if (!found) { setMsg(`"${playerName}" nicht gefunden.`); setLoading(false); return; }
+      const email = nameToFakeEmail(found.name);
+      const pw    = TEAM_PASSWORD + "_tcs_internal";
+      try { await signInWithEmailAndPassword(auth, email, pw); }
+      catch { await createUserWithEmailAndPassword(auth, email, pw); }
       onLogin(found);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
@@ -170,26 +176,21 @@ function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
         <h1 className="font-bold text-xl mb-1 text-white">Tactical Command Suite</h1>
         <p className="text-gray-400 text-sm mb-6">Pyro Operations Board</p>
         <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
-        <input
-          className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
+        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
           placeholder="z.B. KRT_Bjoern" value={playerName}
           onChange={e => setPlayerName(e.target.value)}
           onKeyDown={e => e.key === "Enter" && handleLogin()} />
         <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
-        <input
-          className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
+        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
           type="password" placeholder="Team-Passwort" value={password}
           onChange={e => setPassword(e.target.value)}
           onKeyDown={e => e.key === "Enter" && handleLogin()} />
-        <button
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
           onClick={handleLogin} disabled={loading || !playerName || !password}>
           {loading ? "Einloggen..." : "Einloggen"}
         </button>
-        {msg ? <p className="mt-3 text-red-400 text-xs">{msg}</p> : null}
-        <p className="mt-4 text-gray-600 text-xs text-center">
-          Spielername exakt wie im Sheet.
-        </p>
+        {msg && <p className="mt-3 text-red-400 text-xs">{msg}</p>}
+        <p className="mt-4 text-gray-600 text-xs text-center">Spielername exakt wie im Sheet.</p>
       </div>
     </div>
   );
@@ -210,20 +211,15 @@ function Card({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: player.id });
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-
   const isDead = aliveState[player.id] === "dead";
   const isSelf = player.id === currentPlayerId;
 
   return (
-    <div
-      ref={setNodeRef} style={style} {...attributes} {...listeners}
+    <div ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
       className={`rounded-xl border p-2 shadow-sm cursor-grab active:cursor-grabbing transition-all
         ${isDead ? "bg-gray-900 border-red-900 opacity-60" : "bg-gray-800 border-gray-700"}`}
+      {...attributes} {...listeners}
     >
       <div style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 6 }}>
         <div className="flex items-center justify-between">
@@ -233,10 +229,8 @@ function Card({
           {isSelf && (
             <button
               className={`text-xs px-1.5 py-0.5 rounded ml-2 border transition-colors
-                ${isDead
-                  ? "bg-red-950 border-red-700 text-red-400 hover:bg-red-900"
-                  : "bg-green-950 border-green-700 text-green-400 hover:bg-green-900"
-                }`}
+                ${isDead ? "bg-red-950 border-red-700 text-red-400 hover:bg-red-900"
+                         : "bg-green-950 border-green-700 text-green-400 hover:bg-green-900"}`}
               onClick={e => { e.stopPropagation(); onToggleAlive(player.id); }}
             >
               {isDead ? "☠ Tot" : "✓ Live"}
@@ -258,41 +252,78 @@ function Card({
 // ─────────────────────────────────────────────────────────────
 
 function DroppableColumn({
-  id, title, ids, playersById, aliveState, currentPlayerId,
-  onClear, canWrite, onToggleAlive,
+  group, ids, playersById, aliveState, currentPlayerId,
+  onClear, canWrite, onToggleAlive, onRename, onDelete,
 }: {
-  id: GroupId; title: string; ids: string[];
+  group: Group;
+  ids: string[];
   playersById: Record<string, Player>;
   aliveState: PlayerAliveState;
   currentPlayerId: string;
-  onClear?: () => void; canWrite: boolean;
+  onClear?: () => void;
+  canWrite: boolean;
   onToggleAlive: (id: string) => void;
+  onRename: (id: string, label: string) => void;
+  onDelete: (id: string) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
+  const { setNodeRef, isOver } = useDroppable({ id: group.id });
   const safeIds   = ids ?? [];
   const deadCount = safeIds.filter(pid => aliveState[pid] === "dead").length;
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(group.label);
+
+  const isSystem = group.id === "unassigned";
+
+  function commitRename() {
+    if (draft.trim()) onRename(group.id, draft.trim());
+    setEditing(false);
+  }
 
   return (
     <div ref={setNodeRef}
-      className={`rounded-xl border p-3 shadow-sm min-h-[300px] transition-colors
-        ${isOver ? "bg-gray-700 border-blue-500" : "bg-gray-900 border-gray-700"}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="font-semibold text-sm text-white">
-          {title}
-          <span className="ml-1 text-gray-500 font-normal">({safeIds.length})</span>
-          {deadCount > 0 && <span className="ml-1 text-red-500 text-xs"> ☠{deadCount}</span>}
-        </div>
-        {onClear && canWrite && (
-          <button className="text-xs text-gray-500 hover:text-red-400" onClick={onClear}>
-            leeren
-          </button>
+      className={`rounded-xl border p-3 shadow-sm min-h-[200px] transition-colors flex flex-col
+        ${group.isSpawn ? "border-yellow-700 bg-gray-900" : isOver ? "bg-gray-700 border-blue-500" : "bg-gray-900 border-gray-700"}`}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2 gap-1">
+        {editing && canWrite ? (
+          <input
+            className="flex-1 bg-gray-700 border border-gray-500 text-white text-sm rounded px-2 py-0.5 focus:outline-none"
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => e.key === "Enter" && commitRename()}
+            autoFocus
+          />
+        ) : (
+          <div
+            className={`font-semibold text-sm flex items-center gap-1 flex-1 min-w-0
+              ${group.isSpawn ? "text-yellow-400" : "text-white"}
+              ${canWrite && !isSystem ? "cursor-pointer hover:text-blue-300" : ""}`}
+            onClick={() => { if (canWrite && !isSystem) { setDraft(group.label); setEditing(true); } }}
+            title={canWrite && !isSystem ? "Klicken zum Umbenennen" : ""}
+          >
+            {group.isSpawn && <span className="text-yellow-500">⚓</span>}
+            <span className="truncate">{group.label}</span>
+            <span className="text-gray-500 font-normal flex-shrink-0">({safeIds.length})</span>
+            {deadCount > 0 && <span className="text-red-500 text-xs flex-shrink-0">☠{deadCount}</span>}
+          </div>
         )}
+        <div className="flex gap-1 flex-shrink-0">
+          {onClear && canWrite && (
+            <button className="text-xs text-gray-600 hover:text-red-400 px-1" onClick={onClear} title="Leeren">↩</button>
+          )}
+          {canWrite && !isSystem && (
+            <button className="text-xs text-gray-600 hover:text-red-500 px-1" onClick={() => onDelete(group.id)} title="Gruppe löschen">✕</button>
+          )}
+        </div>
       </div>
+
       <SortableContext items={safeIds} strategy={rectSortingStrategy}>
-        <div className="space-y-1 min-h-[150px]">
+        <div className="space-y-1 flex-1">
           {safeIds.length === 0 && (
-            <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-4 text-center">
-              hierher ziehen
+            <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-3 text-center">
+              {group.isSpawn ? "Spawn-Bereich" : "hierher ziehen"}
             </div>
           )}
           {safeIds.map(pid => playersById[pid] ? (
@@ -311,21 +342,24 @@ function DroppableColumn({
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({
-  imageSrc, tokens, onMoveToken, canWrite,
-  submaps, onOpenSubmap, activeMapId,
+  imageSrc, tokens, onMoveToken, canWrite, isAdmin,
+  submaps, onOpenSubmap, onMoveSubmap, activeMapId,
 }: {
   imageSrc: string;
   tokens: Token[];
   onMoveToken: (groupId: string, x: number, y: number) => void;
   canWrite: boolean;
+  isAdmin: boolean;
   submaps: SubMap[];
   onOpenSubmap: (id: string) => void;
+  onMoveSubmap: (id: string, x: number, y: number) => void;
   activeMapId: string;
 }) {
-  const [scale,    setScale]    = useState(1);
-  const [offset,   setOffset]   = useState({ x: 0, y: 0 });
-  const [tokenDrag, setTokenDrag] = useState<string | null>(null);
-  const [panning,  setPanning]  = useState(false);
+  const [scale,      setScale]      = useState(1);
+  const [offset,     setOffset]     = useState({ x: 0, y: 0 });
+  const [tokenDrag,  setTokenDrag]  = useState<string | null>(null);
+  const [submapDrag, setSubmapDrag] = useState<string | null>(null);
+  const [panning,    setPanning]    = useState(false);
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
 
   function onWheel(e: React.WheelEvent) {
@@ -333,33 +367,41 @@ function ZoomableMap({
     setScale(s => Math.max(0.5, Math.min(5, s * (e.deltaY > 0 ? 0.9 : 1.1))));
   }
 
+  function getMapCoords(e: React.PointerEvent): { x: number; y: number } | null {
+    const img = document.getElementById("map-img");
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height)),
+    };
+  }
+
   function onBgPointerDown(e: React.PointerEvent) {
-    if (tokenDrag) return;
+    if (tokenDrag || submapDrag) return;
     setPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onBgPointerMove(e: React.PointerEvent) {
-    if (panning && !tokenDrag) {
+    if (panning && !tokenDrag && !submapDrag) {
       setOffset({
         x: panStart.current.ox + (e.clientX - panStart.current.x),
         y: panStart.current.oy + (e.clientY - panStart.current.y),
       });
     }
     if (tokenDrag) {
-      const img = document.getElementById("map-img");
-      if (!img) return;
-      const rect = img.getBoundingClientRect();
-      onMoveToken(
-        tokenDrag,
-        Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-        Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height)),
-      );
+      const c = getMapCoords(e);
+      if (c) onMoveToken(tokenDrag, c.x, c.y);
+    }
+    if (submapDrag) {
+      const c = getMapCoords(e);
+      if (c) onMoveSubmap(submapDrag, c.x, c.y);
     }
   }
 
-  function onBgPointerUp() { setPanning(false); setTokenDrag(null); }
+  function onBgPointerUp() { setPanning(false); setTokenDrag(null); setSubmapDrag(null); }
 
   const visibleTokens = tokens.filter(t =>
     activeMapId === "main" ? !t.mapId : t.mapId === activeMapId
@@ -368,8 +410,6 @@ function ZoomableMap({
   return (
     <div className="relative rounded-xl border border-gray-700 overflow-hidden bg-gray-950"
       style={{ height: 520 }}>
-
-      {/* Zoom-Buttons */}
       <div className="absolute top-3 right-3 z-20 flex flex-col gap-1">
         {[
           { lbl: "+", fn: () => setScale(s => Math.min(5, s * 1.3)) },
@@ -393,20 +433,34 @@ function ZoomableMap({
         <div style={{
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
           transformOrigin: "center center",
-          transition: panning || tokenDrag ? "none" : "transform 0.1s",
+          transition: (panning || tokenDrag || submapDrag) ? "none" : "transform 0.1s",
           width: "100%", height: "100%", position: "relative",
         }}>
           <img id="map-img" src={imageSrc} alt="Map"
             className="w-full h-full object-contain block select-none" draggable={false} />
 
-          {/* Submap-Marker */}
+          {/* Submap-Marker – Admin kann verschieben */}
           {activeMapId === "main" && submaps.map(sm => (
-            <button key={sm.id}
-              className="absolute z-10 bg-yellow-500 hover:bg-yellow-400 text-black text-xs font-bold px-2 py-0.5 rounded-full border-2 border-yellow-300 shadow-lg"
+            <div key={sm.id}
+              className={`absolute z-10 flex items-center gap-1
+                ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
               style={{ left: `${sm.x * 100}%`, top: `${sm.y * 100}%`, transform: "translate(-50%,-50%)" }}
-              onClick={e => { e.stopPropagation(); onOpenSubmap(sm.id); }}>
-              📍 {sm.label}
-            </button>
+              onPointerDown={e => {
+                e.stopPropagation();
+                if (isAdmin) { setSubmapDrag(sm.id); }
+              }}
+              onClick={e => {
+                e.stopPropagation();
+                if (!submapDrag) onOpenSubmap(sm.id);
+              }}
+            >
+              <div className={`bg-yellow-500 hover:bg-yellow-400 text-black text-xs font-bold px-2 py-0.5 rounded-full border-2 border-yellow-300 shadow-lg select-none whitespace-nowrap`}>
+                📍 {sm.label}
+              </div>
+              {isAdmin && (
+                <span className="text-yellow-400 text-xs opacity-60">✥</span>
+              )}
+            </div>
           ))}
 
           {/* Gruppen-Tokens */}
@@ -417,12 +471,9 @@ function ZoomableMap({
                 ${canWrite ? "cursor-grab active:cursor-grabbing" : "cursor-default"}
                 ${tokenDrag === t.groupId ? "ring-2 ring-yellow-400 scale-110" : ""}`}
               style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
-              onPointerDown={e => {
-                if (!canWrite) return;
-                e.stopPropagation();
-                setTokenDrag(t.groupId);
-              }}>
-              {GROUP_LABELS[t.groupId] ?? t.groupId}
+              onPointerDown={e => { if (!canWrite) return; e.stopPropagation(); setTokenDrag(t.groupId); }}
+            >
+              {t.groupId}
             </div>
           ))}
         </div>
@@ -432,7 +483,7 @@ function ZoomableMap({
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUTO-KARTE (Fallback wenn kein Bild)
+// AUTO-KARTE
 // ─────────────────────────────────────────────────────────────
 
 function AutoMap({ submap }: { submap: SubMap }) {
@@ -454,12 +505,14 @@ function AutoMap({ submap }: { submap: SubMap }) {
 // ─────────────────────────────────────────────────────────────
 
 function MapPlacer({
-  onPlace, activeMapId,
+  groups, onPlace, activeMapId,
 }: {
-  onPlace: (g: Exclude<GroupId, "unassigned">, x: number, y: number, mapId: string) => void;
+  groups: Group[];
+  onPlace: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
 }) {
-  const [armed, setArmed] = useState<Exclude<GroupId, "unassigned"> | null>(null);
+  const [armed, setArmed] = useState<string | null>(null);
+  const tactical = groups.filter(g => g.id !== "unassigned" && !g.isSpawn);
 
   useEffect(() => {
     function handler(ev: MouseEvent) {
@@ -477,28 +530,23 @@ function MapPlacer({
     return () => window.removeEventListener("click", handler);
   }, [armed, onPlace, activeMapId]);
 
-  const currentMapLabel = activeMapId === "main"
-    ? "Hauptkarte"
-    : SUBMAPS.find(s => s.id === activeMapId)?.label ?? activeMapId;
+  const currentMapLabel = activeMapId === "main" ? "Hauptkarte" : activeMapId;
 
   return (
     <div>
       <div className="text-xs text-gray-500 mb-2">
         Aktive Karte: <span className="text-blue-400">{currentMapLabel}</span>
       </div>
-      {(Object.keys(GROUP_LABELS) as Exclude<GroupId, "unassigned">[]).map(g => (
-        <button key={g}
+      {tactical.map(g => (
+        <button key={g.id}
           className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm font-medium transition-colors
-            ${armed === g
-              ? "bg-blue-600 border-blue-500 text-white"
-              : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
-          onClick={e => { e.stopPropagation(); setArmed(g); }}>
-          {armed === g ? `▶ Klick auf Karte…` : `Setze ${GROUP_LABELS[g]}`}
+            ${armed === g.id ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
+          onClick={e => { e.stopPropagation(); setArmed(g.id); }}>
+          {armed === g.id ? `▶ Klick auf Karte…` : `Setze ${g.label}`}
         </button>
       ))}
       {armed && (
-        <button
-          className="w-full rounded-lg border border-red-800 px-3 py-2 text-sm bg-red-950 text-red-400"
+        <button className="w-full rounded-lg border border-red-800 px-3 py-2 text-sm bg-red-950 text-red-400"
           onClick={e => { e.stopPropagation(); setArmed(null); }}>
           Abbrechen
         </button>
@@ -523,12 +571,14 @@ function BoardApp() {
   const [role,          setRole]          = useState<Role>("viewer");
   const [players,       setPlayers]       = useState<Player[]>([]);
   const [board,         setBoard]         = useState<BoardState>({
-    unassigned: [], g1: [], g2: [], g3: [], g4: [], g5: [],
+    groups: DEFAULT_GROUPS,
+    columns: Object.fromEntries(DEFAULT_GROUPS.map(g => [g.id, []])),
   });
-  const [tokens,        setTokens]        = useState<Token[]>([]);
-  const [aliveState,    setAliveState]    = useState<PlayerAliveState>({});
-  const [tab,           setTab]           = useState<"board" | "map">("board");
-  const [activeMapId,   setActiveMapId]   = useState<string>("main");
+  const [tokens,      setTokens]      = useState<Token[]>([]);
+  const [aliveState,  setAliveState]  = useState<PlayerAliveState>({});
+  const [submaps,     setSubmaps]     = useState<SubMap[]>(DEFAULT_SUBMAPS);
+  const [tab,         setTab]         = useState<"board" | "map">("board");
+  const [activeMapId, setActiveMapId] = useState<string>("main");
 
   const playersById = useMemo(
     () => Object.fromEntries(players.map(p => [p.id, p])),
@@ -536,24 +586,34 @@ function BoardApp() {
   );
 
   const canWrite = role === "admin" || role === "commander";
+  const isAdmin  = role === "admin";
 
+  // ── Auth ──────────────────────────────────────────────────
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, u => { setUser(u); setAuthReady(true); });
     return () => unsub();
   }, []);
 
+  // ── CSV ───────────────────────────────────────────────────
   useEffect(() => {
     loadPlayers().then(list => {
       setPlayers(list);
       setBoard(prev => {
-        const all   = new Set(Object.values(prev).flat());
+        const all   = new Set(Object.values(prev.columns).flat());
         const toAdd = list.map(p => p.id).filter(id => !all.has(id));
         if (!toAdd.length) return prev;
-        return { ...prev, unassigned: [...prev.unassigned, ...toAdd] };
+        return {
+          ...prev,
+          columns: {
+            ...prev.columns,
+            unassigned: [...(prev.columns.unassigned ?? []), ...toAdd],
+          },
+        };
       });
     });
   }, []);
 
+  // ── Rolle ─────────────────────────────────────────────────
   useEffect(() => {
     if (!user || !currentPlayer) return;
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
@@ -562,50 +622,178 @@ function BoardApp() {
     setDoc(memberRef, { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
+  // ── Firestore Sync ────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
     const ref   = doc(db, "rooms", roomId, "state", "board");
     const unsub = onSnapshot(ref, snap => {
       const data = snap.data() as any;
       if (!data) return;
-      if (data.board) {
-        // Fehlende Gruppen automatisch ergänzen (Schutz gegen alten State)
-        const safeBoard: BoardState = {
-          unassigned: data.board.unassigned ?? [],
-          g1: data.board.g1 ?? [],
-          g2: data.board.g2 ?? [],
-          g3: data.board.g3 ?? [],
-          g4: data.board.g4 ?? [],
-          g5: data.board.g5 ?? [],
-        };
-        setBoard(safeBoard);
-      }
+
+      // Gruppen aus Firestore laden (oder Default)
+      const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0
+        ? data.groups
+        : DEFAULT_GROUPS;
+
+      setBoard(safeBoard(data, loadedGroups));
       if (data.tokens)     setTokens(data.tokens     ?? []);
       if (data.aliveState) setAliveState(data.aliveState ?? {});
+      if (data.submaps)    setSubmaps(data.submaps    ?? DEFAULT_SUBMAPS);
     });
     return () => unsub();
   }, [user, roomId]);
 
-  async function pushState(nb: BoardState, nt: Token[], na: PlayerAliveState) {
+  // ── Firestore schreiben ───────────────────────────────────
+  async function pushAll(
+    nb: BoardState,
+    nt: Token[],
+    na: PlayerAliveState,
+    ns: SubMap[],
+  ) {
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), {
-        board: nb, tokens: nt, aliveState: na, updatedAt: serverTimestamp(),
+        groups:     nb.groups,
+        columns:    nb.columns,
+        tokens:     nt,
+        aliveState: na,
+        submaps:    ns,
+        updatedAt:  serverTimestamp(),
       }, { merge: true });
     } catch (err) { console.error("Firestore:", err); }
   }
 
+  // ── Tot/Lebendig ──────────────────────────────────────────
   function toggleAlive(playerId: string) {
     if (!currentPlayer || playerId !== currentPlayer.id) return;
     setAliveState(prev => {
-      const next = { ...prev, [playerId]: prev[playerId] === "dead" ? "alive" : "dead" } as PlayerAliveState;
-      pushState(board, tokens, next);
+      const wasDead  = prev[playerId] === "dead";
+      const next     = { ...prev, [playerId]: wasDead ? "alive" : "dead" } as PlayerAliveState;
+
+      // Wenn tot → automatisch in erste Spawn-Gruppe verschieben
+      let nextBoard = board;
+      if (!wasDead) {
+        const spawnGroup = board.groups.find(g => g.isSpawn);
+        if (spawnGroup) {
+          // Spieler aus aktueller Gruppe entfernen
+          const newCols = { ...board.columns };
+          for (const gId of Object.keys(newCols)) {
+            newCols[gId] = newCols[gId].filter(id => id !== playerId);
+          }
+          // In Spawn verschieben
+          newCols[spawnGroup.id] = [playerId, ...(newCols[spawnGroup.id] ?? [])];
+          nextBoard = { ...board, columns: newCols };
+          setBoard(nextBoard);
+        }
+      }
+
+      pushAll(nextBoard, tokens, next, submaps);
       return next;
     });
   }
 
-  function findContainer(id: string): GroupId | null {
-    for (const k of Object.keys(board) as GroupId[]) {
-      if (board[k].includes(id)) return k;
+  // ── Gruppen verwalten ─────────────────────────────────────
+
+  function addGroup(isSpawn = false) {
+    if (!canWrite) return;
+    const newGroup: Group = {
+      id:      uid(),
+      label:   isSpawn ? "Spawn" : "Neue Gruppe",
+      isSpawn,
+    };
+    setBoard(prev => {
+      const next: BoardState = {
+        groups:  [...prev.groups, newGroup],
+        columns: { ...prev.columns, [newGroup.id]: [] },
+      };
+      pushAll(next, tokens, aliveState, submaps);
+      return next;
+    });
+  }
+
+  function renameGroup(id: string, label: string) {
+    if (!canWrite) return;
+    setBoard(prev => {
+      const next: BoardState = {
+        ...prev,
+        groups: prev.groups.map(g => g.id === id ? { ...g, label } : g),
+      };
+      pushAll(next, tokens, aliveState, submaps);
+      return next;
+    });
+  }
+
+  function deleteGroup(id: string) {
+    if (!canWrite || id === "unassigned") return;
+    setBoard(prev => {
+      const players = prev.columns[id] ?? [];
+      const newCols = { ...prev.columns };
+      delete newCols[id];
+      newCols["unassigned"] = [...(newCols["unassigned"] ?? []), ...players];
+      const next: BoardState = {
+        groups:  prev.groups.filter(g => g.id !== id),
+        columns: newCols,
+      };
+      pushAll(next, tokens.filter(t => t.groupId !== id), aliveState, submaps);
+      setTokens(prev => prev.filter(t => t.groupId !== id));
+      return next;
+    });
+  }
+
+  function clearGroup(id: string) {
+    if (!canWrite) return;
+    setBoard(prev => {
+      const players = prev.columns[id] ?? [];
+      const next: BoardState = {
+        ...prev,
+        columns: {
+          ...prev.columns,
+          unassigned: [...(prev.columns["unassigned"] ?? []), ...players],
+          [id]: [],
+        },
+      };
+      pushAll(next, tokens, aliveState, submaps);
+      return next;
+    });
+  }
+
+  // ── Unterkarten verwalten ─────────────────────────────────
+
+  function addSubmap() {
+    if (!isAdmin) return;
+    const newSm: SubMap = { id: uid(), label: "Neuer Ort", image: "", x: 0.5, y: 0.5 };
+    const next = [...submaps, newSm];
+    setSubmaps(next);
+    pushAll(board, tokens, aliveState, next);
+  }
+
+  function renameSubmap(id: string, label: string) {
+    if (!isAdmin) return;
+    const next = submaps.map(s => s.id === id ? { ...s, label } : s);
+    setSubmaps(next);
+    pushAll(board, tokens, aliveState, next);
+  }
+
+  function deleteSubmap(id: string) {
+    if (!isAdmin) return;
+    const next = submaps.filter(s => s.id !== id);
+    setSubmaps(next);
+    if (activeMapId === id) setActiveMapId("main");
+    pushAll(board, tokens, aliveState, next);
+  }
+
+  function moveSubmap(id: string, x: number, y: number) {
+    if (!isAdmin) return;
+    setSubmaps(prev => {
+      const next = prev.map(s => s.id === id ? { ...s, x, y } : s);
+      pushAll(board, tokens, aliveState, next);
+      return next;
+    });
+  }
+
+  // ── Drag & Drop ───────────────────────────────────────────
+  function findContainer(playerId: string): string | null {
+    for (const [gId, ids] of Object.entries(board.columns)) {
+      if ((ids ?? []).includes(playerId)) return gId;
     }
     return null;
   }
@@ -616,85 +804,84 @@ function BoardApp() {
     const overId   = e.over?.id?.toString();
     if (!overId) return;
     const from = findContainer(activeId);
-    const to: GroupId | null =
-      (Object.keys(board) as GroupId[]).includes(overId as GroupId)
-        ? (overId as GroupId) : findContainer(overId);
+    const groupIds = board.groups.map(g => g.id);
+    const to = groupIds.includes(overId) ? overId : findContainer(overId);
     if (!from || !to) return;
+
     if (from === to) {
-      const oi = board[from].indexOf(activeId);
-      const ni = board[from].indexOf(overId);
+      const oi = (board.columns[from] ?? []).indexOf(activeId);
+      const ni = (board.columns[from] ?? []).indexOf(overId);
       if (oi !== -1 && ni !== -1 && oi !== ni) {
         setBoard(prev => {
-          const next = { ...prev, [from]: arrayMove(prev[from], oi, ni) };
-          pushState(next, tokens, aliveState);
+          const next: BoardState = {
+            ...prev,
+            columns: { ...prev.columns, [from]: arrayMove(prev.columns[from] ?? [], oi, ni) },
+          };
+          pushAll(next, tokens, aliveState, submaps);
           return next;
         });
       }
       return;
     }
-    setBoard(prev => {
-      const next = {
-        ...prev,
-        [from]: prev[from].filter(x => x !== activeId),
-        [to]:   [activeId, ...prev[to]],
-      };
-      pushState(next, tokens, aliveState);
-      return next;
-    });
-  }
 
-  function clearGroup(g: Exclude<GroupId, "unassigned">) {
     setBoard(prev => {
       const next: BoardState = {
-        ...prev, unassigned: [...prev.unassigned, ...prev[g]], [g]: [],
+        ...prev,
+        columns: {
+          ...prev.columns,
+          [from]: (prev.columns[from] ?? []).filter(x => x !== activeId),
+          [to]:   [activeId, ...(prev.columns[to] ?? [])],
+        },
       };
-      const nt = tokens.filter(t => t.groupId !== g);
-      pushState(next, nt, aliveState);
-      setTokens(nt);
+      pushAll(next, tokens, aliveState, submaps);
       return next;
     });
   }
 
-  const upsertToken = useCallback((
-    groupId: Exclude<GroupId, "unassigned">,
-    x: number, y: number, mapId: string,
-  ) => {
+  // ── Token ─────────────────────────────────────────────────
+  const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => {
     setTokens(prev => {
       const resolvedMapId = mapId === "main" ? undefined : mapId;
-      const i    = prev.findIndex(t => t.groupId === groupId && (t.mapId ?? "main") === mapId);
+      const i    = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
       const next = i === -1
-        ? [...prev, { groupId, x, y, mapId: resolvedMapId }]
-        : prev.map((t, idx) => idx === i ? { groupId, x, y, mapId: resolvedMapId } : t);
-      pushState(board, next, aliveState);
+        ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }]
+        : prev.map((t, idx) => idx === i ? { groupId: gId, x, y, mapId: resolvedMapId } : t);
+      pushAll(board, next, aliveState, submaps);
       return next;
     });
-  }, [board, aliveState]);
+  }, [board, aliveState, submaps]);
 
+  // ── Karte ─────────────────────────────────────────────────
   const currentMapImage = activeMapId === "main"
     ? "/pyro-map.png"
-    : SUBMAPS.find(s => s.id === activeMapId)?.image ?? "";
+    : submaps.find(s => s.id === activeMapId)?.image ?? "";
 
-  const currentSubmap = SUBMAPS.find(s => s.id === activeMapId);
+  const currentSubmap = submaps.find(s => s.id === activeMapId);
 
   const selfAlive = currentPlayer ? (aliveState[currentPlayer.id] ?? "alive") : "alive";
 
+  // ── Render ────────────────────────────────────────────────
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="text-gray-400">Laden...</div>
     </div>
   );
 
-  if (!user || !currentPlayer) return (
-    <LoginView onLogin={p => setCurrentPlayer(p)} />
-  );
+  if (!user || !currentPlayer) return <LoginView onLogin={p => setCurrentPlayer(p)} />;
 
   const roleBadge =
     role === "admin"     ? "bg-red-900 text-red-300 border border-red-700" :
     role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
                            "bg-gray-800 text-gray-400 border border-gray-600";
 
+  const tacticalGroups = board.groups.filter(g => g.id !== "unassigned" && !g.isSpawn);
+  const spawnGroups    = board.groups.filter(g => g.isSpawn);
+  const unassigned     = board.groups.find(g => g.id === "unassigned")!;
+
   return (
     <div className="min-h-screen bg-gray-950">
+
+      {/* Header */}
       <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
@@ -730,73 +917,165 @@ function BoardApp() {
 
       <main className="mx-auto max-w-7xl px-4 py-6">
 
+        {/* ── BOARD-TAB ── */}
         {tab === "board" && (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
-              <div className="md:col-span-1">
+            <div className="space-y-4">
+
+              {/* Taktische Gruppen + Unzugeteilt */}
+              <div className="grid gap-4"
+                style={{ gridTemplateColumns: `200px repeat(${tacticalGroups.length}, 1fr)` }}>
+                {/* Unzugeteilt */}
                 <DroppableColumn
-                  id="unassigned" title="Unzugeteilt"
-                  ids={board.unassigned} playersById={playersById}
-                  aliveState={aliveState} currentPlayerId={currentPlayer.id}
-                  canWrite={canWrite} onToggleAlive={toggleAlive} />
-              </div>
-              <div className="md:col-span-5 grid grid-cols-2 lg:grid-cols-5 gap-4">
-                {(Object.keys(GROUP_LABELS) as Exclude<GroupId, "unassigned">[]).map(g => (
-                  <DroppableColumn key={g} id={g} title={GROUP_LABELS[g]}
-                    ids={board[g]} playersById={playersById}
-                    aliveState={aliveState} currentPlayerId={currentPlayer.id}
-                    canWrite={canWrite} onToggleAlive={toggleAlive}
-                    onClear={() => clearGroup(g)} />
+                  group={unassigned}
+                  ids={board.columns["unassigned"] ?? []}
+                  playersById={playersById}
+                  aliveState={aliveState}
+                  currentPlayerId={currentPlayer.id}
+                  canWrite={canWrite}
+                  onToggleAlive={toggleAlive}
+                  onRename={renameGroup}
+                  onDelete={deleteGroup}
+                />
+                {/* Taktische Gruppen */}
+                {tacticalGroups.map(g => (
+                  <DroppableColumn key={g.id} group={g}
+                    ids={board.columns[g.id] ?? []}
+                    playersById={playersById}
+                    aliveState={aliveState}
+                    currentPlayerId={currentPlayer.id}
+                    canWrite={canWrite}
+                    onToggleAlive={toggleAlive}
+                    onRename={renameGroup}
+                    onDelete={deleteGroup}
+                    onClear={() => clearGroup(g.id)}
+                  />
                 ))}
               </div>
+
+              {/* Aktionen */}
+              {canWrite && (
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    className="text-xs px-3 py-1.5 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 flex items-center gap-1"
+                    onClick={() => addGroup(false)}>
+                    + Gruppe hinzufügen
+                  </button>
+                  <button
+                    className="text-xs px-3 py-1.5 rounded-lg border border-yellow-800 text-yellow-400 hover:bg-yellow-950 flex items-center gap-1"
+                    onClick={() => addGroup(true)}>
+                    ⚓ Spawn-Gruppe hinzufügen
+                  </button>
+                </div>
+              )}
+
+              {/* Spawn-Gruppen */}
+              {spawnGroups.length > 0 && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Spawn-Bereiche</div>
+                  <div className="grid gap-4"
+                    style={{ gridTemplateColumns: `repeat(${Math.min(spawnGroups.length, 4)}, 1fr)` }}>
+                    {spawnGroups.map(g => (
+                      <DroppableColumn key={g.id} group={g}
+                        ids={board.columns[g.id] ?? []}
+                        playersById={playersById}
+                        aliveState={aliveState}
+                        currentPlayerId={currentPlayer.id}
+                        canWrite={canWrite}
+                        onToggleAlive={toggleAlive}
+                        onRename={renameGroup}
+                        onDelete={deleteGroup}
+                        onClear={() => clearGroup(g.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </DndContext>
         )}
 
+        {/* ── KARTEN-TAB ── */}
         {tab === "map" && (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+
+            {/* Sidebar */}
             <div className="space-y-4">
+
               {/* Karten-Navigation */}
               <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
                 <div className="font-semibold text-sm text-white mb-2">Karten</div>
+
+                {/* Hauptkarte */}
                 <button
                   className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm text-left transition-colors
-                    ${activeMapId === "main"
-                      ? "bg-blue-900 border-blue-600 text-blue-200"
-                      : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
+                    ${activeMapId === "main" ? "bg-blue-900 border-blue-600 text-blue-200" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
                   onClick={() => setActiveMapId("main")}>
                   🗺 Pyro System
                 </button>
-                {SUBMAPS.map(sm => (
-                  <button key={sm.id}
-                    className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm text-left transition-colors
-                      ${activeMapId === sm.id
-                        ? "bg-blue-900 border-blue-600 text-blue-200"
-                        : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
-                    onClick={() => setActiveMapId(sm.id)}>
-                    📍 {sm.label}
-                  </button>
+
+                {/* Unterkarten – eingerückt */}
+                {submaps.map(sm => (
+                  <div key={sm.id} className="ml-4 flex items-center gap-1 mb-1">
+                    {/* Einrückungs-Linie */}
+                    <div className="w-3 h-px bg-gray-600 flex-shrink-0" />
+                    <button
+                      className={`flex-1 rounded-lg border px-2 py-1.5 text-xs text-left transition-colors
+                        ${activeMapId === sm.id ? "bg-blue-900 border-blue-600 text-blue-200" : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700 hover:text-gray-200"}`}
+                      onClick={() => setActiveMapId(sm.id)}>
+                      {/* Inline-Rename für Admin */}
+                      {isAdmin ? (
+                        <SubmapLabel
+                          label={sm.label}
+                          onRename={label => renameSubmap(sm.id, label)}
+                        />
+                      ) : (
+                        <span>📍 {sm.label}</span>
+                      )}
+                    </button>
+                    {isAdmin && (
+                      <button
+                        className="text-gray-600 hover:text-red-500 text-xs px-1 flex-shrink-0"
+                        onClick={() => deleteSubmap(sm.id)}
+                        title="Unterort löschen">
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 ))}
+
+                {/* Unterort hinzufügen */}
+                {isAdmin && (
+                  <button
+                    className="ml-4 mt-1 text-xs px-2 py-1 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-800 w-[calc(100%-1rem)]"
+                    onClick={addSubmap}>
+                    + Unterort hinzufügen
+                  </button>
+                )}
               </div>
 
+              {/* Token-Placer */}
               {canWrite && (
                 <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
                   <div className="font-semibold text-sm text-white mb-2">Token setzen</div>
                   <MapPlacer
-                    onPlace={(g, x, y, mapId) => upsertToken(g, x, y, mapId)}
-                    activeMapId={activeMapId} />
+                    groups={board.groups}
+                    onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
+                    activeMapId={activeMapId}
+                  />
                 </div>
               )}
             </div>
 
+            {/* Karte */}
             <div className="lg:col-span-3">
-              {/* Breadcrumb */}
               <div className="flex items-center gap-2 mb-2 text-sm text-gray-400">
-                <button className="hover:text-white" onClick={() => setActiveMapId("main")}>
-                  Pyro System
-                </button>
+                <button className="hover:text-white" onClick={() => setActiveMapId("main")}>Pyro System</button>
                 {activeMapId !== "main" && (
                   <><span>›</span><span className="text-white">{currentSubmap?.label}</span></>
+                )}
+                {isAdmin && activeMapId === "main" && (
+                  <span className="text-yellow-600 text-xs ml-2">✥ Admin: Unterorte verschiebbar</span>
                 )}
               </div>
 
@@ -806,11 +1085,14 @@ function BoardApp() {
                 <ZoomableMap
                   imageSrc={currentMapImage}
                   tokens={tokens}
-                  onMoveToken={(g, x, y) => upsertToken(g as any, x, y, activeMapId)}
+                  onMoveToken={(gId, x, y) => upsertToken(gId, x, y, activeMapId)}
                   canWrite={canWrite}
-                  submaps={activeMapId === "main" ? SUBMAPS : []}
+                  isAdmin={isAdmin}
+                  submaps={activeMapId === "main" ? submaps : []}
                   onOpenSubmap={id => setActiveMapId(id)}
-                  activeMapId={activeMapId} />
+                  onMoveSubmap={moveSubmap}
+                  activeMapId={activeMapId}
+                />
               )}
             </div>
           </div>
@@ -819,6 +1101,46 @@ function BoardApp() {
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// SUBMAP LABEL (inline editierbar)
+// ─────────────────────────────────────────────────────────────
+
+function SubmapLabel({ label, onRename }: { label: string; onRename: (l: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(label);
+
+  function commit() {
+    if (draft.trim()) onRename(draft.trim());
+    setEditing(false);
+  }
+
+  if (editing) return (
+    <input
+      className="w-full bg-gray-700 text-white text-xs rounded px-1 focus:outline-none"
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") commit(); }}
+      onClick={e => e.stopPropagation()}
+      autoFocus
+    />
+  );
+
+  return (
+    <span
+      className="flex items-center gap-1 cursor-text"
+      onClick={e => { e.stopPropagation(); setDraft(label); setEditing(true); }}
+      title="Klicken zum Umbenennen"
+    >
+      📍 {label} <span className="text-gray-600 text-xs">✎</span>
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// EXPORT
+// ─────────────────────────────────────────────────────────────
 
 export default function Page() {
   return (
