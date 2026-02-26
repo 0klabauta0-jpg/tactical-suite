@@ -38,7 +38,7 @@ const GROUP_LABELS: Record<string, string> = {
 // image: Pfad unter /public/maps/ (leer = Auto-Karte wird angezeigt)
 // x/y: Position des Markers auf der Hauptkarte (0-1)
 const SUBMAPS: SubMap[] = [
-  { id: "pyro1_base",   label: "Pyro I Base",  image: "/maps/pyro1-base.png",  x: 0.25, y: 0.35 },
+  { id: "pyro1_base",   label: "Fallow-Field",  image: "/maps/Fallow-Field-500m.png",  x: 0.25, y: 0.35 },
   { id: "ruin_station", label: "Ruin Station",  image: "",                      x: 0.55, y: 0.45 },
   { id: "checkmate",    label: "Checkmate",     image: "/maps/checkmate.png",  x: 0.70, y: 0.60 },
 ];
