@@ -1,12 +1,9 @@
 "use client";
 
-// React-Hooks für State und Effekte
-import React, { useEffect, useMemo, useState, Suspense } from "react";
-
-// CSV-Parser Bibliothek
+import React, {
+  useCallback, useEffect, useMemo, useRef, useState, Suspense,
+} from "react";
 import Papa from "papaparse";
-
-// Drag & Drop Bibliothek
 import {
   DndContext, DragEndEvent, PointerSensor,
   useDroppable, useSensor, useSensors,
@@ -15,28 +12,41 @@ import {
   SortableContext, useSortable, arrayMove, rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-
-// URL-Parameter (für Room-ID)
 import { useSearchParams } from "next/navigation";
-
-// Firebase Datenbank und Auth
 import { db, auth } from "@/lib/firebase";
 import {
-  doc, onSnapshot, setDoc, serverTimestamp
+  doc, onSnapshot, setDoc, serverTimestamp,
 } from "firebase/firestore";
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signOut,
-  User,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  onAuthStateChanged, signOut, User,
 } from "firebase/auth";
+
+// ─────────────────────────────────────────────────────────────
+// KONFIGURATION – Gruppenbezeichnungen hier anpassen
+// ─────────────────────────────────────────────────────────────
+
+const GROUP_LABELS: Record<string, string> = {
+  g1: "Marines",
+  g2: "Air",
+  g3: "Subradar",
+  g4: "SAR",
+  g5: "Command",
+};
+
+// Unterkarten-Definitionen
+// image: Pfad unter /public/maps/ (leer = Auto-Karte wird angezeigt)
+// x/y: Position des Markers auf der Hauptkarte (0-1)
+const SUBMAPS: SubMap[] = [
+  { id: "pyro1_base",   label: "Fallow Field",  image: "/maps/Fallow Field 500m.png",  x: 0.25, y: 0.35 },
+  { id: "ruin_station", label: "Ruin Station",  image: "",                      x: 0.55, y: 0.45 },
+  { id: "checkmate",    label: "Checkmate",     image: "/maps/checkmate.png",  x: 0.70, y: 0.60 },
+];
 
 // ─────────────────────────────────────────────────────────────
 // TYPEN
 // ─────────────────────────────────────────────────────────────
 
-// Ein Spieler aus dem Google Sheet
 type Player = {
   id: string;
   name: string;
@@ -45,77 +55,77 @@ type Player = {
   squadron?: string;
   status?: string;
   ampel?: string;
-  appRole?: string; // Rolle für die App (admin/commander/viewer)
+  appRole?: string;
+  homeLocation?: string;
 };
 
-// Die möglichen Gruppen-IDs
-type GroupId = "unassigned" | "g1" | "g2" | "g3";
+type GroupId = "unassigned" | "g1" | "g2" | "g3" | "g4" | "g5";
 
-// Der Board-State: jede Gruppe enthält eine Liste von Spieler-IDs
 type BoardState = Record<GroupId, string[]>;
 
-// Ein Token auf der Karte (Gruppe + Position)
 type Token = {
   groupId: Exclude<GroupId, "unassigned">;
-  x: number; // 0 bis 1 (relativ zur Kartenbreite)
-  y: number; // 0 bis 1 (relativ zur Kartenhöhe)
+  x: number;
+  y: number;
+  mapId?: string;
 };
 
-// Rolle eines Nutzers
+type PlayerAliveState = Record<string, "alive" | "dead">;
+
+type SubMap = {
+  id: string;
+  label: string;
+  image: string;
+  x: number;
+  y: number;
+};
+
 type Role = "admin" | "commander" | "viewer";
 
-// CSV-URL und Team-Passwort aus Umgebungsvariablen
-const SHEET_CSV_URL   = process.env.NEXT_PUBLIC_SHEET_CSV_URL   ?? "";
-const TEAM_PASSWORD   = process.env.NEXT_PUBLIC_TEAM_PASSWORD   ?? "";
+const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
+const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
 
 // ─────────────────────────────────────────────────────────────
-// CSV LADEN (einmalig, außerhalb der Komponente gecacht)
+// CSV
 // ─────────────────────────────────────────────────────────────
 
-// Gecachte Spielerliste damit wir beim Login nicht nochmal laden müssen
 let cachedPlayers: Player[] = [];
 
 async function loadPlayers(): Promise<Player[]> {
   if (cachedPlayers.length > 0) return cachedPlayers;
   if (!SHEET_CSV_URL.startsWith("http")) return [];
-
   const res    = await fetch(SHEET_CSV_URL, { cache: "no-store" });
   const text   = await res.text();
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-
   const list: Player[] = [];
   (parsed.data as any[]).forEach((row, idx) => {
     const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
     if (!name) return;
     list.push({
-      id:       row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
+      id:           row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
       name,
-      area:     (row["Bereich"]   ?? "").toString(),
-      role:     (row["Rolle"]     ?? "").toString(),
-      squadron: (row["Staffel"]   ?? "").toString(),
-      status:   (row["Status"]    ?? "").toString(),
-      ampel:    (row["Ampel"]     ?? "").toString(),
-      // AppRolle-Spalte bestimmt die App-Berechtigung
-      appRole:  (row["AppRolle"]  ?? "viewer").toString().toLowerCase(),
+      area:         (row["Bereich"]   ?? "").toString(),
+      role:         (row["Rolle"]     ?? "").toString(),
+      squadron:     (row["Staffel"]   ?? "").toString(),
+      status:       (row["Status"]    ?? "").toString(),
+      ampel:        (row["Ampel"]     ?? "").toString(),
+      appRole:      (row["AppRolle"]  ?? "viewer").toString().toLowerCase(),
+      homeLocation: (row["Heimatort"] ?? "").toString(),
     });
   });
-
   cachedPlayers = list;
   return list;
 }
 
 // ─────────────────────────────────────────────────────────────
-// HILFSFUNKTIONEN
+// HELPERS
 // ─────────────────────────────────────────────────────────────
 
-// Firebase benötigt eine Email im Hintergrund – wir bauen sie aus dem Spielernamen
-// Der User sieht das nie, es ist nur technisch nötig
 function nameToFakeEmail(name: string): string {
   const clean = name.toLowerCase().replace(/[^a-z0-9]/g, "");
   return `${clean}@tcs.internal`;
 }
 
-// Ampel-Farbe: gut=grün, mittel=gelb, sonst=rot
 function ampelColor(ampel?: string): string {
   if (ampel === "gut")    return "#16a34a";
   if (ampel === "mittel") return "#ca8a04";
@@ -123,7 +133,7 @@ function ampelColor(ampel?: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────
-// LOGIN-KOMPONENTE
+// LOGIN
 // ─────────────────────────────────────────────────────────────
 
 function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
@@ -133,48 +143,24 @@ function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
   const [loading,    setLoading]    = useState(false);
 
   async function handleLogin() {
-    setMsg("");
-    setLoading(true);
-
+    setMsg(""); setLoading(true);
     try {
-      // 1. Team-Passwort prüfen
       if (password !== TEAM_PASSWORD) {
-        setMsg("Falsches Team-Passwort.");
-        setLoading(false);
-        return;
+        setMsg("Falsches Team-Passwort."); setLoading(false); return;
       }
-
-      // 2. Spielerliste laden und Namen suchen
       const players = await loadPlayers();
       const found   = players.find(
         p => p.name.toLowerCase() === playerName.trim().toLowerCase()
       );
-
       if (!found) {
-        setMsg(`Spieler "${playerName}" nicht in der Liste gefunden.`);
-        setLoading(false);
-        return;
+        setMsg(`Spieler "${playerName}" nicht gefunden.`); setLoading(false); return;
       }
-
-      // 3. Firebase Auth: erst versuchen einzuloggen, sonst Account erstellen
-      const fakeEmail = nameToFakeEmail(found.name);
-      // Wir nutzen das Team-Passwort auch als Firebase-Passwort
+      const fakeEmail  = nameToFakeEmail(found.name);
       const firebasePw = TEAM_PASSWORD + "_tcs_internal";
-
-      try {
-        await signInWithEmailAndPassword(auth, fakeEmail, firebasePw);
-      } catch {
-        // Account existiert noch nicht → erstellen
-        await createUserWithEmailAndPassword(auth, fakeEmail, firebasePw);
-      }
-
-      // 4. Login erfolgreich
+      try { await signInWithEmailAndPassword(auth, fakeEmail, firebasePw); }
+      catch { await createUserWithEmailAndPassword(auth, fakeEmail, firebasePw); }
       onLogin(found);
-
-    } catch (e: any) {
-      setMsg(e?.message ?? "Fehler beim Login.");
-    }
-
+    } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
   }
 
@@ -183,40 +169,26 @@ function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
         <h1 className="font-bold text-xl mb-1 text-white">Tactical Command Suite</h1>
         <p className="text-gray-400 text-sm mb-6">Pyro Operations Board</p>
-
         <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
         <input
           className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
-          placeholder="z.B. KRT_Bjoern"
-          value={playerName}
+          placeholder="z.B. KRT_Bjoern" value={playerName}
           onChange={e => setPlayerName(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleLogin()}
-        />
-
+          onKeyDown={e => e.key === "Enter" && handleLogin()} />
         <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
         <input
           className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
-          type="password"
-          placeholder="Team-Passwort"
-          value={password}
+          type="password" placeholder="Team-Passwort" value={password}
           onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleLogin()}
-        />
-
+          onKeyDown={e => e.key === "Enter" && handleLogin()} />
         <button
           className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
-          onClick={handleLogin}
-          disabled={loading || !playerName || !password}
-        >
+          onClick={handleLogin} disabled={loading || !playerName || !password}>
           {loading ? "Einloggen..." : "Einloggen"}
         </button>
-
-        {msg ? (
-          <p className="mt-3 text-red-400 text-xs">{msg}</p>
-        ) : null}
-
+        {msg ? <p className="mt-3 text-red-400 text-xs">{msg}</p> : null}
         <p className="mt-4 text-gray-600 text-xs text-center">
-          Spielername muss exakt wie im Sheet stehen.
+          Spielername exakt wie im Sheet.
         </p>
       </div>
     </div>
@@ -224,11 +196,17 @@ function LoginView({ onLogin }: { onLogin: (player: Player) => void }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// BOARD-KOMPONENTEN
+// SPIELER-KARTE
 // ─────────────────────────────────────────────────────────────
 
-// Eine einzelne Spieler-Karte (draggable)
-function Card({ player }: { player: Player }) {
+function Card({
+  player, aliveState, currentPlayerId, onToggleAlive,
+}: {
+  player: Player;
+  aliveState: PlayerAliveState;
+  currentPlayerId: string;
+  onToggleAlive: (id: string) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: player.id });
 
@@ -238,186 +216,292 @@ function Card({ player }: { player: Player }) {
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const isDead = aliveState[player.id] === "dead";
+  const isSelf = player.id === currentPlayerId;
+
   return (
     <div
       ref={setNodeRef} style={style} {...attributes} {...listeners}
-      className="rounded-xl border border-gray-700 bg-gray-800 p-2 shadow-sm cursor-grab active:cursor-grabbing"
+      className={`rounded-xl border p-2 shadow-sm cursor-grab active:cursor-grabbing transition-all
+        ${isDead ? "bg-gray-900 border-red-900 opacity-60" : "bg-gray-800 border-gray-700"}`}
     >
-      {/* Farbiger Balken links je nach Ampel */}
       <div style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 6 }}>
-        <div className="font-semibold text-sm text-white">{player.name}</div>
+        <div className="flex items-center justify-between">
+          <div className={`font-semibold text-sm ${isDead ? "line-through text-gray-500" : "text-white"}`}>
+            {player.name}
+          </div>
+          {isSelf && (
+            <button
+              className={`text-xs px-1.5 py-0.5 rounded ml-2 border transition-colors
+                ${isDead
+                  ? "bg-red-950 border-red-700 text-red-400 hover:bg-red-900"
+                  : "bg-green-950 border-green-700 text-green-400 hover:bg-green-900"
+                }`}
+              onClick={e => { e.stopPropagation(); onToggleAlive(player.id); }}
+            >
+              {isDead ? "☠ Tot" : "✓ Live"}
+            </button>
+          )}
+          {!isSelf && isDead && <span className="text-xs text-red-500 ml-2">☠</span>}
+        </div>
         <div className="text-xs text-gray-400">
           {player.area}{player.role ? ` · ${player.role}` : ""}
+          {player.homeLocation ? ` · 📍 ${player.homeLocation}` : ""}
         </div>
       </div>
     </div>
   );
 }
 
-// Eine Gruppe-Spalte (droppable)
+// ─────────────────────────────────────────────────────────────
+// GRUPPE (droppable)
+// ─────────────────────────────────────────────────────────────
+
 function DroppableColumn({
-  id, title, ids, playersById, onClear, canWrite
+  id, title, ids, playersById, aliveState, currentPlayerId,
+  onClear, canWrite, onToggleAlive,
 }: {
-  id: GroupId;
-  title: string;
-  ids: string[];
+  id: GroupId; title: string; ids: string[];
   playersById: Record<string, Player>;
-  onClear?: () => void;
-  canWrite: boolean;
+  aliveState: PlayerAliveState;
+  currentPlayerId: string;
+  onClear?: () => void; canWrite: boolean;
+  onToggleAlive: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const deadCount = ids.filter(pid => aliveState[pid] === "dead").length;
 
   return (
-    <div
-      ref={setNodeRef}
+    <div ref={setNodeRef}
       className={`rounded-xl border p-3 shadow-sm min-h-[300px] transition-colors
-        ${isOver ? "bg-gray-700 border-blue-500" : "bg-gray-900 border-gray-700"}`}
-    >
+        ${isOver ? "bg-gray-700 border-blue-500" : "bg-gray-900 border-gray-700"}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold text-sm text-white">
           {title}
           <span className="ml-1 text-gray-500 font-normal">({ids.length})</span>
+          {deadCount > 0 && <span className="ml-1 text-red-500 text-xs"> ☠{deadCount}</span>}
         </div>
-        {onClear && canWrite ? (
+        {onClear && canWrite && (
           <button className="text-xs text-gray-500 hover:text-red-400" onClick={onClear}>
             leeren
           </button>
-        ) : null}
+        )}
       </div>
-
       <SortableContext items={ids} strategy={rectSortingStrategy}>
         <div className="space-y-1 min-h-[150px]">
-          {ids.length === 0 ? (
+          {ids.length === 0 && (
             <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-4 text-center">
               hierher ziehen
             </div>
-          ) : null}
-          {ids.map(pid =>
-            playersById[pid] ? <Card key={pid} player={playersById[pid]} /> : null
           )}
+          {ids.map(pid => playersById[pid] ? (
+            <Card key={pid} player={playersById[pid]}
+              aliveState={aliveState} currentPlayerId={currentPlayerId}
+              onToggleAlive={onToggleAlive} />
+          ) : null)}
         </div>
       </SortableContext>
     </div>
   );
 }
 
-// Karte mit Token-Anzeige
-function MapView({
-  tokens, onMoveToken, canWrite
+// ─────────────────────────────────────────────────────────────
+// ZOOMBARE KARTE
+// ─────────────────────────────────────────────────────────────
+
+function ZoomableMap({
+  imageSrc, tokens, onMoveToken, canWrite,
+  submaps, onOpenSubmap, activeMapId,
 }: {
+  imageSrc: string;
   tokens: Token[];
   onMoveToken: (groupId: string, x: number, y: number) => void;
   canWrite: boolean;
+  submaps: SubMap[];
+  onOpenSubmap: (id: string) => void;
+  activeMapId: string;
 }) {
-  const [dragging, setDragging] = useState<string | null>(null);
+  const [scale,    setScale]    = useState(1);
+  const [offset,   setOffset]   = useState({ x: 0, y: 0 });
+  const [tokenDrag, setTokenDrag] = useState<string | null>(null);
+  const [panning,  setPanning]  = useState(false);
+  const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
 
-  const label = (g: string) =>
-    g === "g1" ? "G1" : g === "g2" ? "G2" : g === "g3" ? "G3" : g;
+  function onWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    setScale(s => Math.max(0.5, Math.min(5, s * (e.deltaY > 0 ? 0.9 : 1.1))));
+  }
 
-  const clamp = (v: number) => Math.max(0, Math.min(1, v));
-
-  function onPointerDown(e: React.PointerEvent, groupId: string) {
-    if (!canWrite) return;
-    e.stopPropagation();
+  function onBgPointerDown(e: React.PointerEvent) {
+    if (tokenDrag) return;
+    setPanning(true);
+    panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    setDragging(groupId);
   }
 
-  function onPointerMove(e: React.PointerEvent) {
-    if (!dragging) return;
-    const img = document.getElementById("pyro-map");
-    if (!img) return;
-    const rect = img.getBoundingClientRect();
-    onMoveToken(
-      dragging,
-      clamp((e.clientX - rect.left) / rect.width),
-      clamp((e.clientY - rect.top)  / rect.height)
-    );
+  function onBgPointerMove(e: React.PointerEvent) {
+    if (panning && !tokenDrag) {
+      setOffset({
+        x: panStart.current.ox + (e.clientX - panStart.current.x),
+        y: panStart.current.oy + (e.clientY - panStart.current.y),
+      });
+    }
+    if (tokenDrag) {
+      const img = document.getElementById("map-img");
+      if (!img) return;
+      const rect = img.getBoundingClientRect();
+      onMoveToken(
+        tokenDrag,
+        Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+        Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height)),
+      );
+    }
   }
 
-  function onPointerUp() { setDragging(null); }
+  function onBgPointerUp() { setPanning(false); setTokenDrag(null); }
+
+  const visibleTokens = tokens.filter(t =>
+    activeMapId === "main" ? !t.mapId : t.mapId === activeMapId
+  );
 
   return (
-    <div className="relative select-none" onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-      <img
-        id="pyro-map"
-        src="/pyro-map.png"
-        alt="Pyro Map"
-        className="w-full h-auto block rounded-xl"
-      />
-      {tokens.map(t => (
-        <div
-          key={t.groupId}
-          className={`absolute rounded-full border-2 border-white bg-blue-600 text-white
-            px-2 py-0.5 text-xs font-bold shadow-lg select-none
-            ${canWrite ? "cursor-grab active:cursor-grabbing" : "cursor-default"}
-            ${dragging === t.groupId ? "ring-2 ring-yellow-400 scale-110" : ""}
-          `}
-          style={{
-            left: `${t.x * 100}%`,
-            top:  `${t.y * 100}%`,
-            transform: "translate(-50%,-50%)",
-          }}
-          onPointerDown={e => onPointerDown(e, t.groupId)}
-        >
-          {label(t.groupId)}
+    <div className="relative rounded-xl border border-gray-700 overflow-hidden bg-gray-950"
+      style={{ height: 520 }}>
+
+      {/* Zoom-Buttons */}
+      <div className="absolute top-3 right-3 z-20 flex flex-col gap-1">
+        {[
+          { lbl: "+", fn: () => setScale(s => Math.min(5, s * 1.3)) },
+          { lbl: "−", fn: () => setScale(s => Math.max(0.5, s / 1.3)) },
+          { lbl: "⊙", fn: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
+        ].map(b => (
+          <button key={b.lbl} onClick={b.fn}
+            className="w-8 h-8 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700">
+            {b.lbl}
+          </button>
+        ))}
+      </div>
+
+      <div className="w-full h-full overflow-hidden"
+        style={{ cursor: panning ? "grabbing" : "grab" }}
+        onWheel={onWheel}
+        onPointerDown={onBgPointerDown}
+        onPointerMove={onBgPointerMove}
+        onPointerUp={onBgPointerUp}
+      >
+        <div style={{
+          transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+          transformOrigin: "center center",
+          transition: panning || tokenDrag ? "none" : "transform 0.1s",
+          width: "100%", height: "100%", position: "relative",
+        }}>
+          <img id="map-img" src={imageSrc} alt="Map"
+            className="w-full h-full object-contain block select-none" draggable={false} />
+
+          {/* Submap-Marker */}
+          {activeMapId === "main" && submaps.map(sm => (
+            <button key={sm.id}
+              className="absolute z-10 bg-yellow-500 hover:bg-yellow-400 text-black text-xs font-bold px-2 py-0.5 rounded-full border-2 border-yellow-300 shadow-lg"
+              style={{ left: `${sm.x * 100}%`, top: `${sm.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              onClick={e => { e.stopPropagation(); onOpenSubmap(sm.id); }}>
+              📍 {sm.label}
+            </button>
+          ))}
+
+          {/* Gruppen-Tokens */}
+          {visibleTokens.map(t => (
+            <div key={t.groupId}
+              className={`absolute z-10 rounded-full border-2 border-white bg-blue-600 text-white
+                px-2 py-0.5 text-xs font-bold shadow-lg select-none
+                ${canWrite ? "cursor-grab active:cursor-grabbing" : "cursor-default"}
+                ${tokenDrag === t.groupId ? "ring-2 ring-yellow-400 scale-110" : ""}`}
+              style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={e => {
+                if (!canWrite) return;
+                e.stopPropagation();
+                setTokenDrag(t.groupId);
+              }}>
+              {GROUP_LABELS[t.groupId] ?? t.groupId}
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
 
-// Token-Platzierungs-Panel
+// ─────────────────────────────────────────────────────────────
+// AUTO-KARTE (Fallback wenn kein Bild)
+// ─────────────────────────────────────────────────────────────
+
+function AutoMap({ submap }: { submap: SubMap }) {
+  return (
+    <div className="w-full bg-gray-800 rounded-xl border border-gray-600 flex items-center justify-center flex-col gap-3 p-8"
+      style={{ height: 520 }}>
+      <div className="text-gray-300 text-base font-medium">{submap.label}</div>
+      <div className="text-gray-500 text-sm text-center">
+        Kein Kartenbild vorhanden.<br />
+        Lege eine Datei an unter:<br />
+        <code className="text-blue-400 text-xs">public/maps/{submap.id}.png</code>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// TOKEN-PLACER
+// ─────────────────────────────────────────────────────────────
+
 function MapPlacer({
-  onPlace
+  onPlace, activeMapId,
 }: {
-  onPlace: (g: Exclude<GroupId, "unassigned">, x: number, y: number) => void;
+  onPlace: (g: Exclude<GroupId, "unassigned">, x: number, y: number, mapId: string) => void;
+  activeMapId: string;
 }) {
   const [armed, setArmed] = useState<Exclude<GroupId, "unassigned"> | null>(null);
 
   useEffect(() => {
     function handler(ev: MouseEvent) {
-      const el = document.getElementById("pyro-map");
+      const el = document.getElementById("map-img");
       if (!el || !armed) return;
       const rect = el.getBoundingClientRect();
       const x = (ev.clientX - rect.left) / rect.width;
       const y = (ev.clientY - rect.top)  / rect.height;
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-        onPlace(armed, x, y);
+        onPlace(armed, x, y, activeMapId);
         setArmed(null);
       }
     }
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
-  }, [armed, onPlace]);
+  }, [armed, onPlace, activeMapId]);
 
-  const btn = (id: Exclude<GroupId, "unassigned">, label: string) => (
-    <button
-      key={id}
-      className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm font-medium transition-colors
-        ${armed === id
-          ? "bg-blue-600 border-blue-500 text-white"
-          : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
-        }`}
-      onClick={e => { e.stopPropagation(); setArmed(id); }}
-    >
-      {armed === id ? `▶ Klick auf Karte…` : `Setze ${label}`}
-    </button>
-  );
+  const currentMapLabel = activeMapId === "main"
+    ? "Hauptkarte"
+    : SUBMAPS.find(s => s.id === activeMapId)?.label ?? activeMapId;
 
   return (
     <div>
-      {btn("g1", "Gruppe 1")}
-      {btn("g2", "Gruppe 2")}
-      {btn("g3", "Gruppe 3")}
-      {armed ? (
+      <div className="text-xs text-gray-500 mb-2">
+        Aktive Karte: <span className="text-blue-400">{currentMapLabel}</span>
+      </div>
+      {(Object.keys(GROUP_LABELS) as Exclude<GroupId, "unassigned">[]).map(g => (
+        <button key={g}
+          className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm font-medium transition-colors
+            ${armed === g
+              ? "bg-blue-600 border-blue-500 text-white"
+              : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
+          onClick={e => { e.stopPropagation(); setArmed(g); }}>
+          {armed === g ? `▶ Klick auf Karte…` : `Setze ${GROUP_LABELS[g]}`}
+        </button>
+      ))}
+      {armed && (
         <button
           className="w-full rounded-lg border border-red-800 px-3 py-2 text-sm bg-red-950 text-red-400"
-          onClick={e => { e.stopPropagation(); setArmed(null); }}
-        >
+          onClick={e => { e.stopPropagation(); setArmed(null); }}>
           Abbrechen
         </button>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -430,45 +514,36 @@ function BoardApp() {
   const searchParams = useSearchParams();
   const roomId = searchParams.get("room") || "default";
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
-  );
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
-  // ── State ────────────────────────────────────────────────
-  const [user,        setUser]        = useState<User | null>(null);
-  const [authReady,   setAuthReady]   = useState(false);
+  const [user,          setUser]          = useState<User | null>(null);
+  const [authReady,     setAuthReady]     = useState(false);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
-  const [role,        setRole]        = useState<Role>("viewer");
-  const [players,     setPlayers]     = useState<Player[]>([]);
-  const [board,       setBoard]       = useState<BoardState>({
-    unassigned: [], g1: [], g2: [], g3: []
+  const [role,          setRole]          = useState<Role>("viewer");
+  const [players,       setPlayers]       = useState<Player[]>([]);
+  const [board,         setBoard]         = useState<BoardState>({
+    unassigned: [], g1: [], g2: [], g3: [], g4: [], g5: [],
   });
-  const [tokens,      setTokens]      = useState<Token[]>([]);
-  const [tab,         setTab]         = useState<"board" | "map">("board");
+  const [tokens,        setTokens]        = useState<Token[]>([]);
+  const [aliveState,    setAliveState]    = useState<PlayerAliveState>({});
+  const [tab,           setTab]           = useState<"board" | "map">("board");
+  const [activeMapId,   setActiveMapId]   = useState<string>("main");
 
-  // Schneller Lookup: id → Player
   const playersById = useMemo(
     () => Object.fromEntries(players.map(p => [p.id, p])),
     [players]
   );
 
-  // Darf dieser User schreiben?
   const canWrite = role === "admin" || role === "commander";
 
-  // ── Auth beobachten ──────────────────────────────────────
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => {
-      setUser(u);
-      setAuthReady(true);
-    });
+    const unsub = onAuthStateChanged(auth, u => { setUser(u); setAuthReady(true); });
     return () => unsub();
   }, []);
 
-  // ── Spieler aus CSV laden ────────────────────────────────
   useEffect(() => {
     loadPlayers().then(list => {
       setPlayers(list);
-      // Neue Spieler in Unassigned eintragen (nur wenn noch nicht zugewiesen)
       setBoard(prev => {
         const all   = new Set(Object.values(prev).flat());
         const toAdd = list.map(p => p.id).filter(id => !all.has(id));
@@ -478,50 +553,44 @@ function BoardApp() {
     });
   }, []);
 
-  // ── Nach Login: Rolle aus Sheet setzen + in Firestore speichern ──
   useEffect(() => {
     if (!user || !currentPlayer) return;
-
-    // Rolle aus Sheet-Daten lesen
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
     setRole(sheetRole);
-
-    // Rolle in Firestore speichern (damit Regeln greifen)
     const memberRef = doc(db, "rooms", roomId, "members", user.uid);
-    setDoc(memberRef, { role: sheetRole, name: currentPlayer.name }, { merge: true })
-      .catch(console.error);
-
+    setDoc(memberRef, { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
-  // ── Firestore Live-Sync ──────────────────────────────────
   useEffect(() => {
     if (!user) return;
-    const ref  = doc(db, "rooms", roomId, "state", "board");
+    const ref   = doc(db, "rooms", roomId, "state", "board");
     const unsub = onSnapshot(ref, snap => {
       const data = snap.data() as any;
       if (!data) return;
-      if (data.board)  setBoard(data.board);
-      if (data.tokens) setTokens(data.tokens);
+      if (data.board)      setBoard(data.board);
+      if (data.tokens)     setTokens(data.tokens);
+      if (data.aliveState) setAliveState(data.aliveState);
     });
     return () => unsub();
   }, [user, roomId]);
 
-  // ── Firestore schreiben ──────────────────────────────────
-  async function pushState(nextBoard: BoardState, nextTokens: Token[]) {
-    if (!canWrite) return;
+  async function pushState(nb: BoardState, nt: Token[], na: PlayerAliveState) {
     try {
-      const ref = doc(db, "rooms", roomId, "state", "board");
-      await setDoc(ref, {
-        board:     nextBoard,
-        tokens:    nextTokens,
-        updatedAt: serverTimestamp(),
+      await setDoc(doc(db, "rooms", roomId, "state", "board"), {
+        board: nb, tokens: nt, aliveState: na, updatedAt: serverTimestamp(),
       }, { merge: true });
-    } catch (err) {
-      console.error("Firestore Fehler:", err);
-    }
+    } catch (err) { console.error("Firestore:", err); }
   }
 
-  // ── Drag & Drop Logik ────────────────────────────────────
+  function toggleAlive(playerId: string) {
+    if (!currentPlayer || playerId !== currentPlayer.id) return;
+    setAliveState(prev => {
+      const next = { ...prev, [playerId]: prev[playerId] === "dead" ? "alive" : "dead" } as PlayerAliveState;
+      pushState(board, tokens, next);
+      return next;
+    });
+  }
+
   function findContainer(id: string): GroupId | null {
     for (const k of Object.keys(board) as GroupId[]) {
       if (board[k].includes(id)) return k;
@@ -534,35 +603,30 @@ function BoardApp() {
     const activeId = e.active.id.toString();
     const overId   = e.over?.id?.toString();
     if (!overId) return;
-
     const from = findContainer(activeId);
     const to: GroupId | null =
-      (["unassigned", "g1", "g2", "g3"] as const).includes(overId as any)
-        ? (overId as GroupId)
-        : findContainer(overId);
-
+      (Object.keys(board) as GroupId[]).includes(overId as GroupId)
+        ? (overId as GroupId) : findContainer(overId);
     if (!from || !to) return;
-
     if (from === to) {
       const oi = board[from].indexOf(activeId);
       const ni = board[from].indexOf(overId);
       if (oi !== -1 && ni !== -1 && oi !== ni) {
         setBoard(prev => {
           const next = { ...prev, [from]: arrayMove(prev[from], oi, ni) };
-          pushState(next, tokens);
+          pushState(next, tokens, aliveState);
           return next;
         });
       }
       return;
     }
-
     setBoard(prev => {
       const next = {
         ...prev,
         [from]: prev[from].filter(x => x !== activeId),
         [to]:   [activeId, ...prev[to]],
       };
-      pushState(next, tokens);
+      pushState(next, tokens, aliveState);
       return next;
     });
   }
@@ -570,49 +634,48 @@ function BoardApp() {
   function clearGroup(g: Exclude<GroupId, "unassigned">) {
     setBoard(prev => {
       const next: BoardState = {
-        ...prev,
-        unassigned: [...prev.unassigned, ...prev[g]],
-        [g]: [],
+        ...prev, unassigned: [...prev.unassigned, ...prev[g]], [g]: [],
       };
-      const nextTokens = tokens.filter(t => t.groupId !== g);
-      pushState(next, nextTokens);
-      setTokens(nextTokens);
+      const nt = tokens.filter(t => t.groupId !== g);
+      pushState(next, nt, aliveState);
+      setTokens(nt);
       return next;
     });
   }
 
-  function upsertToken(groupId: Exclude<GroupId, "unassigned">, x: number, y: number) {
+  const upsertToken = useCallback((
+    groupId: Exclude<GroupId, "unassigned">,
+    x: number, y: number, mapId: string,
+  ) => {
     setTokens(prev => {
-      const i    = prev.findIndex(t => t.groupId === groupId);
+      const resolvedMapId = mapId === "main" ? undefined : mapId;
+      const i    = prev.findIndex(t => t.groupId === groupId && (t.mapId ?? "main") === mapId);
       const next = i === -1
-        ? [...prev, { groupId, x, y }]
-        : prev.map((t, idx) => idx === i ? { groupId, x, y } : t);
-      pushState(board, next);
+        ? [...prev, { groupId, x, y, mapId: resolvedMapId }]
+        : prev.map((t, idx) => idx === i ? { groupId, x, y, mapId: resolvedMapId } : t);
+      pushState(board, next, aliveState);
       return next;
     });
-  }
+  }, [board, aliveState]);
 
-  function handleLogout() {
-    setCurrentPlayer(null);
-    setRole("viewer");
-    signOut(auth);
-  }
+  const currentMapImage = activeMapId === "main"
+    ? "/pyro-map.png"
+    : SUBMAPS.find(s => s.id === activeMapId)?.image ?? "";
 
-  // ── Render ──────────────────────────────────────────────
+  const currentSubmap = SUBMAPS.find(s => s.id === activeMapId);
 
-  // Warte auf Firebase Auth-Status
+  const selfAlive = currentPlayer ? (aliveState[currentPlayer.id] ?? "alive") : "alive";
+
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="text-gray-400">Laden...</div>
     </div>
   );
 
-  // Nicht eingeloggt → Login zeigen
   if (!user || !currentPlayer) return (
-    <LoginView onLogin={player => setCurrentPlayer(player)} />
+    <LoginView onLogin={p => setCurrentPlayer(p)} />
   );
 
-  // Rolle-Badge Farbe
   const roleBadge =
     role === "admin"     ? "bg-red-900 text-red-300 border border-red-700" :
     role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
@@ -620,112 +683,130 @@ function BoardApp() {
 
   return (
     <div className="min-h-screen bg-gray-950">
-
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-gray-800 bg-gray-900">
-        <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900">
+        <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="font-bold text-white">TCS</span>
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Eingeloggter Spieler */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors
+                ${selfAlive === "dead"
+                  ? "bg-red-950 border-red-700 text-red-400 hover:bg-red-900"
+                  : "bg-green-950 border-green-700 text-green-400 hover:bg-green-900"}`}
+              onClick={() => toggleAlive(currentPlayer.id)}>
+              {selfAlive === "dead" ? "☠ Du bist tot" : "✓ Du lebst"}
+            </button>
             <span className="text-sm text-gray-300">{currentPlayer.name}</span>
-            {/* Rolle */}
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>
-              {role}
-            </span>
-            {/* Tab-Buttons */}
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
             {(["board", "map"] as const).map(t => (
-              <button
-                key={t}
+              <button key={t}
                 className={`rounded-lg px-3 py-1.5 text-sm border transition-colors
-                  ${tab === t
-                    ? "bg-white text-black border-white"
-                    : "bg-transparent text-gray-300 border-gray-600 hover:border-gray-400"
-                  }`}
-                onClick={() => setTab(t)}
-              >
+                  ${tab === t ? "bg-white text-black border-white" : "bg-transparent text-gray-300 border-gray-600 hover:border-gray-400"}`}
+                onClick={() => setTab(t)}>
                 {t === "board" ? "Board" : "Karte"}
               </button>
             ))}
-            <button
-              className="text-xs text-gray-500 hover:text-gray-300"
-              onClick={handleLogout}
-            >
+            <button className="text-xs text-gray-500 hover:text-gray-300"
+              onClick={() => { setCurrentPlayer(null); setRole("viewer"); signOut(auth); }}>
               Logout
             </button>
           </div>
         </div>
       </header>
 
-      {/* Hauptinhalt */}
       <main className="mx-auto max-w-7xl px-4 py-6">
 
-        {/* Viewer-Hinweis */}
-        {!canWrite && (
-          <div className="mb-4 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-gray-400">
-            Du bist als <strong className="text-gray-300">Viewer</strong> eingeloggt – nur lesender Zugriff.
-            Kontaktiere einen Admin um Commander-Rechte zu bekommen.
-          </div>
-        )}
-
-        {/* Board-Tab */}
         {tab === "board" && (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <DroppableColumn
-                id="unassigned" title="Unzugeteilt"
-                ids={board.unassigned} playersById={playersById}
-                canWrite={canWrite}
-              />
-              <div className="md:col-span-3 grid grid-cols-3 gap-4">
-                {(["g1", "g2", "g3"] as const).map(g => (
-                  <DroppableColumn
-                    key={g} id={g}
-                    title={g === "g1" ? "Gruppe 1" : g === "g2" ? "Gruppe 2" : "Gruppe 3"}
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+              <div className="md:col-span-1">
+                <DroppableColumn
+                  id="unassigned" title="Unzugeteilt"
+                  ids={board.unassigned} playersById={playersById}
+                  aliveState={aliveState} currentPlayerId={currentPlayer.id}
+                  canWrite={canWrite} onToggleAlive={toggleAlive} />
+              </div>
+              <div className="md:col-span-5 grid grid-cols-2 lg:grid-cols-5 gap-4">
+                {(Object.keys(GROUP_LABELS) as Exclude<GroupId, "unassigned">[]).map(g => (
+                  <DroppableColumn key={g} id={g} title={GROUP_LABELS[g]}
                     ids={board[g]} playersById={playersById}
-                    canWrite={canWrite}
-                    onClear={() => clearGroup(g)}
-                  />
+                    aliveState={aliveState} currentPlayerId={currentPlayer.id}
+                    canWrite={canWrite} onToggleAlive={toggleAlive}
+                    onClear={() => clearGroup(g)} />
                 ))}
               </div>
             </div>
           </DndContext>
         )}
 
-        {/* Karten-Tab */}
         {tab === "map" && (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-            <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
-              <div className="font-semibold mb-1 text-sm text-white">Gruppen platzieren</div>
-              <p className="text-xs text-gray-500 mb-3">
-                Knopf klicken → auf Karte klicken. Danach Token ziehen.
-              </p>
-              {canWrite
-                ? <MapPlacer onPlace={(g, x, y) => upsertToken(g, x, y)} />
-                : <p className="text-xs text-gray-600">Viewer kann nicht platzieren.</p>
-              }
+            <div className="space-y-4">
+              {/* Karten-Navigation */}
+              <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
+                <div className="font-semibold text-sm text-white mb-2">Karten</div>
+                <button
+                  className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm text-left transition-colors
+                    ${activeMapId === "main"
+                      ? "bg-blue-900 border-blue-600 text-blue-200"
+                      : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
+                  onClick={() => setActiveMapId("main")}>
+                  🗺 Pyro System
+                </button>
+                {SUBMAPS.map(sm => (
+                  <button key={sm.id}
+                    className={`w-full rounded-lg border px-3 py-2 mb-1 text-sm text-left transition-colors
+                      ${activeMapId === sm.id
+                        ? "bg-blue-900 border-blue-600 text-blue-200"
+                        : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
+                    onClick={() => setActiveMapId(sm.id)}>
+                    📍 {sm.label}
+                  </button>
+                ))}
+              </div>
+
+              {canWrite && (
+                <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
+                  <div className="font-semibold text-sm text-white mb-2">Token setzen</div>
+                  <MapPlacer
+                    onPlace={(g, x, y, mapId) => upsertToken(g, x, y, mapId)}
+                    activeMapId={activeMapId} />
+                </div>
+              )}
             </div>
-            <div className="lg:col-span-3 rounded-xl border border-gray-700 overflow-hidden">
-              <MapView
-                tokens={tokens}
-                onMoveToken={(g, x, y) => upsertToken(g as any, x, y)}
-                canWrite={canWrite}
-              />
+
+            <div className="lg:col-span-3">
+              {/* Breadcrumb */}
+              <div className="flex items-center gap-2 mb-2 text-sm text-gray-400">
+                <button className="hover:text-white" onClick={() => setActiveMapId("main")}>
+                  Pyro System
+                </button>
+                {activeMapId !== "main" && (
+                  <><span>›</span><span className="text-white">{currentSubmap?.label}</span></>
+                )}
+              </div>
+
+              {activeMapId !== "main" && currentSubmap && !currentSubmap.image ? (
+                <AutoMap submap={currentSubmap} />
+              ) : (
+                <ZoomableMap
+                  imageSrc={currentMapImage}
+                  tokens={tokens}
+                  onMoveToken={(g, x, y) => upsertToken(g as any, x, y, activeMapId)}
+                  canWrite={canWrite}
+                  submaps={activeMapId === "main" ? SUBMAPS : []}
+                  onOpenSubmap={id => setActiveMapId(id)}
+                  activeMapId={activeMapId} />
+              )}
             </div>
           </div>
         )}
-
       </main>
     </div>
   );
 }
-
-// ─────────────────────────────────────────────────────────────
-// SEITEN-EXPORT
-// useSearchParams() muss in <Suspense> stehen (Next.js Pflicht)
-// ─────────────────────────────────────────────────────────────
 
 export default function Page() {
   return (
