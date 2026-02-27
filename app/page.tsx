@@ -34,7 +34,11 @@ type Player = {
 
 type Group = { id: string; label: string; isSpawn?: boolean };
 type BoardState = { groups: Group[]; columns: Record<string, string[]> };
+
+// mapId ist optional im Typ wegen Altbestand,
+// aber wir normalisieren intern immer auf "main" oder Unterkarten-ID.
 type Token = { groupId: string; x: number; y: number; mapId?: string };
+
 type MapEntry = { id: string; label: string; image: string; x?: number; y?: number };
 type POI = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
 type PlayerAliveState = Record<string, "alive" | "dead">;
@@ -82,6 +86,11 @@ function safeBoard(data: any, groups: Group[]): BoardState {
   const cols: Record<string, string[]> = {};
   for (const g of groups) cols[g.id] = Array.isArray(data?.columns?.[g.id]) ? data.columns[g.id] : [];
   return { groups, columns: cols };
+}
+
+// mapId normalisieren: fehlend → "main"
+function normalizeToken(t: Token): Token {
+  return { ...t, mapId: (t.mapId ?? "main") };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -783,7 +792,7 @@ function TokenPlacerPanel({
   return (
     <div>
       <div className="text-xs text-gray-500 mb-2">
-        Karte: <span className="text-blue-400">{activeMapId === "main" ? "Hauptkarte" : activeMapId}</span>
+        Karte: <span className="text-blue-400">{activeMapId}</span>
       </div>
       {tactical.map((g) => (
         <button
@@ -815,7 +824,7 @@ function TokenPlacerPanel({
 }
 
 // ─────────────────────────────────────────────────────────────
-// ZOOMABLE MAP  ✅ FIXED GROUP-TOKEN SYNC (tokenKey)
+// ZOOMABLE MAP  (Tokens: mapId immer "main" oder Unterkarte-ID)
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({
@@ -848,7 +857,7 @@ function ZoomableMap({
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
-  // IMPORTANT: tokenDrag holds tokenKey (groupId:mapId), not groupId
+  // tokenDrag speichert tokenKey = "groupId:mapId"
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
 
@@ -891,8 +900,6 @@ function ZoomableMap({
       const c = getMapCoords(e);
       if (c) {
         lastTokenPos.current = c;
-
-        // tokenDrag = "groupId:mapId" -> use groupId only for state update
         const [gId] = tokenDrag.split(":");
         onMoveTokenLocal(gId, c.x, c.y, activeMapId);
       }
@@ -909,11 +916,9 @@ function ZoomableMap({
       const [gId] = tokenDrag.split(":");
       onCommitToken(gId, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
     }
-
     if (markerDrag && lastMarkerPos.current) {
       onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
     }
-
     setPanning(false);
     setTokenDrag(null);
     lastTokenPos.current = null;
@@ -921,19 +926,34 @@ function ZoomableMap({
     lastMarkerPos.current = null;
   }
 
-  const visibleTokens = tokens.filter((t) => (activeMapId === "main" ? !t.mapId : t.mapId === activeMapId));
+  // ✅ robust: show tokens by normalized mapId (main = "main")
+  const visibleTokens = tokens
+    .map(normalizeToken)
+    .filter((t) => (t.mapId ?? "main") === activeMapId);
+
   const groupLabel = (gId: string) => groups.find((g) => g.id === gId)?.label ?? gId;
   const groupCount = (gId: string) => (board.columns[gId] ?? []).length;
 
   return (
-    <div className="w-full h-full overflow-hidden" style={{ cursor: panning ? "grabbing" : "grab" }} onWheel={onWheel} onPointerDown={onBgDown} onPointerMove={onBgMove} onPointerUp={onBgUp}>
+    <div
+      className="w-full h-full overflow-hidden"
+      style={{ cursor: panning ? "grabbing" : "grab" }}
+      onWheel={onWheel}
+      onPointerDown={onBgDown}
+      onPointerMove={onBgMove}
+      onPointerUp={onBgUp}
+    >
       <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-1">
         {[
           { lbl: "+", fn: () => setScale((s) => Math.min(8, s * 1.3)) },
           { lbl: "−", fn: () => setScale((s) => Math.max(0.3, s / 1.3)) },
           { lbl: "⊙", fn: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
         ].map((b) => (
-          <button key={b.lbl} onClick={b.fn} className="w-9 h-9 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700 shadow">
+          <button
+            key={b.lbl}
+            onClick={b.fn}
+            className="w-9 h-9 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700 shadow"
+          >
             {b.lbl}
           </button>
         ))}
@@ -951,6 +971,7 @@ function ZoomableMap({
       >
         <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
 
+        {/* Marker */}
         {markers.map((m) => (
           <div
             key={m.id}
@@ -969,34 +990,47 @@ function ZoomableMap({
               if (!markerDrag) onOpenMarker(m.id);
             }}
           >
-            <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"}`}>
+            <div
+              className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
+                m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
+              }`}
+            >
               {m.isPOI ? "🔵" : "📍"} {m.label}
             </div>
             {isAdmin && <span className="text-yellow-300 text-xs opacity-50">✥</span>}
           </div>
         ))}
 
+        {/* Gruppen-Tokens */}
         {visibleTokens.map((t) => {
           const count = groupCount(t.groupId);
-          const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`; // ✅ unique
+          const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`;
 
           return (
             <div
-              key={tokenKey} // ✅ unique key, no collisions
-              className={`absolute z-10 flex flex-col items-center select-none ${canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"} ${tokenDrag === tokenKey ? "scale-110" : ""}`}
+              key={tokenKey}
+              className={`absolute z-10 flex flex-col items-center select-none ${
+                canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
+              } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
               style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
               onPointerDown={(e) => {
                 if (!canWriteTokens) return;
                 e.stopPropagation();
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                setTokenDrag(tokenKey); // ✅ drag by tokenKey
+                setTokenDrag(tokenKey);
                 lastTokenPos.current = null;
               }}
               title={canWriteTokens ? "Ziehen" : "Nur Ansicht"}
             >
-              <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap ${tokenDrag === tokenKey ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"}`}>
+              <div
+                className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap ${
+                  tokenDrag === tokenKey ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"
+                }`}
+              >
                 <span className="font-bold text-sm">{groupLabel(t.groupId)}</span>
-                <span className={`ml-1.5 text-xs font-normal opacity-80 ${tokenDrag === tokenKey ? "text-black" : "text-blue-200"}`}>{count}</span>
+                <span className={`ml-1.5 text-xs font-normal opacity-80 ${tokenDrag === tokenKey ? "text-black" : "text-blue-200"}`}>
+                  {count}
+                </span>
               </div>
             </div>
           );
@@ -1060,7 +1094,7 @@ function BoardApp() {
   const canWrite = role === "admin" || role === "commander";
   const isAdmin = role === "admin";
 
-  // ── refs ──
+  // refs
   const boardRef = useRef(board);
   const aliveRef = useRef(aliveState);
   const spawnRef = useRef(spawnState);
@@ -1075,13 +1109,13 @@ function BoardApp() {
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-  // ── auth ──
+  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
     return () => unsub();
   }, []);
 
-  // ── csv ──
+  // csv
   useEffect(() => {
     loadPlayers().then((list) => {
       setPlayers(list);
@@ -1094,7 +1128,7 @@ function BoardApp() {
     });
   }, []);
 
-  // ── role ──
+  // role
   useEffect(() => {
     if (!user || !currentPlayer) return;
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
@@ -1102,16 +1136,23 @@ function BoardApp() {
     setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
-  // ── snapshot ──
+  // snapshot
   useEffect(() => {
     if (!user) return;
     const ref = doc(db, "rooms", roomId, "state", "board");
     const unsub = onSnapshot(ref, (snap) => {
       const data = snap.data() as any;
       if (!data) return;
-      const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+
+      const loadedGroups: Group[] =
+        Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+
       setBoard(safeBoard(data, loadedGroups));
-      setTokens(data.tokens ?? []);
+
+      // ✅ normalize tokens, so main always becomes "main"
+      const incomingTokens: Token[] = Array.isArray(data.tokens) ? data.tokens.map(normalizeToken) : [];
+      setTokens(incomingTokens);
+
       setAliveState(data.aliveState ?? {});
       setSpawnState(data.spawnState ?? {});
       if (data.maps && data.maps.length > 0) setMaps(data.maps);
@@ -1121,10 +1162,7 @@ function BoardApp() {
     return () => unsub();
   }, [user, roomId]);
 
-  // ─────────────────────────────────────────────────────────────
-  // Writes
-  // ─────────────────────────────────────────────────────────────
-
+  // writes
   async function pushTokensOnly(nt: Token[]) {
     const ref = doc(db, "rooms", roomId, "state", "board");
     try {
@@ -1162,6 +1200,7 @@ function BoardApp() {
     setPanelLayout(next);
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
   }
+
   function movePanelPlacer(x: number, y: number) {
     if (!canWrite) return;
     const next = { ...panelLayout, placer: { x, y } };
@@ -1264,12 +1303,14 @@ function BoardApp() {
     mapsRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, poisRef.current);
   }
+
   function renameMap(id: string, label: string) {
     const next = mapsRef.current.map((m) => (m.id === id ? { ...m, label } : m));
     setMaps(next);
     mapsRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, poisRef.current);
   }
+
   function deleteMap(id: string) {
     if (!isAdmin || id === "main") return;
     const next = mapsRef.current.filter((m) => m.id !== id);
@@ -1281,6 +1322,7 @@ function BoardApp() {
     if (activeMapId === id) setActiveMapId("main");
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, nextPois);
   }
+
   function setMapImage(id: string, image: string) {
     const inMaps = mapsRef.current.find((m) => m.id === id);
     if (inMaps) {
@@ -1295,12 +1337,14 @@ function BoardApp() {
     poisRef.current = nextPois;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, nextPois);
   }
+
   function moveMapMarker(id: string, x: number, y: number) {
     const next = mapsRef.current.map((m) => (m.id === id ? { ...m, x, y } : m));
     setMaps(next);
     mapsRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, poisRef.current);
   }
+
   function addPOI(parentMapId: string) {
     if (!isAdmin) return;
     const p: POI = { id: uid(), label: "Neuer POI", image: "", parentMapId, x: 0.5, y: 0.5 };
@@ -1309,12 +1353,14 @@ function BoardApp() {
     poisRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
+
   function renamePOI(id: string, label: string) {
     const next = poisRef.current.map((p) => (p.id === id ? { ...p, label } : p));
     setPois(next);
     poisRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
+
   function deletePOI(id: string) {
     const next = poisRef.current.filter((p) => p.id !== id);
     setPois(next);
@@ -1322,6 +1368,7 @@ function BoardApp() {
     if (activeMapId === id) setActiveMapId("main");
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
+
   function movePOIMarker(id: string, x: number, y: number) {
     const next = poisRef.current.map((p) => (p.id === id ? { ...p, x, y } : p));
     setPois(next);
@@ -1329,20 +1376,29 @@ function BoardApp() {
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
 
-  // ── token local + commit ──
+  // ─────────────────────────────────────────────────────────────
+  // TOKENS: mapId immer "main" oder Unterkarte-ID
+  // ─────────────────────────────────────────────────────────────
+
   function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
-    const resolvedMapId = mapId === "main" ? undefined : mapId;
+    const normalizedMapId = mapId; // "main" bleibt "main"
     setTokens((prev) => {
       const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
-      return i === -1 ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }] : prev.map((t, idx) => (idx === i ? { ...t, x, y } : t));
+      return i === -1
+        ? [...prev, { groupId: gId, x, y, mapId: normalizedMapId }]
+        : prev.map((t, idx) => (idx === i ? { ...t, x, y, mapId: normalizedMapId } : t));
     });
   }
 
   function commitToken(gId: string, x: number, y: number, mapId: string) {
-    const resolvedMapId = mapId === "main" ? undefined : mapId;
-    const prev = tokensRef.current;
+    const normalizedMapId = mapId; // "main" bleibt "main"
+    const prev = tokensRef.current.map(normalizeToken);
     const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
-    const next = i === -1 ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }] : prev.map((t, idx) => (idx === i ? { ...t, x, y } : t));
+    const next =
+      i === -1
+        ? [...prev, { groupId: gId, x, y, mapId: normalizedMapId }]
+        : prev.map((t, idx) => (idx === i ? { ...t, x, y, mapId: normalizedMapId } : t));
+
     setTokens(next);
     tokensRef.current = next;
     pushTokensOnly(next);
@@ -1352,7 +1408,10 @@ function BoardApp() {
     commitToken(gId, x, y, mapId);
   }, []);
 
-  // ── board dnd ──
+  // ─────────────────────────────────────────────────────────────
+  // BOARD DND
+  // ─────────────────────────────────────────────────────────────
+
   function findContainer(pid: string): string | null {
     for (const [gId, ids] of Object.entries(board.columns)) {
       if ((ids ?? []).includes(pid)) return gId;
@@ -1400,13 +1459,9 @@ function BoardApp() {
     });
   }
 
-  // ── sort/search ──
   function toggleSort(field: typeof sortField) {
     if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortField(field);
-      setSortDir("asc");
-    }
+    else { setSortField(field); setSortDir("asc"); }
   }
 
   const filteredSortedUnassigned = useMemo(() => {
@@ -1432,7 +1487,6 @@ function BoardApp() {
     return ids;
   }, [board.columns, search, sortField, sortDir, playersById]);
 
-  // ── active map ──
   const activeMapEntry = maps.find((m) => m.id === activeMapId);
   const activePOI = pois.find((p) => p.id === activeMapId);
   const activeImage = activeMapEntry?.image ?? activePOI?.image ?? "";
@@ -1440,9 +1494,13 @@ function BoardApp() {
 
   const markersOnActive = useMemo(() => {
     if (activeMapId === "main") {
-      return maps.filter((m) => m.id !== "main").map((m) => ({ id: m.id, label: m.label, x: m.x ?? 0.5, y: m.y ?? 0.5, isPOI: false }));
+      return maps.filter((m) => m.id !== "main").map((m) => ({
+        id: m.id, label: m.label, x: m.x ?? 0.5, y: m.y ?? 0.5, isPOI: false,
+      }));
     }
-    return pois.filter((p) => p.parentMapId === activeMapId).map((p) => ({ id: p.id, label: p.label, x: p.x ?? 0.5, y: p.y ?? 0.5, isPOI: true }));
+    return pois.filter((p) => p.parentMapId === activeMapId).map((p) => ({
+      id: p.id, label: p.label, x: p.x ?? 0.5, y: p.y ?? 0.5, isPOI: true,
+    }));
   }, [activeMapId, maps, pois]);
 
   function handleCommitMarker(id: string, x: number, y: number) {
@@ -1482,11 +1540,9 @@ function BoardApp() {
   if (!user || !currentPlayer) return <LoginView onLogin={(p) => setCurrentPlayer(p)} />;
 
   const roleBadge =
-    role === "admin"
-      ? "bg-red-900 text-red-300 border border-red-700"
-      : role === "commander"
-      ? "bg-blue-900 text-blue-300 border border-blue-700"
-      : "bg-gray-800 text-gray-400 border border-gray-600";
+    role === "admin" ? "bg-red-900 text-red-300 border border-red-700" :
+    role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
+    "bg-gray-800 text-gray-400 border border-gray-600";
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
@@ -1524,11 +1580,7 @@ function BoardApp() {
 
             <button
               className="text-xs text-gray-500 hover:text-gray-300"
-              onClick={() => {
-                setCurrentPlayer(null);
-                setRole("viewer");
-                signOut(auth);
-              }}
+              onClick={() => { setCurrentPlayer(null); setRole("viewer"); signOut(auth); }}
             >
               Logout
             </button>
@@ -1536,6 +1588,7 @@ function BoardApp() {
         </div>
       </header>
 
+      {/* BOARD */}
       {tab === "board" && (
         <div className="flex-1 overflow-auto p-4">
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -1551,6 +1604,7 @@ function BoardApp() {
             />
 
             <div className="flex gap-3 items-start overflow-x-auto pb-4">
+              {/* Unassigned */}
               <div style={{ width: 220, flexShrink: 0 }}>
                 <div className="rounded-t-xl border border-b-0 border-gray-700 bg-gray-900 px-3 py-2">
                   <input
@@ -1574,8 +1628,7 @@ function BoardApp() {
                         }`}
                         onClick={() => toggleSort(f)}
                       >
-                        {l}
-                        {sortField === f ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                        {l}{sortField === f ? (sortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     ))}
                     {sortField && (
@@ -1590,7 +1643,9 @@ function BoardApp() {
                   <SortableContext items={filteredSortedUnassigned} strategy={rectSortingStrategy}>
                     <UnassignedDrop id="unassigned" label={unassignedGroup.label} count={(board.columns["unassigned"] ?? []).length}>
                       {filteredSortedUnassigned.length === 0 && (
-                        <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-3 text-center">{search ? "Keine Treffer" : "leer"}</div>
+                        <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-3 text-center">
+                          {search ? "Keine Treffer" : "leer"}
+                        </div>
                       )}
 
                       {filteredSortedUnassigned.map((pid) =>
@@ -1613,6 +1668,7 @@ function BoardApp() {
                 </div>
               </div>
 
+              {/* Tactical groups */}
               <div className="flex flex-wrap gap-3 flex-1 items-start">
                 {tacticalGroups.map((g) => (
                   <DroppableColumn
@@ -1649,6 +1705,7 @@ function BoardApp() {
         </div>
       )}
 
+      {/* MAP */}
       {tab === "map" && (
         <div className="flex-1 relative overflow-hidden">
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
@@ -1674,7 +1731,7 @@ function BoardApp() {
                 board={board}
                 onMoveTokenLocal={moveTokenLocal}
                 onCommitToken={commitToken}
-                canWriteTokens={canWrite}
+                canWriteTokens={canWrite} // Viewer nur schauen
                 isAdmin={isAdmin}
                 markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)}
@@ -1713,7 +1770,7 @@ function BoardApp() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Unassigned Drop
+// UNASSIGNED DROP
 // ─────────────────────────────────────────────────────────────
 
 function UnassignedDrop({ id, label, count, children }: { id: string; label: string; count: number; children: React.ReactNode }) {
