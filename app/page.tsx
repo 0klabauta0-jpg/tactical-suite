@@ -926,7 +926,7 @@ function ZoomableMap({
     lastMarkerPos.current = null;
   }
 
-  // ✅ robust: show tokens by normalized mapId (main = "main")
+  // robust: show tokens by normalized mapId (main = "main")
   const visibleTokens = tokens
     .map(normalizeToken)
     .filter((t) => (t.mapId ?? "main") === activeMapId);
@@ -1149,7 +1149,7 @@ function BoardApp() {
 
       setBoard(safeBoard(data, loadedGroups));
 
-      // ✅ normalize tokens, so main always becomes "main"
+      // normalize tokens, so main always becomes "main"
       const incomingTokens: Token[] = Array.isArray(data.tokens) ? data.tokens.map(normalizeToken) : [];
       setTokens(incomingTokens);
 
@@ -1731,7 +1731,7 @@ function BoardApp() {
                 board={board}
                 onMoveTokenLocal={moveTokenLocal}
                 onCommitToken={commitToken}
-                canWriteTokens={canWrite} // Viewer nur schauen
+                canWriteTokens={canWrite}
                 isAdmin={isAdmin}
                 markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)}
