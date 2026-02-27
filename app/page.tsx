@@ -759,7 +759,12 @@ function ZoomableMap({
               className={`absolute z-10 flex flex-col items-center cursor-grab active:cursor-grabbing select-none
                 ${tokenDrag === t.groupId ? "scale-110" : ""}`}
               style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
-              onPointerDown={e => { e.stopPropagation(); setTokenDrag(t.groupId); lastTokenPos.current = null; }}>
+              onPointerDown={e => {
+  e.stopPropagation();
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  setTokenDrag(t.groupId);
+  lastTokenPos.current = null;
+}}>
               <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap
                 ${tokenDrag === t.groupId ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"}`}>
                 <span className="font-bold text-sm">{groupLabel(t.groupId)}</span>
