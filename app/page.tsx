@@ -442,20 +442,48 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetColor: (id: string, hex: string) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: group.id });
+  // useSortable für Spalten-Drag (Gruppe verschieben) + useDroppable für Spieler-Drop
+  const {
+    attributes: colAttrs,
+    listeners: colListeners,
+    setNodeRef: setSortableRef,
+    transform: colTransform,
+    transition: colTransition,
+    isDragging: colIsDragging,
+  } = useSortable({ id: group.id });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: group.id });
+
+  // Beide Refs zusammenführen
+  const setRef = (el: HTMLDivElement | null) => { setSortableRef(el); setDropRef(el); };
+
   const safeIds = ids ?? [];
   const deadCount = safeIds.filter((pid) => aliveState[pid] === "dead").length;
   const isSystem = group.id === "unassigned";
   const gColor = groupColor(group);
 
   return (
-    <div style={{ width: 200, flexShrink: 0 }}>
-      <div ref={setNodeRef}
-        className={`rounded-xl border flex flex-col transition-colors ${isOver ? "border-blue-500 bg-gray-700" : "border-gray-700 bg-gray-900"}`}
+    <div
+      style={{
+        width: 200, flexShrink: 0,
+        transform: CSS.Transform.toString(colTransform),
+        transition: colTransition,
+        opacity: colIsDragging ? 0.5 : 1,
+        zIndex: colIsDragging ? 50 : undefined,
+      }}>
+      <div ref={setRef}
+        className={`rounded-xl border flex flex-col transition-colors ${isOver && !colIsDragging ? "border-blue-500 bg-gray-700" : "border-gray-700 bg-gray-900"}`}
         style={{ height: COLUMN_HEIGHT }}>
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0"
           style={{ borderTop: `3px solid ${gColor}` }}>
           <div className="font-semibold text-sm flex items-center gap-1 min-w-0 flex-1 text-white">
+            {/* Drag-Handle für Spalte (nur Admin/Commander) */}
+            {canWrite && !isSystem && (
+              <span
+                {...colAttrs} {...colListeners}
+                className="text-gray-500 hover:text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0 px-0.5"
+                title="Spalte verschieben"
+              >⠿</span>
+            )}
             {/* Farbwähler */}
             {canWrite && !isSystem && (
               <ColorPicker current={group.color} onChange={(hex) => onSetColor(group.id, hex)} />
@@ -470,7 +498,6 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
             {onClear && canWrite && (
               <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={onClear} title="Leeren">↩</button>
             )}
-            {/* Löschen für ALLE (auch viewer für eigene Gruppe) — hier: nur canWrite */}
             {canWrite && !isSystem && (
               <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(group.id)} title="Löschen">✕</button>
             )}
@@ -683,7 +710,7 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
-  onCommitMarker, activeMapId,
+  onCommitMarker, activeMapId, onRemoveToken,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -693,6 +720,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string;
+  onRemoveToken: (gId: string, mapId: string) => void;
 }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -853,7 +881,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
             </div>
         ))}
 
-        {/* Gruppen-Tokens mit Hover-Tooltip */}
+        {/* Gruppen-Tokens mit Hover-Tooltip + Entfernen-Button */}
         {visibleTokens.map((t) => {
           const g = groupById(t.groupId);
           const count = groupCount(t.groupId);
@@ -869,22 +897,36 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
               onPointerDown={(e) => {
                 if (!canWriteTokens) return;
+                // Kein Drag starten wenn auf ✕ geklickt
+                if ((e.target as HTMLElement).dataset.removeBtn) return;
                 e.stopPropagation();
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                 setTokenDrag(tokenKey); lastTokenPos.current = null;
               }}
               onMouseEnter={() => setHoveredToken(tokenKey)}
               onMouseLeave={() => setHoveredToken(null)}
-              title={canWriteTokens ? "Ziehen" : "Nur Ansicht"}>
+              title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
               {/* Token-Pille */}
-              <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap`}
-                style={{
-                  backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
-                  borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
-                  color: tokenDrag === tokenKey ? "black" : "white",
-                }}>
-                <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
-                <span className={`ml-1.5 text-xs font-normal opacity-80`}>{count}</span>
+              <div className="relative">
+                <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap`}
+                  style={{
+                    backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
+                    borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
+                    color: tokenDrag === tokenKey ? "black" : "white",
+                  }}>
+                  <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
+                  <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
+                </div>
+                {/* ✕ Entfernen-Button – erscheint beim Hovern für Admin/Commander */}
+                {canWriteTokens && isHovered && !tokenDrag && (
+                  <button
+                    data-remove-btn="1"
+                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-700 border border-red-500 text-white text-xs flex items-center justify-center hover:bg-red-600 shadow-lg cursor-pointer"
+                    title="Token von Karte entfernen"
+                    onPointerDown={(e) => { e.stopPropagation(); }}
+                    onClick={(e) => { e.stopPropagation(); onRemoveToken(t.groupId, activeMapId); setHoveredToken(null); }}
+                  >✕</button>
+                )}
               </div>
 
               {/* Hover-Tooltip */}
@@ -1344,6 +1386,12 @@ function BoardApp() {
 
   const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => { commitToken(gId, x, y, mapId); }, []);
 
+  function removeToken(gId: string, mapId: string) {
+    if (!canWrite) return;
+    const next = tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === mapId));
+    setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+  }
+
   // BOARD DND – auch Gruppen-Spalten verschiebbar (via Gruppen-ID als active)
   function findContainer(pid: string): string | null {
     for (const [gId, ids] of Object.entries(board.columns)) {
@@ -1481,12 +1529,6 @@ function BoardApp() {
     role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
     "bg-gray-800 text-gray-400 border border-gray-600";
 
-  // Alle IDs für DndContext: Spieler-IDs + Gruppen-IDs (für Spalten-DnD)
-  const allDndIds = [
-    ...board.groups.map((g) => g.id),
-    ...Object.values(board.columns).flat(),
-  ];
-
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
@@ -1620,7 +1662,7 @@ function BoardApp() {
                 onMoveTokenLocal={moveTokenLocal} onCommitToken={commitToken}
                 canWriteTokens={canWrite} isAdmin={isAdmin} markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
-                activeMapId={activeMapId} />
+                activeMapId={activeMapId} onRemoveToken={removeToken} />
             )}
           </div>
 
