@@ -1743,7 +1743,8 @@ function BoardApp() {
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
         <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
-            <span className="font-bold text-white">TCS</span>
+            <span className="font-bold text-white">KlabsCom tactical-suite
+</span>
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
 
