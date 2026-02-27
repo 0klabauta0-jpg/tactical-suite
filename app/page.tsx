@@ -1,23 +1,19 @@
 "use client";
 
-import React, {
-  useCallback, useEffect, useMemo, useRef, useState, Suspense,
-} from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import Papa from "papaparse";
-import {
-  DndContext, DragEndEvent, PointerSensor,
-  useDroppable, useSensor, useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext, useSortable, arrayMove, rectSortingStrategy,
-} from "@dnd-kit/sortable";
+import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
-import { doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
-  signInWithEmailAndPassword, createUserWithEmailAndPassword,
-  onAuthStateChanged, signOut, User,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  User,
 } from "firebase/auth";
 
 // ─────────────────────────────────────────────────────────────
@@ -25,21 +21,28 @@ import {
 // ─────────────────────────────────────────────────────────────
 
 type Player = {
-  id: string; name: string; area?: string; role?: string;
-  squadron?: string; status?: string; ampel?: string;
-  appRole?: string; homeLocation?: string;
+  id: string;
+  name: string;
+  area?: string;
+  role?: string;
+  squadron?: string;
+  status?: string;
+  ampel?: string;
+  appRole?: string;
+  homeLocation?: string;
 };
-type Group      = { id: string; label: string; isSpawn?: boolean; };
-type BoardState = { groups: Group[]; columns: Record<string, string[]>; };
-type Token      = { groupId: string; x: number; y: number; mapId?: string; };
-type MapEntry   = { id: string; label: string; image: string; x?: number; y?: number; };
-type POI        = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number; };
+
+type Group = { id: string; label: string; isSpawn?: boolean };
+type BoardState = { groups: Group[]; columns: Record<string, string[]> };
+type Token = { groupId: string; x: number; y: number; mapId?: string };
+type MapEntry = { id: string; label: string; image: string; x?: number; y?: number };
+type POI = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
 type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
 type Role = "admin" | "commander" | "viewer";
 
 // Panel-Positionen für die verschiebbare Map-UI
-type PanelLayout = { nav: { x: number; y: number }; placer: { x: number; y: number }; };
+type PanelLayout = { nav: { x: number; y: number }; placer: { x: number; y: number } };
 
 const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
 const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
@@ -51,11 +54,11 @@ const DEFAULT_GROUPS: Group[] = [
   { id: "g3", label: "Subradar" },
   { id: "spawn1", label: "Spawn", isSpawn: true },
 ];
-const DEFAULT_MAPS: MapEntry[] = [
-  { id: "main", label: "Pyro System", image: "/pyro-map.png" },
-];
+
+const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
-  nav:    { x: 16, y: 16 },
+  nav: { x: 16, y: 16 },
   placer: { x: 16, y: 340 },
 };
 
@@ -66,12 +69,16 @@ const DEFAULT_PANEL_LAYOUT: PanelLayout = {
 function nameToFakeEmail(n: string) {
   return `${n.toLowerCase().replace(/[^a-z0-9]/g, "")}@tcs.internal`;
 }
+
 function ampelColor(a?: string) {
-  if (a === "gut")    return "#16a34a";
+  if (a === "gut") return "#16a34a";
   if (a === "mittel") return "#ca8a04";
   return "#dc2626";
 }
-function uid() { return Math.random().toString(36).slice(2, 9); }
+
+function uid() {
+  return Math.random().toString(36).slice(2, 9);
+}
 
 function safeBoard(data: any, groups: Group[]): BoardState {
   const cols: Record<string, string[]> = {};
@@ -84,28 +91,31 @@ function safeBoard(data: any, groups: Group[]): BoardState {
 // ─────────────────────────────────────────────────────────────
 
 let cachedPlayers: Player[] = [];
+
 async function loadPlayers(): Promise<Player[]> {
   if (cachedPlayers.length > 0) return cachedPlayers;
   if (!SHEET_CSV_URL.startsWith("http")) return [];
-  const res    = await fetch(SHEET_CSV_URL, { cache: "no-store" });
-  const text   = await res.text();
+  const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+  const text = await res.text();
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   const list: Player[] = [];
+
   (parsed.data as any[]).forEach((row, idx) => {
     const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
     if (!name) return;
     list.push({
-      id:           row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g,"_")}`,
+      id: row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
       name,
-      area:         (row["Bereich"]   ?? "").toString(),
-      role:         (row["Rolle"]     ?? "").toString(),
-      squadron:     (row["Staffel"]   ?? "").toString(),
-      status:       (row["Status"]    ?? "").toString(),
-      ampel:        (row["Ampel"]     ?? "").toString(),
-      appRole:      (row["AppRolle"]  ?? "viewer").toString().toLowerCase(),
+      area: (row["Bereich"] ?? "").toString(),
+      role: (row["Rolle"] ?? "").toString(),
+      squadron: (row["Staffel"] ?? "").toString(),
+      status: (row["Status"] ?? "").toString(),
+      ampel: (row["Ampel"] ?? "").toString(),
+      appRole: (row["AppRolle"] ?? "viewer").toString().toLowerCase(),
       homeLocation: (row["Heimatort"] ?? "").toString(),
     });
   });
+
   cachedPlayers = list;
   return list;
 }
@@ -116,23 +126,37 @@ async function loadPlayers(): Promise<Player[]> {
 
 function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
   const [playerName, setPlayerName] = useState("");
-  const [password,   setPassword]   = useState("");
-  const [msg,        setMsg]        = useState("");
-  const [loading,    setLoading]    = useState(false);
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
-    setMsg(""); setLoading(true);
+    setMsg("");
+    setLoading(true);
     try {
-      if (password !== TEAM_PASSWORD) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
+      if (password !== TEAM_PASSWORD) {
+        setMsg("Falsches Team-Passwort.");
+        setLoading(false);
+        return;
+      }
       const players = await loadPlayers();
-      const found   = players.find(p => p.name.toLowerCase() === playerName.trim().toLowerCase());
-      if (!found) { setMsg(`"${playerName}" nicht gefunden.`); setLoading(false); return; }
+      const found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
+      if (!found) {
+        setMsg(`"${playerName}" nicht gefunden.`);
+        setLoading(false);
+        return;
+      }
       const email = nameToFakeEmail(found.name);
-      const pw    = TEAM_PASSWORD + "_tcs_internal";
-      try { await signInWithEmailAndPassword(auth, email, pw); }
-      catch { await createUserWithEmailAndPassword(auth, email, pw); }
+      const pw = TEAM_PASSWORD + "_tcs_internal";
+      try {
+        await signInWithEmailAndPassword(auth, email, pw);
+      } catch {
+        await createUserWithEmailAndPassword(auth, email, pw);
+      }
       onLogin(found);
-    } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
+    } catch (e: any) {
+      setMsg(e?.message ?? "Fehler.");
+    }
     setLoading(false);
   }
 
@@ -141,20 +165,34 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
         <h1 className="font-bold text-xl mb-1 text-white">Tactical Command Suite</h1>
         <p className="text-gray-400 text-sm mb-6">Pyro Operations Board</p>
+
         <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
-        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
-          placeholder="z.B. KRT_Bjoern" value={playerName}
-          onChange={e => setPlayerName(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleLogin()} />
+        <input
+          className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
+          placeholder="z.B. KRT_Bjoern"
+          value={playerName}
+          onChange={(e) => setPlayerName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+        />
+
         <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
-        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
-          type="password" placeholder="Team-Passwort" value={password}
-          onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleLogin()} />
-        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
-          onClick={handleLogin} disabled={loading || !playerName || !password}>
+        <input
+          className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
+          type="password"
+          placeholder="Team-Passwort"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+        />
+
+        <button
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+          onClick={handleLogin}
+          disabled={loading || !playerName || !password}
+        >
           {loading ? "Einloggen..." : "Einloggen"}
         </button>
+
         {msg && <p className="mt-3 text-red-400 text-xs">{msg}</p>}
         <p className="mt-4 text-gray-600 text-xs text-center">Spielername exakt wie im Sheet.</p>
       </div>
@@ -166,28 +204,54 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
 // INLINE EDIT
 // ─────────────────────────────────────────────────────────────
 
-function InlineEdit({ value, onSave, className = "" }: {
-  value: string; onSave: (v: string) => void; className?: string;
+function InlineEdit({
+  value,
+  onSave,
+  className = "",
+}: {
+  value: string;
+  onSave: (v: string) => void;
+  className?: string;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft,   setDraft]   = useState(value);
+  const [draft, setDraft] = useState(value);
 
-  useEffect(() => { if (!editing) setDraft(value); }, [value, editing]);
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
 
-  function commit() { if (draft.trim()) onSave(draft.trim()); setEditing(false); }
+  function commit() {
+    if (draft.trim()) onSave(draft.trim());
+    setEditing(false);
+  }
 
-  if (editing) return (
-    <input className={`bg-gray-700 border border-gray-500 text-white rounded px-1 text-sm focus:outline-none ${className}`}
-      value={draft} autoFocus
-      onChange={e => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
-      onClick={e => e.stopPropagation()} />
-  );
+  if (editing)
+    return (
+      <input
+        className={`bg-gray-700 border border-gray-500 text-white rounded px-1 text-sm focus:outline-none ${className}`}
+        value={draft}
+        autoFocus
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    );
+
   return (
-    <span className={`cursor-text hover:text-blue-300 ${className}`}
-      onClick={e => { e.stopPropagation(); setDraft(value); setEditing(true); }}
-      title="Klicken zum Umbenennen">
+    <span
+      className={`cursor-text hover:text-blue-300 ${className}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        setDraft(value);
+        setEditing(true);
+      }}
+      title="Klicken zum Umbenennen"
+    >
       {value} <span className="text-gray-600 text-xs">✎</span>
     </span>
   );
@@ -197,13 +261,25 @@ function InlineEdit({ value, onSave, className = "" }: {
 // DRAGGABLE PANEL (für Map-Overlay)
 // ─────────────────────────────────────────────────────────────
 
-function DraggablePanel({ title, x, y, onMove, canDrag, children, minWidth = 220 }: {
-  title: string; x: number; y: number;
+function DraggablePanel({
+  title,
+  x,
+  y,
+  onMove,
+  canDrag,
+  children,
+  minWidth = 220,
+}: {
+  title: string;
+  x: number;
+  y: number;
   onMove: (x: number, y: number) => void;
-  canDrag: boolean; children: React.ReactNode; minWidth?: number;
+  canDrag: boolean;
+  children: React.ReactNode;
+  minWidth?: number;
 }) {
   const dragging = useRef(false);
-  const start    = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+  const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDrag) return;
@@ -216,18 +292,22 @@ function DraggablePanel({ title, x, y, onMove, canDrag, children, minWidth = 220
     if (!dragging.current) return;
     onMove(
       Math.max(0, start.current.px + e.clientX - start.current.mx),
-      Math.max(0, start.current.py + e.clientY - start.current.my),
+      Math.max(0, start.current.py + e.clientY - start.current.my)
     );
   }
-  function onPointerUp() { dragging.current = false; }
+  function onPointerUp() {
+    dragging.current = false;
+  }
 
   return (
-    <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl overflow-hidden"
-      style={{ left: x, top: y, minWidth, maxWidth: 300 }}>
-      {/* Drag-Handle */}
+    <div
+      className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl overflow-hidden"
+      style={{ left: x, top: y, minWidth, maxWidth: 300 }}
+    >
       <div
-        className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none
-          ${canDrag ? "cursor-move" : "cursor-default"}`}
+        className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none ${
+          canDrag ? "cursor-move" : "cursor-default"
+        }`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -245,73 +325,96 @@ function DraggablePanel({ title, x, y, onMove, canDrag, children, minWidth = 220
 // ─────────────────────────────────────────────────────────────
 
 function Card({
-  player, aliveState, currentPlayerId, canWrite,
-  onToggleAlive, spawnGroups, spawnState, onSetSpawn,
+  player,
+  aliveState,
+  currentPlayerId,
+  canWrite,
+  onToggleAlive,
+  spawnGroups,
+  spawnState,
+  onSetSpawn,
 }: {
-  player: Player; aliveState: PlayerAliveState;
-  currentPlayerId: string; canWrite: boolean;
+  player: Player;
+  aliveState: PlayerAliveState;
+  currentPlayerId: string;
+  canWrite: boolean;
   onToggleAlive: (id: string) => void;
-  spawnGroups: Group[]; spawnState: PlayerSpawnState;
+  spawnGroups: Group[];
+  spawnState: PlayerSpawnState;
   onSetSpawn: (playerId: string, spawnId: string) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: player.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
 
-  const isDead      = aliveState[player.id] === "dead";
-  const isSelf      = player.id === currentPlayerId;
-  const canToggle   = isSelf || canWrite;
+  const isDead = aliveState[player.id] === "dead";
+  const isSelf = player.id === currentPlayerId;
+  const canToggle = isSelf || canWrite;
   const canSetSpawn = isSelf || canWrite;
   const playerSpawn = spawnState[player.id] ?? "";
 
   return (
-    <div ref={setNodeRef}
+    <div
+      ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
-      className={`rounded-xl border shadow-sm transition-all
-        ${isDead ? "bg-gray-900 border-red-900 opacity-70" : "bg-gray-800 border-gray-700"}`}>
-
-      {/* Drag-Handle */}
-      <div {...attributes} {...listeners}
+      className={`rounded-xl border shadow-sm transition-all ${
+        isDead ? "bg-gray-900 border-red-900 opacity-70" : "bg-gray-800 border-gray-700"
+      }`}
+    >
+      <div
+        {...attributes}
+        {...listeners}
         className="px-2 pt-2 pb-1 cursor-grab active:cursor-grabbing"
-        style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
+        style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}
+      >
         <div className="flex items-center justify-between gap-1">
           <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>
             {player.name}
           </div>
+
           {canToggle && (
             <button
-              className={`text-sm px-2 py-1 rounded border font-bold transition-colors flex-shrink-0
-                ${isDead
+              className={`text-sm px-2 py-1 rounded border font-bold transition-colors flex-shrink-0 ${
+                isDead
                   ? "bg-red-950 border-red-700 text-red-300 hover:bg-red-900"
-                  : "bg-green-950 border-green-700 text-green-300 hover:bg-green-900"}`}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); onToggleAlive(player.id); }}>
+                  : "bg-green-950 border-green-700 text-green-300 hover:bg-green-900"
+              }`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleAlive(player.id);
+              }}
+            >
               {isDead ? "☠" : "✓"}
             </button>
           )}
           {!canToggle && isDead && <span className="text-red-500 flex-shrink-0">☠</span>}
         </div>
+
         <div className="text-xs text-gray-400 truncate mt-0.5">
-          {player.area}{player.role ? ` · ${player.role}` : ""}
+          {player.area}
+          {player.role ? ` · ${player.role}` : ""}
           {player.homeLocation ? ` · 📍${player.homeLocation}` : ""}
         </div>
       </div>
 
-      {/* Spawn-Dropdown – nicht draggable */}
       {canSetSpawn && spawnGroups.length > 0 && (
-        <div className="px-2 pb-2" onPointerDown={e => e.stopPropagation()}>
+        <div className="px-2 pb-2" onPointerDown={(e) => e.stopPropagation()}>
           <select
             className="w-full bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
             value={playerSpawn}
-            onChange={e => onSetSpawn(player.id, e.target.value)}>
+            onChange={(e) => onSetSpawn(player.id, e.target.value)}
+          >
             <option value="">⚓ Spawn…</option>
-            {spawnGroups.map(sg => <option key={sg.id} value={sg.id}>{sg.label}</option>)}
+            {spawnGroups.map((sg) => (
+              <option key={sg.id} value={sg.id}>
+                {sg.label}
+              </option>
+            ))}
           </select>
         </div>
       )}
+
       {!canSetSpawn && playerSpawn && (
-        <div className="px-2 pb-2 text-xs text-yellow-600">
-          ⚓ {spawnGroups.find(sg => sg.id === playerSpawn)?.label ?? ""}
-        </div>
+        <div className="px-2 pb-2 text-xs text-yellow-600">⚓ {spawnGroups.find((sg) => sg.id === playerSpawn)?.label ?? ""}</div>
       )}
     </div>
   );
@@ -322,13 +425,24 @@ function Card({
 // ─────────────────────────────────────────────────────────────
 
 function SpawnBar({
-  spawnGroups, board, playersById, aliveState, currentPlayerId,
-  canWrite, onToggleAlive, onRename, onDelete, onClear,
-  spawnState, onSetSpawn,
+  spawnGroups,
+  board,
+  playersById,
+  aliveState,
+  currentPlayerId,
+  canWrite,
+  onToggleAlive,
+  onRename,
+  onDelete,
+  onClear,
+  spawnState,
+  onSetSpawn,
 }: {
-  spawnGroups: Group[]; board: BoardState;
+  spawnGroups: Group[];
+  board: BoardState;
   playersById: Record<string, Player>;
-  aliveState: PlayerAliveState; currentPlayerId: string;
+  aliveState: PlayerAliveState;
+  currentPlayerId: string;
   canWrite: boolean;
   onToggleAlive: (id: string) => void;
   onRename: (id: string, label: string) => void;
@@ -338,37 +452,50 @@ function SpawnBar({
   onSetSpawn: (pid: string, sid: string) => void;
 }) {
   if (spawnGroups.length === 0) return null;
+
   return (
     <div className="flex gap-2 flex-wrap mb-3">
-      {spawnGroups.map(g => {
+      {spawnGroups.map((g) => {
         const ids = board.columns[g.id] ?? [];
         return (
-          <div key={g.id}
-            className="rounded-xl border border-yellow-800 bg-gray-900 px-3 py-2 flex items-center gap-2 min-w-[160px]">
+          <div
+            key={g.id}
+            className="rounded-xl border border-yellow-800 bg-gray-900 px-3 py-2 flex items-center gap-2 min-w-[160px]"
+          >
             <span className="text-yellow-400 text-xs font-semibold flex items-center gap-1">
               ⚓
-              {canWrite
-                ? <InlineEdit value={g.label} onSave={v => onRename(g.id, v)} />
-                : g.label}
+              {canWrite ? <InlineEdit value={g.label} onSave={(v) => onRename(g.id, v)} /> : g.label}
               <span className="text-gray-500 font-normal">({ids.length})</span>
             </span>
+
             <div className="flex gap-1 flex-wrap">
-              {ids.slice(0, 5).map(pid => {
+              {ids.slice(0, 5).map((pid) => {
                 const p = playersById[pid];
                 if (!p) return null;
                 return (
-                  <span key={pid} className={`text-xs px-1.5 py-0.5 rounded border
-                    ${aliveState[pid] === "dead" ? "border-red-800 text-red-400 line-through" : "border-gray-600 text-gray-300"}`}>
+                  <span
+                    key={pid}
+                    className={`text-xs px-1.5 py-0.5 rounded border ${
+                      aliveState[pid] === "dead"
+                        ? "border-red-800 text-red-400 line-through"
+                        : "border-gray-600 text-gray-300"
+                    }`}
+                  >
                     {p.name}
                   </span>
                 );
               })}
               {ids.length > 5 && <span className="text-xs text-gray-500">+{ids.length - 5}</span>}
             </div>
+
             {canWrite && (
               <div className="flex gap-1 ml-auto flex-shrink-0">
-                <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={() => onClear(g.id)} title="Leeren">↩</button>
-                <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(g.id)} title="Löschen">✕</button>
+                <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={() => onClear(g.id)} title="Leeren">
+                  ↩
+                </button>
+                <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(g.id)} title="Löschen">
+                  ✕
+                </button>
               </div>
             )}
           </div>
@@ -384,71 +511,98 @@ function SpawnBar({
 
 // Feste Höhe: Header + 10 Slots à ~68px + Padding ≈ 760px
 const COLUMN_HEIGHT = 760;
-const SLOT_HEIGHT   = 68;
 
 function DroppableColumn({
-  group, ids, playersById, aliveState, currentPlayerId,
-  canWrite, onToggleAlive, onRename, onDelete, onClear,
-  spawnGroups, spawnState, onSetSpawn,
+  group,
+  ids,
+  playersById,
+  aliveState,
+  currentPlayerId,
+  canWrite,
+  onToggleAlive,
+  onRename,
+  onDelete,
+  onClear,
+  spawnGroups,
+  spawnState,
+  onSetSpawn,
 }: {
-  group: Group; ids: string[];
+  group: Group;
+  ids: string[];
   playersById: Record<string, Player>;
-  aliveState: PlayerAliveState; currentPlayerId: string;
+  aliveState: PlayerAliveState;
+  currentPlayerId: string;
   canWrite: boolean;
   onToggleAlive: (id: string) => void;
   onRename: (id: string, label: string) => void;
   onDelete: (id: string) => void;
   onClear?: () => void;
-  spawnGroups: Group[]; spawnState: PlayerSpawnState;
+  spawnGroups: Group[];
+  spawnState: PlayerSpawnState;
   onSetSpawn: (pid: string, sid: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: group.id });
-  const safeIds   = ids ?? [];
-  const deadCount = safeIds.filter(pid => aliveState[pid] === "dead").length;
-  const isSystem  = group.id === "unassigned";
+  const safeIds = ids ?? [];
+  const deadCount = safeIds.filter((pid) => aliveState[pid] === "dead").length;
+  const isSystem = group.id === "unassigned";
 
   return (
     <div style={{ width: 200, flexShrink: 0 }}>
-      <div ref={setNodeRef}
-        className={`rounded-xl border flex flex-col transition-colors
-          ${isOver ? "border-blue-500 bg-gray-700" : "border-gray-700 bg-gray-900"}`}
-        style={{ height: COLUMN_HEIGHT }}>
-
-        {/* Header */}
+      <div
+        ref={setNodeRef}
+        className={`rounded-xl border flex flex-col transition-colors ${
+          isOver ? "border-blue-500 bg-gray-700" : "border-gray-700 bg-gray-900"
+        }`}
+        style={{ height: COLUMN_HEIGHT }}
+      >
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0">
           <div className="font-semibold text-sm flex items-center gap-1 min-w-0 flex-1 text-white">
-            {canWrite && !isSystem
-              ? <InlineEdit value={group.label} onSave={v => onRename(group.id, v)} className="flex-1" />
-              : <span className="truncate">{group.label}</span>
-            }
+            {canWrite && !isSystem ? (
+              <InlineEdit value={group.label} onSave={(v) => onRename(group.id, v)} className="flex-1" />
+            ) : (
+              <span className="truncate">{group.label}</span>
+            )}
             <span className="text-gray-500 font-normal text-xs flex-shrink-0">({safeIds.length})</span>
             {deadCount > 0 && <span className="text-red-500 text-xs flex-shrink-0">☠{deadCount}</span>}
           </div>
+
           <div className="flex gap-1 flex-shrink-0">
             {onClear && canWrite && (
-              <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={onClear} title="Leeren">↩</button>
+              <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={onClear} title="Leeren">
+                ↩
+              </button>
             )}
             {canWrite && !isSystem && (
-              <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(group.id)} title="Löschen">✕</button>
+              <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(group.id)} title="Löschen">
+                ✕
+              </button>
             )}
           </div>
         </div>
 
-        {/* Scrollbarer Inhalt – feste Höhe, scrollbar ab 10 */}
-        <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1"
-          style={{ maxHeight: COLUMN_HEIGHT - 44 }}>
+        <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1" style={{ maxHeight: COLUMN_HEIGHT - 44 }}>
           <SortableContext items={safeIds} strategy={rectSortingStrategy}>
             {safeIds.length === 0 && (
               <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-4 text-center">
                 hierher ziehen
               </div>
             )}
-            {safeIds.map(pid => playersById[pid] ? (
-              <Card key={pid} player={playersById[pid]}
-                aliveState={aliveState} currentPlayerId={currentPlayerId}
-                canWrite={canWrite} onToggleAlive={onToggleAlive}
-                spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={onSetSpawn} />
-            ) : null)}
+
+            {safeIds.map((pid) =>
+              playersById[pid] ? (
+                <Card
+                  key={pid}
+                  player={playersById[pid]}
+                  aliveState={aliveState}
+                  currentPlayerId={currentPlayerId}
+                  canWrite={canWrite}
+                  onToggleAlive={onToggleAlive}
+                  spawnGroups={spawnGroups}
+                  spawnState={spawnState}
+                  onSetSpawn={onSetSpawn}
+                />
+              ) : null
+            )}
           </SortableContext>
         </div>
       </div>
@@ -461,12 +615,23 @@ function DroppableColumn({
 // ─────────────────────────────────────────────────────────────
 
 function MapNavPanel({
-  maps, pois, activeMapId, setActiveMapId, isAdmin,
-  onRenameMap, onDeleteMap, onAddSubmap,
-  onRenamePOI, onDeletePOI, onAddPOI, onSetMapImage,
+  maps,
+  pois,
+  activeMapId,
+  setActiveMapId,
+  isAdmin,
+  onRenameMap,
+  onDeleteMap,
+  onAddSubmap,
+  onRenamePOI,
+  onDeletePOI,
+  onAddPOI,
+  onSetMapImage,
 }: {
-  maps: MapEntry[]; pois: POI[];
-  activeMapId: string; setActiveMapId: (id: string) => void;
+  maps: MapEntry[];
+  pois: POI[];
+  activeMapId: string;
+  setActiveMapId: (id: string) => void;
   isAdmin: boolean;
   onRenameMap: (id: string, label: string) => void;
   onDeleteMap: (id: string) => void;
@@ -476,87 +641,145 @@ function MapNavPanel({
   onAddPOI: (parentMapId: string) => void;
   onSetMapImage: (id: string, image: string) => void;
 }) {
-  const submaps = maps.filter(m => m.id !== "main");
+  const submaps = maps.filter((m) => m.id !== "main");
 
   return (
     <div className="space-y-1">
-      <MapNavRow map={maps.find(m => m.id === "main")!} activeMapId={activeMapId}
-        setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={false}
-        onRename={v => onRenameMap("main", v)} onDelete={() => {}}
-        onSetImage={img => onSetMapImage("main", img)} indent={0} />
+      <MapNavRow
+        map={maps.find((m) => m.id === "main")!}
+        activeMapId={activeMapId}
+        setActiveMapId={setActiveMapId}
+        isAdmin={isAdmin}
+        canDelete={false}
+        onRename={(v) => onRenameMap("main", v)}
+        onDelete={() => {}}
+        onSetImage={(img) => onSetMapImage("main", img)}
+        indent={0}
+      />
 
-      {submaps.map(sm => (
+      {submaps.map((sm) => (
         <React.Fragment key={sm.id}>
-          <MapNavRow map={sm} activeMapId={activeMapId}
-            setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
-            onRename={v => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
-            onSetImage={img => onSetMapImage(sm.id, img)} indent={1} />
+          <MapNavRow
+            map={sm}
+            activeMapId={activeMapId}
+            setActiveMapId={setActiveMapId}
+            isAdmin={isAdmin}
+            canDelete={isAdmin}
+            onRename={(v) => onRenameMap(sm.id, v)}
+            onDelete={() => onDeleteMap(sm.id)}
+            onSetImage={(img) => onSetMapImage(sm.id, img)}
+            indent={1}
+          />
 
-          {pois.filter(p => p.parentMapId === sm.id).map(poi => (
-            <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
-              setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
-              onRename={v => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
-              onSetImage={img => onSetMapImage(poi.id, img)} indent={2} isPOI />
-          ))}
+          {pois
+            .filter((p) => p.parentMapId === sm.id)
+            .map((poi) => (
+              <MapNavRow
+                key={poi.id}
+                map={{ ...poi, id: poi.id }}
+                activeMapId={activeMapId}
+                setActiveMapId={setActiveMapId}
+                isAdmin={isAdmin}
+                canDelete={isAdmin}
+                onRename={(v) => onRenamePOI(poi.id, v)}
+                onDelete={() => onDeletePOI(poi.id)}
+                onSetImage={(img) => onSetMapImage(poi.id, img)}
+                indent={2}
+                isPOI
+              />
+            ))}
 
           {isAdmin && (
-            <button className="ml-10 text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-gray-300 hover:bg-gray-800"
-              onClick={() => onAddPOI(sm.id)}>+ POI</button>
+            <button
+              className="ml-10 text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-gray-300 hover:bg-gray-800"
+              onClick={() => onAddPOI(sm.id)}
+            >
+              + POI
+            </button>
           )}
         </React.Fragment>
       ))}
 
       {isAdmin && (
-        <button className="w-full mt-1 text-xs px-2 py-1 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
-          onClick={onAddSubmap}>+ Unterkarte</button>
+        <button
+          className="w-full mt-1 text-xs px-2 py-1 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
+          onClick={onAddSubmap}
+        >
+          + Unterkarte
+        </button>
       )}
     </div>
   );
 }
 
-function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRename, onDelete, onSetImage, indent, isPOI }: {
+function MapNavRow({
+  map,
+  activeMapId,
+  setActiveMapId,
+  isAdmin,
+  canDelete,
+  onRename,
+  onDelete,
+  onSetImage,
+  indent,
+  isPOI,
+}: {
   map: { id: string; label: string; image: string };
-  activeMapId: string; setActiveMapId: (id: string) => void;
-  isAdmin: boolean; canDelete: boolean;
-  onRename: (v: string) => void; onDelete: () => void;
+  activeMapId: string;
+  setActiveMapId: (id: string) => void;
+  isAdmin: boolean;
+  canDelete: boolean;
+  onRename: (v: string) => void;
+  onDelete: () => void;
   onSetImage: (img: string) => void;
-  indent: number; isPOI?: boolean;
+  indent: number;
+  isPOI?: boolean;
 }) {
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
-  useEffect(() => { setUrlDraft(map.image); }, [map.image]);
+  useEffect(() => {
+    setUrlDraft(map.image);
+  }, [map.image]);
 
   const isActive = activeMapId === map.id;
-  const icon     = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
-  const ml       = indent === 0 ? "" : indent === 1 ? "ml-4" : "ml-8";
+  const icon = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
+  const ml = indent === 0 ? "" : indent === 1 ? "ml-4" : "ml-8";
 
   return (
     <div className={ml}>
       <div className="flex items-center gap-1">
         {indent > 0 && <div className="w-3 h-px bg-gray-600 flex-shrink-0" />}
         <button
-          className={`flex-1 rounded-lg border px-2 py-1.5 text-left text-xs transition-colors min-w-0
-            ${isActive ? "bg-blue-900 border-blue-600 text-blue-200" : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700 hover:text-white"}`}
-          onClick={() => setActiveMapId(map.id)}>
+          className={`flex-1 rounded-lg border px-2 py-1.5 text-left text-xs transition-colors min-w-0 ${
+            isActive
+              ? "bg-blue-900 border-blue-600 text-blue-200"
+              : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700 hover:text-white"
+          }`}
+          onClick={() => setActiveMapId(map.id)}
+        >
           <span className="flex items-center gap-1">
             {icon}
-            {isAdmin && indent > 0
-              ? <InlineEdit value={map.label} onSave={onRename} />
-              : <span className="truncate">{map.label}</span>}
-            <span className={`text-xs flex-shrink-0 ${map.image ? "text-green-600" : "text-gray-700"}`}>
-              {map.image ? "●" : "○"}
-            </span>
+            {isAdmin && indent > 0 ? <InlineEdit value={map.label} onSave={onRename} /> : <span className="truncate">{map.label}</span>}
+            <span className={`text-xs flex-shrink-0 ${map.image ? "text-green-600" : "text-gray-700"}`}>{map.image ? "●" : "○"}</span>
           </span>
         </button>
+
         {isAdmin && (
-          <button className={`text-xs px-1 flex-shrink-0 ${showUrl ? "text-blue-400" : "text-gray-600 hover:text-blue-400"}`}
-            onClick={() => setShowUrl(v => !v)} title="Bild-URL">🖼</button>
+          <button
+            className={`text-xs px-1 flex-shrink-0 ${showUrl ? "text-blue-400" : "text-gray-600 hover:text-blue-400"}`}
+            onClick={() => setShowUrl((v) => !v)}
+            title="Bild-URL"
+          >
+            🖼
+          </button>
         )}
         {canDelete && (
-          <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0"
-            onClick={onDelete}>✕</button>
+          <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0" onClick={onDelete}>
+            ✕
+          </button>
         )}
       </div>
+
       {showUrl && isAdmin && (
         <div className={`mt-1 ${indent > 0 ? "ml-4" : ""}`}>
           <div className="text-xs text-gray-500 mb-1">Bild-URL (https://… oder /maps/…)</div>
@@ -565,15 +788,36 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
               className="flex-1 bg-gray-800 border border-gray-600 text-white text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500"
               placeholder="https://example.com/karte.png"
               value={urlDraft}
-              onChange={e => setUrlDraft(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") { onSetImage(urlDraft.trim()); setShowUrl(false); } }}
-              autoFocus />
-            <button className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 rounded flex-shrink-0"
-              onClick={() => { onSetImage(urlDraft.trim()); setShowUrl(false); }}>OK</button>
+              onChange={(e) => setUrlDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  onSetImage(urlDraft.trim());
+                  setShowUrl(false);
+                }
+              }}
+              autoFocus
+            />
+            <button
+              className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 rounded flex-shrink-0"
+              onClick={() => {
+                onSetImage(urlDraft.trim());
+                setShowUrl(false);
+              }}
+            >
+              OK
+            </button>
           </div>
           {map.image && (
-            <button className="text-xs text-red-700 hover:text-red-400 mt-1"
-              onClick={() => { onSetImage(""); setShowUrl(false); setUrlDraft(""); }}>Bild entfernen</button>
+            <button
+              className="text-xs text-red-700 hover:text-red-400 mt-1"
+              onClick={() => {
+                onSetImage("");
+                setShowUrl(false);
+                setUrlDraft("");
+              }}
+            >
+              Bild entfernen
+            </button>
           )}
         </div>
       )}
@@ -585,13 +829,17 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
 // TOKEN-PLACER-PANEL
 // ─────────────────────────────────────────────────────────────
 
-function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
+function TokenPlacerPanel({
+  groups,
+  onPlace,
+  activeMapId,
+}: {
   groups: Group[];
   onPlace: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
 }) {
   const [armed, setArmed] = useState<string | null>(null);
-  const tactical = groups.filter(g => g.id !== "unassigned" && !g.isSpawn);
+  const tactical = groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
 
   useEffect(() => {
     function handler(ev: MouseEvent) {
@@ -600,7 +848,10 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
       const rect = el.getBoundingClientRect();
       const x = (ev.clientX - rect.left) / rect.width;
       const y = (ev.clientY - rect.top) / rect.height;
-      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) { onPlace(armed, x, y, activeMapId); setArmed(null); }
+      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+        onPlace(armed, x, y, activeMapId);
+        setArmed(null);
+      }
     }
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
@@ -611,17 +862,32 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
       <div className="text-xs text-gray-500 mb-2">
         Karte: <span className="text-blue-400">{activeMapId === "main" ? "Hauptkarte" : activeMapId}</span>
       </div>
-      {tactical.map(g => (
-        <button key={g.id}
-          className={`w-full rounded-lg border px-2 py-1.5 mb-1 text-xs font-medium transition-colors
-            ${armed === g.id ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"}`}
-          onClick={e => { e.stopPropagation(); setArmed(g.id); }}>
+
+      {tactical.map((g) => (
+        <button
+          key={g.id}
+          className={`w-full rounded-lg border px-2 py-1.5 mb-1 text-xs font-medium transition-colors ${
+            armed === g.id ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setArmed(g.id);
+          }}
+        >
           {armed === g.id ? `▶ Klicke auf Karte…` : `Setze: ${g.label}`}
         </button>
       ))}
+
       {armed && (
-        <button className="w-full rounded-lg border border-red-800 px-2 py-1.5 text-xs bg-red-950 text-red-400"
-          onClick={e => { e.stopPropagation(); setArmed(null); }}>Abbrechen</button>
+        <button
+          className="w-full rounded-lg border border-red-800 px-2 py-1.5 text-xs bg-red-950 text-red-400"
+          onClick={(e) => {
+            e.stopPropagation();
+            setArmed(null);
+          }}
+        >
+          Abbrechen
+        </button>
       )}
     </div>
   );
@@ -632,27 +898,39 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({
-  imageSrc, tokens, groups, board, onMoveTokenLocal, onCommitToken, isAdmin,
-  markers, onOpenMarker, onCommitMarker, activeMapId,
+  imageSrc,
+  tokens,
+  groups,
+  board,
+  onMoveTokenLocal,
+  onCommitToken,
+  isAdmin,
+  markers,
+  onOpenMarker,
+  onCommitMarker,
+  activeMapId,
 }: {
-  imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
+  imageSrc: string;
+  tokens: Token[];
+  groups: Group[];
+  board: BoardState;
   onMoveTokenLocal: (gId: string, x: number, y: number, mapId: string) => void;
-  onCommitToken:    (gId: string, x: number, y: number, mapId: string) => void;
+  onCommitToken: (gId: string, x: number, y: number, mapId: string) => void;
   isAdmin: boolean;
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
-  onOpenMarker:   (id: string) => void;
+  onOpenMarker: (id: string) => void;
   onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string;
 }) {
-  const [scale,      setScale]  = useState(1);
-  const [offset,     setOffset] = useState({ x: 0, y: 0 });
-  const [tokenDrag,  setTokenDrag]  = useState<string | null>(null);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
-  const [panning,    setPanning]    = useState(false);
+  const [panning, setPanning] = useState(false);
+
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
-  // letzte Drag-Position merken um sie bei pointerUp zu committen
-  const lastTokenPos  = useRef<{x:number;y:number} | null>(null);
-  const lastMarkerPos = useRef<{x:number;y:number} | null>(null);
+  const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
+  const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
 
   function getMapCoords(e: React.PointerEvent) {
     const img = document.getElementById("map-img");
@@ -666,7 +944,7 @@ function ZoomableMap({
 
   function onWheel(e: React.WheelEvent) {
     e.preventDefault();
-    setScale(s => Math.max(0.3, Math.min(8, s * (e.deltaY > 0 ? 0.9 : 1.1))));
+    setScale((s) => Math.max(0.3, Math.min(8, s * (e.deltaY > 0 ? 0.9 : 1.1))));
   }
 
   function onBgDown(e: React.PointerEvent) {
@@ -675,101 +953,143 @@ function ZoomableMap({
     panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
+
   function onBgMove(e: React.PointerEvent) {
     if (panning && !tokenDrag && !markerDrag) {
-      setOffset({ x: panStart.current.ox + e.clientX - panStart.current.x, y: panStart.current.oy + e.clientY - panStart.current.y });
+      setOffset({
+        x: panStart.current.ox + e.clientX - panStart.current.x,
+        y: panStart.current.oy + e.clientY - panStart.current.y,
+      });
     }
+
     if (tokenDrag) {
       const c = getMapCoords(e);
       if (c) {
         lastTokenPos.current = c;
-        onMoveTokenLocal(tokenDrag, c.x, c.y, activeMapId); // flüssig, kein Firestore
+        onMoveTokenLocal(tokenDrag, c.x, c.y, activeMapId);
       }
     }
+
     if (markerDrag) {
       const c = getMapCoords(e);
       if (c) lastMarkerPos.current = c;
     }
   }
+
   function onBgUp() {
-    // Erst beim Loslassen → einmaliger Firestore-Write
     if (tokenDrag && lastTokenPos.current) {
       onCommitToken(tokenDrag, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
     }
     if (markerDrag && lastMarkerPos.current) {
       onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
     }
+
     setPanning(false);
-    setTokenDrag(null);  lastTokenPos.current  = null;
-    setMarkerDrag(null); lastMarkerPos.current = null;
+    setTokenDrag(null);
+    lastTokenPos.current = null;
+    setMarkerDrag(null);
+    lastMarkerPos.current = null;
   }
 
-  const visibleTokens = tokens.filter(t => activeMapId === "main" ? !t.mapId : t.mapId === activeMapId);
-  const groupLabel = (gId: string) => groups.find(g => g.id === gId)?.label ?? gId;
+  const visibleTokens = tokens.filter((t) => (activeMapId === "main" ? !t.mapId : t.mapId === activeMapId));
+  const groupLabel = (gId: string) => groups.find((g) => g.id === gId)?.label ?? gId;
   const groupCount = (gId: string) => (board.columns[gId] ?? []).length;
 
   return (
-    <div className="w-full h-full overflow-hidden"
+    <div
+      className="w-full h-full overflow-hidden"
       style={{ cursor: panning ? "grabbing" : "grab" }}
-      onWheel={onWheel} onPointerDown={onBgDown} onPointerMove={onBgMove} onPointerUp={onBgUp}>
-
-      {/* Zoom-Buttons */}
+      onWheel={onWheel}
+      onPointerDown={onBgDown}
+      onPointerMove={onBgMove}
+      onPointerUp={onBgUp}
+    >
       <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-1">
         {[
-          { lbl: "+", fn: () => setScale(s => Math.min(8, s * 1.3)) },
-          { lbl: "−", fn: () => setScale(s => Math.max(0.3, s / 1.3)) },
+          { lbl: "+", fn: () => setScale((s) => Math.min(8, s * 1.3)) },
+          { lbl: "−", fn: () => setScale((s) => Math.max(0.3, s / 1.3)) },
           { lbl: "⊙", fn: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
-        ].map(b => (
-          <button key={b.lbl} onClick={b.fn}
-            className="w-9 h-9 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700 shadow">
+        ].map((b) => (
+          <button
+            key={b.lbl}
+            onClick={b.fn}
+            className="w-9 h-9 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700 shadow"
+          >
             {b.lbl}
           </button>
         ))}
       </div>
 
-      <div style={{
-        transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
-        transformOrigin: "center center",
-        transition: (panning || tokenDrag || markerDrag) ? "none" : "transform 0.1s",
-        width: "100%", height: "100%", position: "relative",
-      }}>
-        <img id="map-img" src={imageSrc} alt="Map"
-          className="w-full h-full object-contain block select-none" draggable={false} />
+      <div
+        style={{
+          transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
+          transformOrigin: "center center",
+          transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
+          width: "100%",
+          height: "100%",
+          position: "relative",
+        }}
+      >
+        <img
+          id="map-img"
+          src={imageSrc}
+          alt="Map"
+          className="w-full h-full object-contain block select-none"
+          draggable={false}
+        />
 
-        {/* Karten-Marker */}
-        {markers.map(m => (
-          <div key={m.id}
+        {markers.map((m) => (
+          <div
+            key={m.id}
             className={`absolute z-10 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
-            style={{ left: `${m.x*100}%`, top: `${m.y*100}%`, transform: "translate(-50%,-50%)" }}
-            onPointerDown={e => { e.stopPropagation(); if (isAdmin) { setMarkerDrag(m.id); lastMarkerPos.current = null; } }}
-            onClick={e => { e.stopPropagation(); if (!markerDrag) onOpenMarker(m.id); }}>
-            <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap
-              ${m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"}`}>
+            style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-50%)" }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (isAdmin) {
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                setMarkerDrag(m.id);
+                lastMarkerPos.current = null;
+              }
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!markerDrag) onOpenMarker(m.id);
+            }}
+          >
+            <div
+              className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
+                m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
+              }`}
+            >
               {m.isPOI ? "🔵" : "📍"} {m.label}
             </div>
             {isAdmin && <span className="text-yellow-300 text-xs opacity-50">✥</span>}
           </div>
         ))}
 
-        {/* Gruppen-Tokens – Name + Mitgliederzahl */}
-        {visibleTokens.map(t => {
+        {visibleTokens.map((t) => {
           const count = groupCount(t.groupId);
           return (
-            <div key={t.groupId}
-              className={`absolute z-10 flex flex-col items-center cursor-grab active:cursor-grabbing select-none
-                ${tokenDrag === t.groupId ? "scale-110" : ""}`}
-              style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
-              onPointerDown={e => {
-  e.stopPropagation();
-  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  setTokenDrag(t.groupId);
-  lastTokenPos.current = null;
-}}>
-              <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap
-                ${tokenDrag === t.groupId ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"}`}>
+            <div
+              key={`${t.groupId}:${t.mapId ?? "main"}`}
+              className={`absolute z-10 flex flex-col items-center cursor-grab active:cursor-grabbing select-none ${
+                tokenDrag === t.groupId ? "scale-110" : ""
+              }`}
+              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                setTokenDrag(t.groupId);
+                lastTokenPos.current = null;
+              }}
+            >
+              <div
+                className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap ${
+                  tokenDrag === t.groupId ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"
+                }`}
+              >
                 <span className="font-bold text-sm">{groupLabel(t.groupId)}</span>
-                <span className={`ml-1.5 text-xs font-normal opacity-80
-                  ${tokenDrag === t.groupId ? "text-black" : "text-blue-200"}`}>
+                <span className={`ml-1.5 text-xs font-normal opacity-80 ${tokenDrag === t.groupId ? "text-black" : "text-blue-200"}`}>
                   {count}
                 </span>
               </div>
@@ -790,7 +1110,8 @@ function AutoMap({ label, mapId }: { label: string; mapId: string }) {
     <div className="w-full h-full flex items-center justify-center flex-col gap-3 bg-gray-900">
       <div className="text-gray-300 text-lg font-medium">{label}</div>
       <div className="text-gray-500 text-sm text-center">
-        Kein Kartenbild. Klicke auf 🖼 im Karten-Panel um eine URL einzugeben.<br />
+        Kein Kartenbild. Klicke auf 🖼 im Karten-Panel um eine URL einzugeben.
+        <br />
         <code className="text-blue-400 text-xs">z.B. https://i.example.com/{mapId}.png</code>
       </div>
     </div>
@@ -803,49 +1124,54 @@ function AutoMap({ label, mapId }: { label: string; mapId: string }) {
 
 function BoardApp() {
   const searchParams = useSearchParams();
-  const roomId  = searchParams.get("room") || "default";
+  const roomId = searchParams.get("room") || "default";
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
-  const [user,          setUser]          = useState<User | null>(null);
-  const [authReady,     setAuthReady]     = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
-  const [role,          setRole]          = useState<Role>("viewer");
-  const [players,       setPlayers]       = useState<Player[]>([]);
-  const [board,         setBoard]         = useState<BoardState>({
+  const [role, setRole] = useState<Role>("viewer");
+  const [players, setPlayers] = useState<Player[]>([]);
+
+  const [board, setBoard] = useState<BoardState>({
     groups: DEFAULT_GROUPS,
-    columns: Object.fromEntries(DEFAULT_GROUPS.map(g => [g.id, []])),
+    columns: Object.fromEntries(DEFAULT_GROUPS.map((g) => [g.id, []])),
   });
-  const [tokens,       setTokens]       = useState<Token[]>([]);
-  const [aliveState,   setAliveState]   = useState<PlayerAliveState>({});
-  const [spawnState,   setSpawnState]   = useState<PlayerSpawnState>({});
-  const [maps,         setMaps]         = useState<MapEntry[]>(DEFAULT_MAPS);
-  const [pois,         setPois]         = useState<POI[]>([]);
-  const [tab,          setTab]          = useState<"board" | "map">("board");
-  const [activeMapId,  setActiveMapId]  = useState("main");
-  const [panelLayout,  setPanelLayout]  = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
+
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const [aliveState, setAliveState] = useState<PlayerAliveState>({});
+  const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
+  const [maps, setMaps] = useState<MapEntry[]>(DEFAULT_MAPS);
+  const [pois, setPois] = useState<POI[]>([]);
+  const [tab, setTab] = useState<"board" | "map">("board");
+  const [activeMapId, setActiveMapId] = useState("main");
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
 
   // Sortierung Unzugeteilt
-  const [sortField, setSortField] = useState<"name"|"area"|"role"|"squadron"|"homeLocation"|null>(null);
-  const [sortDir,   setSortDir]   = useState<"asc"|"desc">("asc");
-  const [search,    setSearch]    = useState("");
+  const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [search, setSearch] = useState("");
 
-  const playersById = useMemo(() => Object.fromEntries(players.map(p => [p.id, p])), [players]);
+  const playersById = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p])), [players]);
   const canWrite = role === "admin" || role === "commander";
-  const isAdmin  = role === "admin";
+  const isAdmin = role === "admin";
 
   // ── Auth ──
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => { setUser(u); setAuthReady(true); });
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
     return () => unsub();
   }, []);
 
   // ── CSV ──
   useEffect(() => {
-    loadPlayers().then(list => {
+    loadPlayers().then((list) => {
       setPlayers(list);
-      setBoard(prev => {
-        const all   = new Set(Object.values(prev.columns).flat());
-        const toAdd = list.map(p => p.id).filter(id => !all.has(id));
+      setBoard((prev) => {
+        const all = new Set(Object.values(prev.columns).flat());
+        const toAdd = list.map((p) => p.id).filter((id) => !all.has(id));
         if (!toAdd.length) return prev;
         return { ...prev, columns: { ...prev.columns, unassigned: [...(prev.columns.unassigned ?? []), ...toAdd] } };
       });
@@ -857,21 +1183,19 @@ function BoardApp() {
     if (!user || !currentPlayer) return;
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
     setRole(sheetRole);
-    setDoc(doc(db, "rooms", roomId, "members", user.uid),
-      { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
+    setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
   // ── Firestore Sync ──
   useEffect(() => {
     if (!user) return;
-    const ref   = doc(db, "rooms", roomId, "state", "board");
-    const unsub = onSnapshot(ref, snap => {
+    const ref = doc(db, "rooms", roomId, "state", "board");
+    const unsub = onSnapshot(ref, (snap) => {
       const data = snap.data() as any;
       if (!data) return;
-      const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0
-        ? data.groups : DEFAULT_GROUPS;
+      const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
       setBoard(safeBoard(data, loadedGroups));
-      setTokens(data.tokens     ?? []);
+      setTokens(data.tokens ?? []);
       setAliveState(data.aliveState ?? {});
       setSpawnState(data.spawnState ?? {});
       if (data.maps && data.maps.length > 0) setMaps(data.maps);
@@ -881,20 +1205,59 @@ function BoardApp() {
     return () => unsub();
   }, [user, roomId]);
 
-  // ── Push ──
+  // ─────────────────────────────────────────────────────────────
+  // WICHTIG: Patch-Writes für Map/Token, damit sich Clients NICHT überschreiben
+  // ─────────────────────────────────────────────────────────────
+
+  async function patchState(patch: any) {
+    const ref = doc(db, "rooms", roomId, "state", "board");
+    try {
+      await updateDoc(ref, { ...patch, updatedAt: serverTimestamp() });
+    } catch (err) {
+      // falls doc noch nicht existiert -> einmal setDoc merge
+      try {
+        await setDoc(ref, { ...patch, updatedAt: serverTimestamp() }, { merge: true });
+      } catch (e) {
+        console.error("Firestore patch:", e);
+      }
+    }
+  }
+
+  const pushTokensOnly = (nt: Token[]) => patchState({ tokens: nt });
+  const pushPanelOnly = (nl: PanelLayout) => patchState({ panelLayout: nl });
+  const pushMapsOnly = (nm: MapEntry[]) => patchState({ maps: nm });
+  const pushPoisOnly = (np: POI[]) => patchState({ pois: np });
+  const pushMapsPois = (nm: MapEntry[], np: POI[]) => patchState({ maps: nm, pois: np });
+
+  // ── PushAll bleibt für Board ok (bei dir sync ok). Map/Tokens NICHT mehr darüber schreiben. ──
   async function pushAll(
-    nb: BoardState, nt: Token[], na: PlayerAliveState,
-    ns: PlayerSpawnState, nm: MapEntry[], np: POI[], nl?: PanelLayout,
+    nb: BoardState,
+    nt: Token[],
+    na: PlayerAliveState,
+    ns: PlayerSpawnState,
+    nm: MapEntry[],
+    np: POI[],
+    nl?: PanelLayout
   ) {
     try {
-      await setDoc(doc(db, "rooms", roomId, "state", "board"), {
-        groups: nb.groups, columns: nb.columns,
-        tokens: nt, aliveState: na, spawnState: ns,
-        maps: nm, pois: np,
-        ...(nl ? { panelLayout: nl } : {}),
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    } catch (err) { console.error("Firestore:", err); }
+      await setDoc(
+        doc(db, "rooms", roomId, "state", "board"),
+        {
+          groups: nb.groups,
+          columns: nb.columns,
+          tokens: nt,
+          aliveState: na,
+          spawnState: ns,
+          maps: nm,
+          pois: np,
+          ...(nl ? { panelLayout: nl } : {}),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error("Firestore:", err);
+    }
   }
 
   // ── Panel verschieben (Commander/Admin, sync) ──
@@ -902,37 +1265,40 @@ function BoardApp() {
     if (!canWrite) return;
     const next = { ...panelLayout, nav: { x, y } };
     setPanelLayout(next);
-    pushAll(board, tokens, aliveState, spawnState, maps, pois, next);
+    pushPanelOnly(next);
   }
+
   function movePanelPlacer(x: number, y: number) {
     if (!canWrite) return;
     const next = { ...panelLayout, placer: { x, y } };
     setPanelLayout(next);
-    pushAll(board, tokens, aliveState, spawnState, maps, pois, next);
+    pushPanelOnly(next);
   }
 
   // ── Tot/Lebendig ──
   function toggleAlive(playerId: string) {
     if (!currentPlayer) return;
     if (playerId !== currentPlayer.id && !canWrite) return;
-    setAliveState(prev => {
+
+    setAliveState((prev) => {
       const wasDead = prev[playerId] === "dead";
-      const next    = { ...prev, [playerId]: wasDead ? "alive" : "dead" } as PlayerAliveState;
+      const next = { ...prev, [playerId]: wasDead ? "alive" : "dead" } as PlayerAliveState;
+
       let nextBoard = board;
       if (!wasDead) {
         const targetSpawnId = spawnState[playerId];
-        const targetSpawn   = targetSpawnId
-          ? board.groups.find(g => g.id === targetSpawnId)
-          : board.groups.find(g => g.isSpawn);
+        const targetSpawn = targetSpawnId ? board.groups.find((g) => g.id === targetSpawnId) : board.groups.find((g) => g.isSpawn);
         if (targetSpawn) {
           const newCols = { ...board.columns };
-          for (const gId of Object.keys(newCols)) newCols[gId] = newCols[gId].filter(id => id !== playerId);
+          for (const gId of Object.keys(newCols)) newCols[gId] = (newCols[gId] ?? []).filter((id) => id !== playerId);
           newCols[targetSpawn.id] = [playerId, ...(newCols[targetSpawn.id] ?? [])];
           nextBoard = { ...board, columns: newCols };
           setBoard(nextBoard);
         }
       }
-      pushAll(nextBoard, tokens, next, spawnState, maps, pois);
+
+      // Board ist ok per pushAll (du sagst Board sync passt). Tokens werden nicht überschrieben, weil wir tokens NICHT anfassen.
+      pushAll(nextBoard, tokensRef.current, next, spawnState, mapsRef.current, poisRef.current);
       return next;
     });
   }
@@ -941,50 +1307,59 @@ function BoardApp() {
   function setSpawn(playerId: string, spawnId: string) {
     const next = { ...spawnState, [playerId]: spawnId };
     setSpawnState(next);
-    pushAll(board, tokens, aliveState, next, maps, pois);
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, next, mapsRef.current, poisRef.current);
   }
 
   // ── Gruppen ──
   function addGroup(isSpawn = false) {
     if (!canWrite) return;
     const g: Group = { id: uid(), label: isSpawn ? "Spawn" : "Neue Gruppe", isSpawn };
-    setBoard(prev => {
+    setBoard((prev) => {
       const next = { groups: [...prev.groups, g], columns: { ...prev.columns, [g.id]: [] } };
-      pushAll(next, tokens, aliveState, spawnState, maps, pois);
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
   }
 
   function renameGroup(id: string, label: string) {
     if (!canWrite) return;
-    setBoard(prev => {
-      const next = { ...prev, groups: prev.groups.map(g => g.id === id ? { ...g, label } : g) };
-      pushAll(next, tokens, aliveState, spawnState, maps, pois);
+    setBoard((prev) => {
+      const next = { ...prev, groups: prev.groups.map((g) => (g.id === id ? { ...g, label } : g)) };
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
   }
 
   function deleteGroup(id: string) {
     if (!canWrite || id === "unassigned") return;
-    setBoard(prev => {
+    setBoard((prev) => {
       const moved = prev.columns[id] ?? [];
       const newCols = { ...prev.columns };
       delete newCols[id];
       newCols["unassigned"] = [...(newCols["unassigned"] ?? []), ...moved];
-      const next = { groups: prev.groups.filter(g => g.id !== id), columns: newCols };
-      const nt   = tokens.filter(t => t.groupId !== id);
+      const next = { groups: prev.groups.filter((g) => g.id !== id), columns: newCols };
+
+      // Tokens für die gelöschte Gruppe entfernen -> NUR tokens patchen, sonst nix überschreiben.
+      const nt = tokensRef.current.filter((t) => t.groupId !== id);
       setTokens(nt);
-      pushAll(next, nt, aliveState, spawnState, maps, pois);
+      tokensRef.current = nt;
+      pushTokensOnly(nt);
+
+      // Board bleibt über pushAll ok.
+      pushAll(next, nt, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
   }
 
   function clearGroup(id: string) {
     if (!canWrite) return;
-    setBoard(prev => {
+    setBoard((prev) => {
       const moved = prev.columns[id] ?? [];
-      const next  = { ...prev, columns: { ...prev.columns, unassigned: [...(prev.columns["unassigned"] ?? []), ...moved], [id]: [] } };
-      pushAll(next, tokens, aliveState, spawnState, maps, pois);
+      const next = {
+        ...prev,
+        columns: { ...prev.columns, unassigned: [...(prev.columns["unassigned"] ?? []), ...moved], [id]: [] },
+      };
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
   }
@@ -993,101 +1368,123 @@ function BoardApp() {
   function addSubmap() {
     if (!isAdmin) return;
     const m: MapEntry = { id: uid(), label: "Neue Karte", image: "", x: 0.5, y: 0.5 };
-    const next = [...maps, m];
+    const next = [...mapsRef.current, m];
     setMaps(next);
-    pushAll(board, tokens, aliveState, spawnState, next, pois);
+    mapsRef.current = next;
+    pushMapsOnly(next);
   }
+
   function renameMap(id: string, label: string) {
-    const next = maps.map(m => m.id === id ? { ...m, label } : m);
-    setMaps(next); pushAll(board, tokens, aliveState, spawnState, next, pois);
+    const next = mapsRef.current.map((m) => (m.id === id ? { ...m, label } : m));
+    setMaps(next);
+    mapsRef.current = next;
+    pushMapsOnly(next);
   }
+
   function deleteMap(id: string) {
     if (!isAdmin || id === "main") return;
-    const next     = maps.filter(m => m.id !== id);
-    const nextPois = pois.filter(p => p.parentMapId !== id);
-    setMaps(next); setPois(nextPois);
+    const next = mapsRef.current.filter((m) => m.id !== id);
+    const nextPois = poisRef.current.filter((p) => p.parentMapId !== id);
+    setMaps(next);
+    setPois(nextPois);
+    mapsRef.current = next;
+    poisRef.current = nextPois;
     if (activeMapId === id) setActiveMapId("main");
-    pushAll(board, tokens, aliveState, spawnState, next, nextPois);
+    pushMapsPois(next, nextPois);
   }
+
   function setMapImage(id: string, image: string) {
-    const inMaps = maps.find(m => m.id === id);
+    const inMaps = mapsRef.current.find((m) => m.id === id);
     if (inMaps) {
-      const next = maps.map(m => m.id === id ? { ...m, image } : m);
-      setMaps(next); pushAll(board, tokens, aliveState, spawnState, next, pois); return;
+      const next = mapsRef.current.map((m) => (m.id === id ? { ...m, image } : m));
+      setMaps(next);
+      mapsRef.current = next;
+      pushMapsOnly(next);
+      return;
     }
-    const next = pois.map(p => p.id === id ? { ...p, image } : p);
-    setPois(next); pushAll(board, tokens, aliveState, spawnState, maps, next);
+    const nextPois = poisRef.current.map((p) => (p.id === id ? { ...p, image } : p));
+    setPois(nextPois);
+    poisRef.current = nextPois;
+    pushPoisOnly(nextPois);
   }
+
   function moveMapMarker(id: string, x: number, y: number) {
-    const next = maps.map(m => m.id === id ? { ...m, x, y } : m);
-    setMaps(next); pushAll(board, tokens, aliveState, spawnState, next, pois);
+    const next = mapsRef.current.map((m) => (m.id === id ? { ...m, x, y } : m));
+    setMaps(next);
+    mapsRef.current = next;
+    pushMapsOnly(next);
   }
 
   // ── POIs ──
   function addPOI(parentMapId: string) {
     if (!isAdmin) return;
     const p: POI = { id: uid(), label: "Neuer POI", image: "", parentMapId, x: 0.5, y: 0.5 };
-    const next   = [...pois, p];
-    setPois(next); pushAll(board, tokens, aliveState, spawnState, maps, next);
-  }
-  function renamePOI(id: string, label: string) {
-    const next = pois.map(p => p.id === id ? { ...p, label } : p);
-    setPois(next); pushAll(board, tokens, aliveState, spawnState, maps, next);
-  }
-  function deletePOI(id: string) {
-    const next = pois.filter(p => p.id !== id);
+    const next = [...poisRef.current, p];
     setPois(next);
-    if (activeMapId === id) setActiveMapId("main");
-    pushAll(board, tokens, aliveState, spawnState, maps, next);
+    poisRef.current = next;
+    pushPoisOnly(next);
   }
+
+  function renamePOI(id: string, label: string) {
+    const next = poisRef.current.map((p) => (p.id === id ? { ...p, label } : p));
+    setPois(next);
+    poisRef.current = next;
+    pushPoisOnly(next);
+  }
+
+  function deletePOI(id: string) {
+    const next = poisRef.current.filter((p) => p.id !== id);
+    setPois(next);
+    poisRef.current = next;
+    if (activeMapId === id) setActiveMapId("main");
+    pushPoisOnly(next);
+  }
+
   function movePOIMarker(id: string, x: number, y: number) {
-    const next = pois.map(p => p.id === id ? { ...p, x, y } : p);
-    setPois(next); pushAll(board, tokens, aliveState, spawnState, maps, next);
+    const next = poisRef.current.map((p) => (p.id === id ? { ...p, x, y } : p));
+    setPois(next);
+    poisRef.current = next;
+    pushPoisOnly(next);
   }
 
   // ── Token ──
-  // Refs damit commitToken immer aktuelle Werte sieht – kein stale-closure Problem
-  const boardRef  = useRef(board);
-  const aliveRef  = useRef(aliveState);
-  const spawnRef  = useRef(spawnState);
-  const mapsRef   = useRef(maps);
-  const poisRef   = useRef(pois);
+  const boardRef = useRef(board);
+  const aliveRef = useRef(aliveState);
+  const spawnRef = useRef(spawnState);
+  const mapsRef = useRef(maps);
+  const poisRef = useRef(pois);
   const tokensRef = useRef(tokens);
-  useEffect(() => { boardRef.current  = board;      }, [board]);
-  useEffect(() => { aliveRef.current  = aliveState; }, [aliveState]);
-  useEffect(() => { spawnRef.current  = spawnState; }, [spawnState]);
-  useEffect(() => { mapsRef.current   = maps;       }, [maps]);
-  useEffect(() => { poisRef.current   = pois;       }, [pois]);
-  useEffect(() => { tokensRef.current = tokens;     }, [tokens]);
 
-  // Nur lokaler State – kein Firestore (für live-Drag)
+  useEffect(() => { boardRef.current = board; }, [board]);
+  useEffect(() => { aliveRef.current = aliveState; }, [aliveState]);
+  useEffect(() => { spawnRef.current = spawnState; }, [spawnState]);
+  useEffect(() => { mapsRef.current = maps; }, [maps]);
+  useEffect(() => { poisRef.current = pois; }, [pois]);
+  useEffect(() => { tokensRef.current = tokens; }, [tokens]);
+
   function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
     const resolvedMapId = mapId === "main" ? undefined : mapId;
-    setTokens(prev => {
-      const i = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
-      return i === -1
-        ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }]
-        : prev.map((t, idx) => idx === i ? { ...t, x, y } : t);
+    setTokens((prev) => {
+      const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
+      return i === -1 ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }] : prev.map((t, idx) => (idx === i ? { ...t, x, y } : t));
     });
   }
 
-  // Beim Loslassen → einmaliger Firestore-Write
+  // WICHTIG: Token-Commit schreibt NUR tokens -> kein Überschreiben durch andere Aktionen
   function commitToken(gId: string, x: number, y: number, mapId: string) {
     const resolvedMapId = mapId === "main" ? undefined : mapId;
     const prev = tokensRef.current;
-    const i    = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
-    const next = i === -1
-      ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }]
-      : prev.map((t, idx) => idx === i ? { ...t, x, y } : t);
+    const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
+    const next =
+      i === -1 ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }] : prev.map((t, idx) => (idx === i ? { ...t, x, y } : t));
+
     setTokens(next);
     tokensRef.current = next;
-    pushAll(boardRef.current, next, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+    pushTokensOnly(next);
   }
 
-  // Für Token-Placer (Klick → direkt committen)
   const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => {
     commitToken(gId, x, y, mapId);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Drag & Drop Board ──
@@ -1097,102 +1494,111 @@ function BoardApp() {
     }
     return null;
   }
+
   function onDragEnd(e: DragEndEvent) {
     if (!canWrite) return;
     const activeId = e.active.id.toString();
-    const overId   = e.over?.id?.toString();
+    const overId = e.over?.id?.toString();
     if (!overId) return;
-    const from     = findContainer(activeId);
-    const groupIds = board.groups.map(g => g.id);
-    const to       = groupIds.includes(overId) ? overId : findContainer(overId);
+
+    const from = findContainer(activeId);
+    const groupIds = board.groups.map((g) => g.id);
+    const to = groupIds.includes(overId) ? overId : findContainer(overId);
     if (!from || !to) return;
+
     if (from === to) {
       const oi = (board.columns[from] ?? []).indexOf(activeId);
       const ni = (board.columns[from] ?? []).indexOf(overId);
       if (oi !== -1 && ni !== -1 && oi !== ni) {
-        setBoard(prev => {
+        setBoard((prev) => {
           const next = { ...prev, columns: { ...prev.columns, [from]: arrayMove(prev.columns[from] ?? [], oi, ni) } };
-          pushAll(next, tokens, aliveState, spawnState, maps, pois);
+          pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
           return next;
         });
       }
       return;
     }
-    setBoard(prev => {
+
+    setBoard((prev) => {
       const next: BoardState = {
         ...prev,
         columns: {
           ...prev.columns,
-          [from]: (prev.columns[from] ?? []).filter(x => x !== activeId),
-          [to]:   [activeId, ...(prev.columns[to] ?? [])],
+          [from]: (prev.columns[from] ?? []).filter((x) => x !== activeId),
+          [to]: [activeId, ...(prev.columns[to] ?? [])],
         },
       };
-      pushAll(next, tokens, aliveState, spawnState, maps, pois);
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
   }
 
   // ── Sortierung ──
   function toggleSort(field: typeof sortField) {
-    if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
-    else { setSortField(field); setSortDir("asc"); }
+    if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortField(field);
+      setSortDir("asc");
+    }
   }
 
   const filteredSortedUnassigned = useMemo(() => {
     let ids = [...(board.columns["unassigned"] ?? [])];
+
     if (search.trim()) {
       const q = search.toLowerCase();
-      ids = ids.filter(id => {
+      ids = ids.filter((id) => {
         const p = playersById[id];
         if (!p) return false;
-        return [p.name, p.area, p.role, p.squadron, p.homeLocation]
-          .some(v => v?.toLowerCase().includes(q));
+        return [p.name, p.area, p.role, p.squadron, p.homeLocation].some((v) => v?.toLowerCase().includes(q));
       });
     }
+
     if (sortField) {
       ids.sort((a, b) => {
-        const pa = playersById[a]; const pb = playersById[b];
+        const pa = playersById[a];
+        const pb = playersById[b];
         if (!pa || !pb) return 0;
         const va = (pa[sortField] ?? "").toLowerCase();
         const vb = (pb[sortField] ?? "").toLowerCase();
         return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
       });
     }
+
     return ids;
   }, [board.columns, search, sortField, sortDir, playersById]);
 
   // ── Aktive Karte ──
-  const activeMapEntry = maps.find(m => m.id === activeMapId);
-  const activePOI      = pois.find(p => p.id === activeMapId);
-  const activeImage    = activeMapEntry?.image ?? activePOI?.image ?? "";
-  const activeLabel    = activeMapEntry?.label ?? activePOI?.label ?? "";
+  const activeMapEntry = maps.find((m) => m.id === activeMapId);
+  const activePOI = pois.find((p) => p.id === activeMapId);
+  const activeImage = activeMapEntry?.image ?? activePOI?.image ?? "";
+  const activeLabel = activeMapEntry?.label ?? activePOI?.label ?? "";
 
   const markersOnActive = useMemo(() => {
     if (activeMapId === "main") {
-      return maps.filter(m => m.id !== "main").map(m => ({
-        id: m.id, label: m.label, x: m.x ?? 0.5, y: m.y ?? 0.5, isPOI: false,
-      }));
+      return maps
+        .filter((m) => m.id !== "main")
+        .map((m) => ({ id: m.id, label: m.label, x: m.x ?? 0.5, y: m.y ?? 0.5, isPOI: false }));
     }
-    return pois.filter(p => p.parentMapId === activeMapId).map(p => ({
-      id: p.id, label: p.label, x: p.x ?? 0.5, y: p.y ?? 0.5, isPOI: true,
-    }));
+    return pois
+      .filter((p) => p.parentMapId === activeMapId)
+      .map((p) => ({ id: p.id, label: p.label, x: p.x ?? 0.5, y: p.y ?? 0.5, isPOI: true }));
   }, [activeMapId, maps, pois]);
 
-  // Marker-Commit (nur beim Loslassen aufgerufen)
   function handleCommitMarker(id: string, x: number, y: number) {
-    if (mapsRef.current.find(m => m.id === id)) moveMapMarker(id, x, y);
+    if (mapsRef.current.find((m) => m.id === id)) moveMapMarker(id, x, y);
     else movePOIMarker(id, x, y);
   }
 
   const breadcrumb = useMemo(() => {
-    if (activeMapId === "main") return [{ id: "main", label: maps.find(m => m.id === "main")?.label ?? "Hauptkarte" }];
-    const sub = maps.find(m => m.id === activeMapId);
-    if (sub) return [{ id: "main", label: maps.find(m => m.id === "main")?.label ?? "Hauptkarte" }, { id: sub.id, label: sub.label }];
-    const poi = pois.find(p => p.id === activeMapId);
+    if (activeMapId === "main") return [{ id: "main", label: maps.find((m) => m.id === "main")?.label ?? "Hauptkarte" }];
+    const sub = maps.find((m) => m.id === activeMapId);
+    if (sub) return [{ id: "main", label: maps.find((m) => m.id === "main")?.label ?? "Hauptkarte" }, { id: sub.id, label: sub.label }];
+    const poi = pois.find((p) => p.id === activeMapId);
     if (poi) {
-      const parent = maps.find(m => m.id === poi.parentMapId);
+      const parent = maps.find((m) => m.id === poi.parentMapId);
       return [
-        { id: "main", label: maps.find(m => m.id === "main")?.label ?? "Hauptkarte" },
+        { id: "main", label: maps.find((m) => m.id === "main")?.label ?? "Hauptkarte" },
         { id: poi.parentMapId, label: parent?.label ?? "Unterkarte" },
         { id: poi.id, label: poi.label },
       ];
@@ -1200,150 +1606,193 @@ function BoardApp() {
     return [{ id: "main", label: "Hauptkarte" }];
   }, [activeMapId, maps, pois]);
 
-  const selfAlive      = currentPlayer ? (aliveState[currentPlayer.id] ?? "alive") : "alive";
-  const spawnGroups    = board.groups.filter(g => g.isSpawn);
-  const tacticalGroups = board.groups.filter(g => g.id !== "unassigned" && !g.isSpawn);
-  const unassignedGroup = board.groups.find(g => g.id === "unassigned")!;
+  const selfAlive = currentPlayer ? aliveState[currentPlayer.id] ?? "alive" : "alive";
+  const spawnGroups = board.groups.filter((g) => g.isSpawn);
+  const tacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
+  const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
-  if (!authReady) return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-      <div className="text-gray-400">Laden…</div>
-    </div>
-  );
-  if (!user || !currentPlayer) return <LoginView onLogin={p => setCurrentPlayer(p)} />;
+  if (!authReady)
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Laden…</div>
+      </div>
+    );
+
+  if (!user || !currentPlayer) return <LoginView onLogin={(p) => setCurrentPlayer(p)} />;
 
   const roleBadge =
-    role === "admin"     ? "bg-red-900 text-red-300 border border-red-700" :
-    role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
-                           "bg-gray-800 text-gray-400 border border-gray-600";
+    role === "admin"
+      ? "bg-red-900 text-red-300 border border-red-700"
+      : role === "commander"
+      ? "bg-blue-900 text-blue-300 border border-blue-700"
+      : "bg-gray-800 text-gray-400 border border-gray-600";
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
-
-      {/* ── HEADER ── */}
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
         <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="font-bold text-white">TCS</span>
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
+
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Großer Tot/Lebt-Knopf */}
             <button
-              className={`px-4 py-2 rounded-lg border font-bold text-sm transition-colors
-                ${selfAlive === "dead"
+              className={`px-4 py-2 rounded-lg border font-bold text-sm transition-colors ${
+                selfAlive === "dead"
                   ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
-                  : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"}`}
-              onClick={() => toggleAlive(currentPlayer.id)}>
+                  : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
+              }`}
+              onClick={() => toggleAlive(currentPlayer.id)}
+            >
               {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
             </button>
+
             <span className="text-sm text-gray-300">{currentPlayer.name}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
-            {(["board", "map"] as const).map(t => (
-              <button key={t}
-                className={`rounded-lg px-3 py-1.5 text-sm border transition-colors
-                  ${tab === t ? "bg-white text-black border-white" : "bg-transparent text-gray-300 border-gray-600 hover:border-gray-400"}`}
-                onClick={() => setTab(t)}>
+
+            {(["board", "map"] as const).map((t) => (
+              <button
+                key={t}
+                className={`rounded-lg px-3 py-1.5 text-sm border transition-colors ${
+                  tab === t ? "bg-white text-black border-white" : "bg-transparent text-gray-300 border-gray-600 hover:border-gray-400"
+                }`}
+                onClick={() => setTab(t)}
+              >
                 {t === "board" ? "Board" : "Karte"}
               </button>
             ))}
-            <button className="text-xs text-gray-500 hover:text-gray-300"
-              onClick={() => { setCurrentPlayer(null); setRole("viewer"); signOut(auth); }}>
+
+            <button
+              className="text-xs text-gray-500 hover:text-gray-300"
+              onClick={() => {
+                setCurrentPlayer(null);
+                setRole("viewer");
+                signOut(auth);
+              }}
+            >
               Logout
             </button>
           </div>
         </div>
       </header>
 
-      {/* ── BOARD ── */}
       {tab === "board" && (
         <div className="flex-1 overflow-auto p-4">
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-
-            {/* Spawn-Leiste ganz oben */}
             <SpawnBar
-              spawnGroups={spawnGroups} board={board} playersById={playersById}
-              aliveState={aliveState} currentPlayerId={currentPlayer.id}
-              canWrite={canWrite} onToggleAlive={toggleAlive}
-              onRename={renameGroup} onDelete={deleteGroup} onClear={clearGroup}
-              spawnState={spawnState} onSetSpawn={setSpawn}
+              spawnGroups={spawnGroups}
+              board={board}
+              playersById={playersById}
+              aliveState={aliveState}
+              currentPlayerId={currentPlayer.id}
+              canWrite={canWrite}
+              onToggleAlive={toggleAlive}
+              onRename={renameGroup}
+              onDelete={deleteGroup}
+              onClear={clearGroup}
+              spawnState={spawnState}
+              onSetSpawn={setSpawn}
             />
 
-            {/* Gruppen-Bereich */}
             <div className="flex gap-3 items-start overflow-x-auto pb-4">
-
-              {/* Unzugeteilt – eigene Spalte mit Sortierung, unabhängige Höhe */}
               <div style={{ width: 220, flexShrink: 0 }}>
-                {/* Sortier-Controls */}
                 <div className="rounded-t-xl border border-b-0 border-gray-700 bg-gray-900 px-3 py-2">
                   <input
                     className="w-full bg-gray-800 border border-gray-600 text-white text-xs rounded px-2 py-1 mb-2 focus:outline-none focus:border-blue-500"
                     placeholder="🔍 Suchen…"
                     value={search}
-                    onChange={e => setSearch(e.target.value)}
+                    onChange={(e) => setSearch(e.target.value)}
                   />
+
                   <div className="flex flex-wrap gap-1">
                     {([
-                      { f: "name",         l: "Name" },
-                      { f: "area",         l: "Bereich" },
-                      { f: "role",         l: "Rolle" },
-                      { f: "squadron",     l: "Staffel" },
+                      { f: "name", l: "Name" },
+                      { f: "area", l: "Bereich" },
+                      { f: "role", l: "Rolle" },
+                      { f: "squadron", l: "Staffel" },
                       { f: "homeLocation", l: "Heimatort" },
                     ] as const).map(({ f, l }) => (
-                      <button key={f}
-                        className={`text-xs px-1.5 py-0.5 rounded border transition-colors
-                          ${sortField === f ? "bg-blue-700 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400 hover:text-white"}`}
-                        onClick={() => toggleSort(f)}>
-                        {l}{sortField === f ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                      <button
+                        key={f}
+                        className={`text-xs px-1.5 py-0.5 rounded border transition-colors ${
+                          sortField === f ? "bg-blue-700 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400 hover:text-white"
+                        }`}
+                        onClick={() => toggleSort(f)}
+                      >
+                        {l}
+                        {sortField === f ? (sortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     ))}
+
                     {sortField && (
-                      <button className="text-xs px-1.5 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-red-400"
-                        onClick={() => setSortField(null)}>✕</button>
+                      <button
+                        className="text-xs px-1.5 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-red-400"
+                        onClick={() => setSortField(null)}
+                      >
+                        ✕
+                      </button>
                     )}
                   </div>
                 </div>
 
-                {/* Unzugeteilt-Spalte, scrollbar, unabhängig */}
-                <div className="rounded-b-xl border border-gray-700 bg-gray-900 overflow-y-auto px-2 py-2 space-y-1"
-                  style={{ maxHeight: "calc(100vh - 220px)" }}>
+                <div className="rounded-b-xl border border-gray-700 bg-gray-900 overflow-y-auto px-2 py-2 space-y-1" style={{ maxHeight: "calc(100vh - 220px)" }}>
                   <SortableContext items={filteredSortedUnassigned} strategy={rectSortingStrategy}>
-                    {/* Droppable auf die ganze Spalte */}
                     <UnassignedDrop id="unassigned" label={unassignedGroup.label} count={(board.columns["unassigned"] ?? []).length}>
                       {filteredSortedUnassigned.length === 0 && (
                         <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-3 text-center">
                           {search ? "Keine Treffer" : "leer"}
                         </div>
                       )}
-                      {filteredSortedUnassigned.map(pid => playersById[pid] ? (
-                        <Card key={pid} player={playersById[pid]}
-                          aliveState={aliveState} currentPlayerId={currentPlayer.id}
-                          canWrite={canWrite} onToggleAlive={toggleAlive}
-                          spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn} />
-                      ) : null)}
+
+                      {filteredSortedUnassigned.map((pid) =>
+                        playersById[pid] ? (
+                          <Card
+                            key={pid}
+                            player={playersById[pid]}
+                            aliveState={aliveState}
+                            currentPlayerId={currentPlayer.id}
+                            canWrite={canWrite}
+                            onToggleAlive={toggleAlive}
+                            spawnGroups={spawnGroups}
+                            spawnState={spawnState}
+                            onSetSpawn={setSpawn}
+                          />
+                        ) : null
+                      )}
                     </UnassignedDrop>
                   </SortableContext>
                 </div>
               </div>
 
-              {/* Taktische Gruppen – feste Größe, umbrechen */}
               <div className="flex flex-wrap gap-3 flex-1 items-start">
-                {tacticalGroups.map(g => (
-                  <DroppableColumn key={g.id} group={g}
+                {tacticalGroups.map((g) => (
+                  <DroppableColumn
+                    key={g.id}
+                    group={g}
                     ids={board.columns[g.id] ?? []}
-                    playersById={playersById} aliveState={aliveState}
-                    currentPlayerId={currentPlayer.id} canWrite={canWrite}
-                    onToggleAlive={toggleAlive} onRename={renameGroup}
-                    onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
-                    spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
+                    playersById={playersById}
+                    aliveState={aliveState}
+                    currentPlayerId={currentPlayer.id}
+                    canWrite={canWrite}
+                    onToggleAlive={toggleAlive}
+                    onRename={renameGroup}
+                    onDelete={deleteGroup}
+                    onClear={() => clearGroup(g.id)}
+                    spawnGroups={spawnGroups}
+                    spawnState={spawnState}
+                    onSetSpawn={setSpawn}
                   />
                 ))}
+
                 {canWrite && (
                   <div className="flex flex-col gap-2">
-                    <button className="text-xs px-3 py-2 rounded-xl border border-gray-600 text-gray-300 hover:bg-gray-800 whitespace-nowrap"
-                      onClick={() => addGroup(false)}>+ Gruppe</button>
-                    <button className="text-xs px-3 py-2 rounded-xl border border-yellow-800 text-yellow-400 hover:bg-yellow-950 whitespace-nowrap"
-                      onClick={() => addGroup(true)}>⚓ Spawn</button>
+                    <button className="text-xs px-3 py-2 rounded-xl border border-gray-600 text-gray-300 hover:bg-gray-800 whitespace-nowrap" onClick={() => addGroup(false)}>
+                      + Gruppe
+                    </button>
+                    <button className="text-xs px-3 py-2 rounded-xl border border-yellow-800 text-yellow-400 hover:bg-yellow-950 whitespace-nowrap" onClick={() => addGroup(true)}>
+                      ⚓ Spawn
+                    </button>
                   </div>
                 )}
               </div>
@@ -1352,17 +1801,16 @@ function BoardApp() {
         </div>
       )}
 
-      {/* ── KARTE (Vollbild) ── */}
       {tab === "map" && (
         <div className="flex-1 relative overflow-hidden">
-
-          {/* Breadcrumb */}
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
             {breadcrumb.map((b, i) => (
               <React.Fragment key={b.id}>
                 {i > 0 && <span className="text-gray-600">›</span>}
-                <button className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`}
-                  onClick={() => setActiveMapId(b.id)}>
+                <button
+                  className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`}
+                  onClick={() => setActiveMapId(b.id)}
+                >
                   {b.label}
                 </button>
               </React.Fragment>
@@ -1370,48 +1818,46 @@ function BoardApp() {
             {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
           </div>
 
-          {/* Karte */}
           <div className="w-full h-full">
-            {!activeImage
-              ? <AutoMap label={activeLabel} mapId={activeMapId} />
-              : <ZoomableMap
-                  imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
-                  onMoveTokenLocal={moveTokenLocal}
-                  onCommitToken={(gId, x, y, mapId) => commitToken(gId, x, y, mapId)}
-                  isAdmin={isAdmin}
-                  markers={markersOnActive}
-                  onOpenMarker={id => setActiveMapId(id)}
-                  onCommitMarker={handleCommitMarker}
-                  activeMapId={activeMapId}
-                />
-            }
+            {!activeImage ? (
+              <AutoMap label={activeLabel} mapId={activeMapId} />
+            ) : (
+              <ZoomableMap
+                imageSrc={activeImage}
+                tokens={tokens}
+                groups={board.groups}
+                board={board}
+                onMoveTokenLocal={moveTokenLocal}
+                onCommitToken={(gId, x, y, mapId) => commitToken(gId, x, y, mapId)}
+                isAdmin={isAdmin}
+                markers={markersOnActive}
+                onOpenMarker={(id) => setActiveMapId(id)}
+                onCommitMarker={handleCommitMarker}
+                activeMapId={activeMapId}
+              />
+            )}
           </div>
 
-          {/* Verschiebbare Panels */}
-          <DraggablePanel
-            title="Karten" canDrag={canWrite}
-            x={panelLayout.nav.x} y={panelLayout.nav.y}
-            onMove={movePanelNav}>
+          <DraggablePanel title="Karten" canDrag={canWrite} x={panelLayout.nav.x} y={panelLayout.nav.y} onMove={movePanelNav}>
             <MapNavPanel
-              maps={maps} pois={pois}
-              activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+              maps={maps}
+              pois={pois}
+              activeMapId={activeMapId}
+              setActiveMapId={setActiveMapId}
               isAdmin={isAdmin}
-              onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
-              onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI}
+              onRenameMap={renameMap}
+              onDeleteMap={deleteMap}
+              onAddSubmap={addSubmap}
+              onRenamePOI={renamePOI}
+              onDeletePOI={deletePOI}
+              onAddPOI={addPOI}
               onSetMapImage={setMapImage}
             />
           </DraggablePanel>
 
           {canWrite && (
-            <DraggablePanel
-              title="Token setzen" canDrag={canWrite}
-              x={panelLayout.placer.x} y={panelLayout.placer.y}
-              onMove={movePanelPlacer}>
-              <TokenPlacerPanel
-                groups={board.groups}
-                onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
-                activeMapId={activeMapId}
-              />
+            <DraggablePanel title="Token setzen" canDrag={canWrite} x={panelLayout.placer.x} y={panelLayout.placer.y} onMove={movePanelPlacer}>
+              <TokenPlacerPanel groups={board.groups} onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)} activeMapId={activeMapId} />
             </DraggablePanel>
           )}
         </div>
@@ -1421,13 +1867,20 @@ function BoardApp() {
 }
 
 // Kleiner Wrapper damit Unzugeteilt droppable ist
-function UnassignedDrop({ id, label, count, children }: {
-  id: string; label: string; count: number; children: React.ReactNode;
+function UnassignedDrop({
+  id,
+  label,
+  count,
+  children,
+}: {
+  id: string;
+  label: string;
+  count: number;
+  children: React.ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
-    <div ref={setNodeRef}
-      className={`min-h-[80px] rounded-lg transition-colors ${isOver ? "bg-blue-950" : ""}`}>
+    <div ref={setNodeRef} className={`min-h-[80px] rounded-lg transition-colors ${isOver ? "bg-blue-950" : ""}`}>
       <div className="text-xs text-gray-500 font-semibold mb-2 px-1">
         {label} <span className="text-gray-600">({count})</span>
       </div>
@@ -1442,11 +1895,13 @@ function UnassignedDrop({ id, label, count, children }: {
 
 export default function Page() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400">Laden…</div>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+          <div className="text-gray-400">Laden…</div>
+        </div>
+      }
+    >
       <BoardApp />
     </Suspense>
   );
