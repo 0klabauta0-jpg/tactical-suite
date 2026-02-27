@@ -632,23 +632,27 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({
-  imageSrc, tokens, groups, onMoveToken, isAdmin,
-  markers, onOpenMarker, onMoveMarker, activeMapId,
+  imageSrc, tokens, groups, board, onMoveTokenLocal, onCommitToken, isAdmin,
+  markers, onOpenMarker, onCommitMarker, activeMapId,
 }: {
-  imageSrc: string; tokens: Token[]; groups: Group[];
-  onMoveToken: (gId: string, x: number, y: number) => void;
+  imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
+  onMoveTokenLocal: (gId: string, x: number, y: number, mapId: string) => void;
+  onCommitToken:    (gId: string, x: number, y: number, mapId: string) => void;
   isAdmin: boolean;
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
-  onOpenMarker: (id: string) => void;
-  onMoveMarker: (id: string, x: number, y: number) => void;
+  onOpenMarker:   (id: string) => void;
+  onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string;
 }) {
-  const [scale,      setScale]      = useState(1);
-  const [offset,     setOffset]     = useState({ x: 0, y: 0 });
+  const [scale,      setScale]  = useState(1);
+  const [offset,     setOffset] = useState({ x: 0, y: 0 });
   const [tokenDrag,  setTokenDrag]  = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [panning,    setPanning]    = useState(false);
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
+  // letzte Drag-Position merken um sie bei pointerUp zu committen
+  const lastTokenPos  = useRef<{x:number;y:number} | null>(null);
+  const lastMarkerPos = useRef<{x:number;y:number} | null>(null);
 
   function getMapCoords(e: React.PointerEvent) {
     const img = document.getElementById("map-img");
@@ -675,13 +679,34 @@ function ZoomableMap({
     if (panning && !tokenDrag && !markerDrag) {
       setOffset({ x: panStart.current.ox + e.clientX - panStart.current.x, y: panStart.current.oy + e.clientY - panStart.current.y });
     }
-    if (tokenDrag)  { const c = getMapCoords(e); if (c) onMoveToken(tokenDrag, c.x, c.y); }
-    if (markerDrag) { const c = getMapCoords(e); if (c) onMoveMarker(markerDrag, c.x, c.y); }
+    if (tokenDrag) {
+      const c = getMapCoords(e);
+      if (c) {
+        lastTokenPos.current = c;
+        onMoveTokenLocal(tokenDrag, c.x, c.y, activeMapId); // flüssig, kein Firestore
+      }
+    }
+    if (markerDrag) {
+      const c = getMapCoords(e);
+      if (c) lastMarkerPos.current = c;
+    }
   }
-  function onBgUp() { setPanning(false); setTokenDrag(null); setMarkerDrag(null); }
+  function onBgUp() {
+    // Erst beim Loslassen → einmaliger Firestore-Write
+    if (tokenDrag && lastTokenPos.current) {
+      onCommitToken(tokenDrag, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
+    }
+    if (markerDrag && lastMarkerPos.current) {
+      onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
+    }
+    setPanning(false);
+    setTokenDrag(null);  lastTokenPos.current  = null;
+    setMarkerDrag(null); lastMarkerPos.current = null;
+  }
 
   const visibleTokens = tokens.filter(t => activeMapId === "main" ? !t.mapId : t.mapId === activeMapId);
-  const groupLabel    = (gId: string) => groups.find(g => g.id === gId)?.label ?? gId;
+  const groupLabel = (gId: string) => groups.find(g => g.id === gId)?.label ?? gId;
+  const groupCount = (gId: string) => (board.columns[gId] ?? []).length;
 
   return (
     <div className="w-full h-full overflow-hidden"
@@ -711,33 +736,41 @@ function ZoomableMap({
         <img id="map-img" src={imageSrc} alt="Map"
           className="w-full h-full object-contain block select-none" draggable={false} />
 
-        {/* Marker */}
+        {/* Karten-Marker */}
         {markers.map(m => (
           <div key={m.id}
             className={`absolute z-10 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
             style={{ left: `${m.x*100}%`, top: `${m.y*100}%`, transform: "translate(-50%,-50%)" }}
-            onPointerDown={e => { e.stopPropagation(); if (isAdmin) setMarkerDrag(m.id); }}
+            onPointerDown={e => { e.stopPropagation(); if (isAdmin) { setMarkerDrag(m.id); lastMarkerPos.current = null; } }}
             onClick={e => { e.stopPropagation(); if (!markerDrag) onOpenMarker(m.id); }}>
             <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap
               ${m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"}`}>
               {m.isPOI ? "🔵" : "📍"} {m.label}
             </div>
-            {isAdmin && <span className="text-yellow-300 text-xs opacity-60">✥</span>}
+            {isAdmin && <span className="text-yellow-300 text-xs opacity-50">✥</span>}
           </div>
         ))}
 
-        {/* Tokens */}
-        {visibleTokens.map(t => (
-          <div key={t.groupId}
-            className={`absolute z-10 rounded-full border-2 border-white bg-blue-600 text-white
-              px-2 py-0.5 text-xs font-bold shadow-lg select-none whitespace-nowrap
-              cursor-grab active:cursor-grabbing
-              ${tokenDrag === t.groupId ? "ring-2 ring-yellow-400 scale-110" : ""}`}
-            style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
-            onPointerDown={e => { e.stopPropagation(); setTokenDrag(t.groupId); }}>
-            {groupLabel(t.groupId)}
-          </div>
-        ))}
+        {/* Gruppen-Tokens – Name + Mitgliederzahl */}
+        {visibleTokens.map(t => {
+          const count = groupCount(t.groupId);
+          return (
+            <div key={t.groupId}
+              className={`absolute z-10 flex flex-col items-center cursor-grab active:cursor-grabbing select-none
+                ${tokenDrag === t.groupId ? "scale-110" : ""}`}
+              style={{ left: `${t.x*100}%`, top: `${t.y*100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={e => { e.stopPropagation(); setTokenDrag(t.groupId); lastTokenPos.current = null; }}>
+              <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap
+                ${tokenDrag === t.groupId ? "bg-yellow-500 border-yellow-300 text-black" : "bg-blue-600 border-white text-white"}`}>
+                <span className="font-bold text-sm">{groupLabel(t.groupId)}</span>
+                <span className={`ml-1.5 text-xs font-normal opacity-80
+                  ${tokenDrag === t.groupId ? "text-black" : "text-blue-200"}`}>
+                  {count}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1008,17 +1041,49 @@ function BoardApp() {
   }
 
   // ── Token ──
-  const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => {
+  // Refs damit commitToken immer aktuelle Werte sieht – kein stale-closure Problem
+  const boardRef  = useRef(board);
+  const aliveRef  = useRef(aliveState);
+  const spawnRef  = useRef(spawnState);
+  const mapsRef   = useRef(maps);
+  const poisRef   = useRef(pois);
+  const tokensRef = useRef(tokens);
+  useEffect(() => { boardRef.current  = board;      }, [board]);
+  useEffect(() => { aliveRef.current  = aliveState; }, [aliveState]);
+  useEffect(() => { spawnRef.current  = spawnState; }, [spawnState]);
+  useEffect(() => { mapsRef.current   = maps;       }, [maps]);
+  useEffect(() => { poisRef.current   = pois;       }, [pois]);
+  useEffect(() => { tokensRef.current = tokens;     }, [tokens]);
+
+  // Nur lokaler State – kein Firestore (für live-Drag)
+  function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
+    const resolvedMapId = mapId === "main" ? undefined : mapId;
     setTokens(prev => {
-      const resolvedMapId = mapId === "main" ? undefined : mapId;
-      const i    = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
-      const next = i === -1
+      const i = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
+      return i === -1
         ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }]
-        : prev.map((t, idx) => idx === i ? { groupId: gId, x, y, mapId: resolvedMapId } : t);
-      pushAll(board, next, aliveState, spawnState, maps, pois);
-      return next;
+        : prev.map((t, idx) => idx === i ? { ...t, x, y } : t);
     });
-  }, [board, aliveState, spawnState, maps, pois]);
+  }
+
+  // Beim Loslassen → einmaliger Firestore-Write
+  function commitToken(gId: string, x: number, y: number, mapId: string) {
+    const resolvedMapId = mapId === "main" ? undefined : mapId;
+    const prev = tokensRef.current;
+    const i    = prev.findIndex(t => t.groupId === gId && (t.mapId ?? "main") === mapId);
+    const next = i === -1
+      ? [...prev, { groupId: gId, x, y, mapId: resolvedMapId }]
+      : prev.map((t, idx) => idx === i ? { ...t, x, y } : t);
+    setTokens(next);
+    tokensRef.current = next;
+    pushAll(boardRef.current, next, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  // Für Token-Placer (Klick → direkt committen)
+  const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => {
+    commitToken(gId, x, y, mapId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Drag & Drop Board ──
   function findContainer(pid: string): string | null {
@@ -1108,8 +1173,9 @@ function BoardApp() {
     }));
   }, [activeMapId, maps, pois]);
 
-  function handleMoveMarker(id: string, x: number, y: number) {
-    if (maps.find(m => m.id === id)) moveMapMarker(id, x, y);
+  // Marker-Commit (nur beim Loslassen aufgerufen)
+  function handleCommitMarker(id: string, x: number, y: number) {
+    if (mapsRef.current.find(m => m.id === id)) moveMapMarker(id, x, y);
     else movePOIMarker(id, x, y);
   }
 
@@ -1304,12 +1370,13 @@ function BoardApp() {
             {!activeImage
               ? <AutoMap label={activeLabel} mapId={activeMapId} />
               : <ZoomableMap
-                  imageSrc={activeImage} tokens={tokens} groups={board.groups}
-                  onMoveToken={(gId, x, y) => upsertToken(gId, x, y, activeMapId)}
+                  imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
+                  onMoveTokenLocal={moveTokenLocal}
+                  onCommitToken={(gId, x, y, mapId) => commitToken(gId, x, y, mapId)}
                   isAdmin={isAdmin}
                   markers={markersOnActive}
                   onOpenMarker={id => setActiveMapId(id)}
-                  onMoveMarker={handleMoveMarker}
+                  onCommitMarker={handleCommitMarker}
                   activeMapId={activeMapId}
                 />
             }
