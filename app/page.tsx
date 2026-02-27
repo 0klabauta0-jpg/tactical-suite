@@ -44,7 +44,11 @@ type POI = { id: string; label: string; image: string; parentMapId: string; x?: 
 type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
 type Role = "admin" | "commander" | "viewer";
-type PanelLayout = { nav: { x: number; y: number }; placer: { x: number; y: number } };
+type PanelLayout = {
+  nav:    { x: number; y: number };
+  placer: { x: number; y: number };
+  notes:  { x: number; y: number; w: number; h: number };
+};
 
 const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
 const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
@@ -60,8 +64,9 @@ const DEFAULT_GROUPS: Group[] = [
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
-  nav: { x: 16, y: 16 },
+  nav:    { x: 16, y: 16 },
   placer: { x: 16, y: 340 },
+  notes:  { x: 300, y: 16, w: 320, h: 200 },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -91,6 +96,38 @@ function safeBoard(data: any, groups: Group[]): BoardState {
 // mapId normalisieren: fehlend → "main"
 function normalizeToken(t: Token): Token {
   return { ...t, mapId: (t.mapId ?? "main") };
+}
+
+// Google Drive / Docs / Sheets Links → direkte Bild-URL konvertieren
+function normalizeImageUrl(url: string): string {
+  if (!url) return url;
+
+  // Google Drive Sharing Link: /file/d/ID/view  oder  /file/d/ID/edit
+  // → https://drive.google.com/uc?export=view&id=ID
+  const driveFile = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (driveFile) {
+    return `https://drive.google.com/uc?export=view&id=${driveFile[1]}`;
+  }
+
+  // Google Drive open?id=ID
+  const driveOpen = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (driveOpen) {
+    return `https://drive.google.com/uc?export=view&id=${driveOpen[1]}`;
+  }
+
+  // Google Drive uc?id=ID (altes Format)
+  const driveUc = url.match(/drive\.google\.com\/uc\?.*id=([^&]+)/);
+  if (driveUc) {
+    return `https://drive.google.com/uc?export=view&id=${driveUc[1]}`;
+  }
+
+  // Google Docs/Sheets/Slides → kann kein Direktbild sein, Hinweis
+  // (docs.google.com/document, /spreadsheets, /presentation)
+  if (url.includes("docs.google.com")) {
+    return ""; // Nicht darstellbar als Bild
+  }
+
+  return url;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -735,7 +772,12 @@ function MapNavRow({
               onChange={(e) => setUrlDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  onSetImage(urlDraft.trim());
+                  const normalized = normalizeImageUrl(urlDraft.trim());
+                  if (urlDraft.trim() && !normalized) {
+                    alert("Google Docs/Sheets/Slides können nicht als Kartenbild verwendet werden.");
+                    return;
+                  }
+                  onSetImage(normalized);
                   setShowUrl(false);
                 }
               }}
@@ -744,7 +786,12 @@ function MapNavRow({
             <button
               className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 rounded flex-shrink-0"
               onClick={() => {
-                onSetImage(urlDraft.trim());
+                const normalized = normalizeImageUrl(urlDraft.trim());
+                if (urlDraft.trim() && !normalized) {
+                  alert("Google Docs/Sheets/Slides können nicht als Kartenbild verwendet werden.\nBitte einen Google Drive Bild-Link verwenden (z.B. .png, .jpg oder Drive-Sharing-Link).");
+                  return;
+                }
+                onSetImage(normalized);
                 setShowUrl(false);
               }}
             >
@@ -1041,6 +1088,105 @@ function ZoomableMap({
 }
 
 // ─────────────────────────────────────────────────────────────
+// NOTES PANEL  (frei verschiebbar, manuell resizebar)
+// ─────────────────────────────────────────────────────────────
+
+function NotesPanel({
+  x, y, w, h,
+  text,
+  onChange,
+  onMove,
+  onResize,
+  canWrite,
+}: {
+  x: number; y: number; w: number; h: number;
+  text: string;
+  onChange: (t: string) => void;
+  onMove: (x: number, y: number) => void;
+  onResize: (w: number, h: number) => void;
+  canWrite: boolean;
+}) {
+  const dragging = useRef(false);
+  const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+
+  const resizing = useRef(false);
+  const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
+
+  function onHeaderDown(e: React.PointerEvent) {
+    dragging.current = true;
+    start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function onHeaderMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    onMove(
+      Math.max(0, start.current.px + e.clientX - start.current.mx),
+      Math.max(0, start.current.py + e.clientY - start.current.my)
+    );
+  }
+  function onHeaderUp() { dragging.current = false; }
+
+  function onResizeDown(e: React.PointerEvent) {
+    resizing.current = true;
+    resizeStart.current = { mx: e.clientX, my: e.clientY, pw: w, ph: h };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  function onResizeMove(e: React.PointerEvent) {
+    if (!resizing.current) return;
+    onResize(
+      Math.max(180, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
+      Math.max(120, resizeStart.current.ph + e.clientY - resizeStart.current.my)
+    );
+  }
+  function onResizeUp() { resizing.current = false; }
+
+  return (
+    <div
+      className="absolute z-20 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+      style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}
+      onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
+      onPointerUp={() => { onHeaderUp(); onResizeUp(); }}
+    >
+      {/* Header / Drag Handle */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
+        onPointerDown={onHeaderDown}
+      >
+        <span className="text-gray-500 text-xs">⠿</span>
+        <span className="text-xs font-semibold text-gray-300 flex-1">📋 Notizen</span>
+        <span className="text-gray-600 text-xs">{canWrite ? "schreibbar" : "lesend"}</span>
+      </div>
+
+      {/* Textarea – feste Größe, kein auto-resize */}
+      <textarea
+        className="flex-1 bg-transparent text-gray-200 text-xs px-3 py-2 resize-none focus:outline-none placeholder-gray-600 font-mono"
+        placeholder={canWrite ? "Notizen, Protokoll, Befehle…" : ""}
+        value={text}
+        readOnly={!canWrite}
+        onChange={(e) => canWrite && onChange(e.target.value)}
+        onPointerDown={(e) => e.stopPropagation()}
+        style={{ cursor: canWrite ? "text" : "default" }}
+        spellCheck={false}
+      />
+
+      {/* Resize Handle (unten rechts) */}
+      <div
+        className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
+        onPointerDown={onResizeDown}
+        title="Größe ändern"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // AUTO MAP
 // ─────────────────────────────────────────────────────────────
 
@@ -1085,8 +1231,10 @@ function BoardApp() {
   const [tab, setTab] = useState<"board" | "map">("board");
   const [activeMapId, setActiveMapId] = useState("main");
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
+  const [notesText, setNotesText] = useState("");
+  const [notesVisible, setNotesVisible] = useState(true);
 
-  const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | null>(null);
+  const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | "aliveStatus" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
 
@@ -1101,6 +1249,8 @@ function BoardApp() {
   const mapsRef = useRef(maps);
   const poisRef = useRef(pois);
   const tokensRef = useRef(tokens);
+  const notesRef = useRef(notesText);
+  useEffect(() => { notesRef.current = notesText; }, [notesText]);
 
   useEffect(() => { boardRef.current = board; }, [board]);
   useEffect(() => { aliveRef.current = aliveState; }, [aliveState]);
@@ -1158,6 +1308,7 @@ function BoardApp() {
       if (data.maps && data.maps.length > 0) setMaps(data.maps);
       setPois(data.pois ?? []);
       if (data.panelLayout) setPanelLayout(data.panelLayout);
+      if (typeof data.notesText === "string") setNotesText(data.notesText);
     });
     return () => unsub();
   }, [user, roomId]);
@@ -1185,6 +1336,7 @@ function BoardApp() {
           maps: nm,
           pois: np,
           ...(nl ? { panelLayout: nl } : {}),
+          notesText: notesRef.current,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -1206,6 +1358,40 @@ function BoardApp() {
     const next = { ...panelLayout, placer: { x, y } };
     setPanelLayout(next);
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+  }
+
+  const notesMoveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function movePanelNotes(x: number, y: number) {
+    const next = { ...panelLayout, notes: { ...panelLayout.notes, x, y } };
+    setPanelLayout(next);
+    if (notesMoveDebounce.current) clearTimeout(notesMoveDebounce.current);
+    notesMoveDebounce.current = setTimeout(() => {
+      pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+    }, 600);
+  }
+
+  const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function resizePanelNotes(w: number, h: number) {
+    const next = { ...panelLayout, notes: { ...panelLayout.notes, w, h } };
+    setPanelLayout(next);
+    if (notesResizeDebounce.current) clearTimeout(notesResizeDebounce.current);
+    notesResizeDebounce.current = setTimeout(() => {
+      pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+    }, 600);
+  }
+
+  const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleNotesChange(text: string) {
+    setNotesText(text);
+    notesRef.current = text;
+    if (notesDebounceRef.current) clearTimeout(notesDebounceRef.current);
+    notesDebounceRef.current = setTimeout(() => {
+      setDoc(
+        doc(db, "rooms", roomId, "state", "board"),
+        { notesText: text, updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch(console.error);
+    }, 800);
   }
 
   function toggleAlive(playerId: string) {
@@ -1420,8 +1606,10 @@ function BoardApp() {
   }
 
   function onDragEnd(e: DragEndEvent) {
-    if (!canWrite) return;
     const activeId = e.active.id.toString();
+    // Viewer darf nur sich selbst verschieben
+    const isSelf = activeId === currentPlayer?.id;
+    if (!canWrite && !isSelf) return;
     const overId = e.over?.id?.toString();
     if (!overId) return;
 
@@ -1479,17 +1667,23 @@ function BoardApp() {
         const pa = playersById[a];
         const pb = playersById[b];
         if (!pa || !pb) return 0;
+        if (sortField === "aliveStatus") {
+          // alive < dead (alive comes first in asc)
+          const va = aliveState[a] === "dead" ? 1 : 0;
+          const vb = aliveState[b] === "dead" ? 1 : 0;
+          return sortDir === "asc" ? va - vb : vb - va;
+        }
         const va = (pa[sortField] ?? "").toLowerCase();
         const vb = (pb[sortField] ?? "").toLowerCase();
         return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
       });
     }
     return ids;
-  }, [board.columns, search, sortField, sortDir, playersById]);
+  }, [board.columns, search, sortField, sortDir, playersById, aliveState]);
 
   const activeMapEntry = maps.find((m) => m.id === activeMapId);
   const activePOI = pois.find((p) => p.id === activeMapId);
-  const activeImage = activeMapEntry?.image ?? activePOI?.image ?? "";
+  const activeImage = normalizeImageUrl(activeMapEntry?.image ?? activePOI?.image ?? "");
   const activeLabel = activeMapEntry?.label ?? activePOI?.label ?? "";
 
   const markersOnActive = useMemo(() => {
@@ -1620,6 +1814,7 @@ function BoardApp() {
                       { f: "role", l: "Rolle" },
                       { f: "squadron", l: "Staffel" },
                       { f: "homeLocation", l: "Heimatort" },
+                      { f: "aliveStatus", l: "Status" },
                     ] as const).map(({ f, l }) => (
                       <button
                         key={f}
@@ -1718,6 +1913,15 @@ function BoardApp() {
               </React.Fragment>
             ))}
             {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
+          <button
+            className={`ml-2 text-xs px-2 py-0.5 rounded border transition-colors ${
+              notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-500 hover:text-gray-300"
+            }`}
+            onClick={() => setNotesVisible(v => !v)}
+            title="Notizen ein/ausblenden"
+          >
+            📋
+          </button>
           </div>
 
           <div className="w-full h-full">
@@ -1762,6 +1966,20 @@ function BoardApp() {
             <DraggablePanel title="Token setzen" canDrag={canWrite} x={panelLayout.placer.x} y={panelLayout.placer.y} onMove={movePanelPlacer}>
               <TokenPlacerPanel groups={board.groups} onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)} activeMapId={activeMapId} />
             </DraggablePanel>
+          )}
+
+          {notesVisible && (
+            <NotesPanel
+              x={panelLayout.notes?.x ?? 300}
+              y={panelLayout.notes?.y ?? 16}
+              w={panelLayout.notes?.w ?? 320}
+              h={panelLayout.notes?.h ?? 200}
+              text={notesText}
+              onChange={handleNotesChange}
+              onMove={(nx, ny) => movePanelNotes(nx, ny)}
+              onResize={(nw, nh) => resizePanelNotes(nw, nh)}
+              canWrite={canWrite}
+            />
           )}
         </div>
       )}
