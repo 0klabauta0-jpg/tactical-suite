@@ -70,6 +70,30 @@ const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   notes:  { x: 300, y: 16, w: 320, h: 200 },
 };
 
+// ─── DRAWING TYPES ───────────────────────────────────────────
+type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text";
+
+type DrawStroke = {
+  id: string; type: "path";
+  d: string; color: string; width: number;
+};
+type DrawLine = {
+  id: string; type: "line";
+  x1: number; y1: number; x2: number; y2: number;
+  color: string; width: number;
+};
+type DrawText = {
+  id: string; type: "text";
+  x: number; y: number;
+  text: string; color: string; size: number;
+};
+type DrawElement = DrawStroke | DrawText | DrawLine;
+type DrawingsMap = Record<string, DrawElement[]>;
+
+const DRAW_COLORS = ["#ffffff","#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#a855f7","#000000"];
+const DRAW_WIDTHS = [2, 4, 8, 16];
+
+// ─────────────────────────────────────────────────────────────
 // Preset-Farben für Gruppen
 const GROUP_COLORS = [
   { label: "Blau",    hex: "3b82f6" },
@@ -704,6 +728,333 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 }
 
 // ─────────────────────────────────────────────────────────────
+// DRAWING TOOLBAR
+// ─────────────────────────────────────────────────────────────
+
+function DrawingToolbar({
+  tool, setTool, color, setColor, width, setWidth, canDraw,
+  onUndo, onClear,
+}: {
+  tool: DrawTool; setTool: (t: DrawTool) => void;
+  color: string; setColor: (c: string) => void;
+  width: number; setWidth: (w: number) => void;
+  canDraw: boolean; onUndo: () => void; onClear: () => void;
+}) {
+  if (!canDraw) return null;
+
+  const tools: { id: DrawTool; icon: string; title: string }[] = [
+    { id: "pointer", icon: "↖", title: "Zeiger (normal)" },
+    { id: "pen",     icon: "✏", title: "Freihand zeichnen" },
+    { id: "line",    icon: "╱", title: "Linie ziehen" },
+    { id: "eraser",  icon: "⌫", title: "Radiergummi" },
+    { id: "text",    icon: "T", title: "Text einfügen" },
+  ];
+
+  return (
+    <div
+      className="absolute left-1/2 z-30 flex items-center gap-2 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl px-3 py-2 shadow-xl select-none"
+      style={{ bottom: 16, transform: "translateX(-50%)" }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {/* Tools */}
+      <div className="flex gap-1">
+        {tools.map((t) => (
+          <button key={t.id}
+            title={t.title}
+            onClick={() => setTool(t.id)}
+            className={`w-8 h-8 rounded-lg text-sm font-bold border transition-colors ${
+              tool === t.id
+                ? "bg-blue-600 border-blue-400 text-white"
+                : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
+            }`}>
+            {t.icon}
+          </button>
+        ))}
+      </div>
+
+      <div className="w-px h-6 bg-gray-700" />
+
+      {/* Farben */}
+      <div className="flex gap-1">
+        {DRAW_COLORS.map((c) => (
+          <button key={c}
+            title={c}
+            onClick={() => setColor(c)}
+            className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${
+              color === c ? "border-white scale-125" : "border-transparent"
+            }`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+
+      <div className="w-px h-6 bg-gray-700" />
+
+      {/* Strichstärke */}
+      <div className="flex gap-1 items-center">
+        {DRAW_WIDTHS.map((w) => (
+          <button key={w}
+            title={`${w}px`}
+            onClick={() => setWidth(w)}
+            className={`rounded border flex items-center justify-center transition-colors ${
+              width === w ? "border-blue-400 bg-blue-900" : "border-gray-600 bg-gray-800 hover:bg-gray-700"
+            }`}
+            style={{ width: 28, height: 28 }}>
+            <div className="rounded-full bg-white" style={{ width: Math.min(w * 1.5, 20), height: Math.min(w * 1.5, 20) }} />
+          </button>
+        ))}
+      </div>
+
+      <div className="w-px h-6 bg-gray-700" />
+
+      {/* Undo / Clear */}
+      <button title="Rückgängig" onClick={onUndo}
+        className="w-8 h-8 rounded-lg text-sm border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">
+        ↩
+      </button>
+      <button title="Alles löschen" onClick={onClear}
+        className="w-8 h-8 rounded-lg text-sm border border-red-900 bg-red-950 text-red-400 hover:bg-red-900">
+        🗑
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// DRAWING LAYER  (SVG über dem Kartenbild, unter Tokens)
+// ─────────────────────────────────────────────────────────────
+
+function DrawingLayer({
+  elements, tool, color, strokeWidth, canDraw, scale, offset,
+  onAddElement, onRemoveElement,
+}: {
+  elements: DrawElement[];
+  tool: DrawTool; color: string; strokeWidth: number;
+  canDraw: boolean; scale: number; offset: { x: number; y: number };
+  onAddElement: (el: DrawElement) => void;
+  onRemoveElement: (id: string) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const drawing = useRef(false);
+  const currentPath = useRef<string>("");
+  const lineStart = useRef<{ x: number; y: number } | null>(null);
+  const [liveStroke, setLiveStroke] = useState<string>("");
+  const [liveLine, setLiveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+
+  // Text-Eingabe
+  const [textInput, setTextInput] = useState<{ x: number; y: number } | null>(null);
+  const [textVal, setTextVal] = useState("");
+  const textRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
+
+  // Koordinaten normalisieren: Pixel → 0–1 relativ zur SVG-Größe
+  function toRel(e: React.PointerEvent): { x: number; y: number } | null {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top)  / rect.height,
+    };
+  }
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (!canDraw || tool === "pointer") return;
+    e.stopPropagation();
+
+    const p = toRel(e);
+    if (!p) return;
+
+    if (tool === "text") {
+      setTextInput(p);
+      setTextVal("");
+      return;
+    }
+
+    if (tool === "eraser") {
+      // Lösche alle Elemente die nah am Klickpunkt liegen
+      const thresh = 0.03 / scale;
+      for (const el of elements) {
+        if (el.type === "path") {
+          // Grobe Prüfung: parse erste M-Koordinate
+          const m = el.d.match(/M([\d.]+),([\d.]+)/);
+          if (m) {
+            const ex = parseFloat(m[1]), ey = parseFloat(m[2]);
+            if (Math.hypot(ex - p.x, ey - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+          }
+        } else if (el.type === "line") {
+          const mx = (el.x1 + el.x2) / 2, my = (el.y1 + el.y2) / 2;
+          if (Math.hypot(mx - p.x, my - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+        } else if (el.type === "text") {
+          if (Math.hypot(el.x - p.x, el.y - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+        }
+      }
+      return;
+    }
+
+    if (tool === "pen") {
+      drawing.current = true;
+      currentPath.current = `M${p.x.toFixed(4)},${p.y.toFixed(4)}`;
+      setLiveStroke(currentPath.current);
+      (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (tool === "line") {
+      lineStart.current = p;
+      setLiveLine({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+      (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+      return;
+    }
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!canDraw) return;
+    const p = toRel(e);
+    if (!p) return;
+
+    if (tool === "eraser" && e.buttons === 1) {
+      // Kontinuierliches Radieren beim Ziehen
+      const thresh = 0.03 / scale;
+      for (const el of elements) {
+        if (el.type === "path") {
+          const m = el.d.match(/M([\d.]+),([\d.]+)/);
+          if (m) {
+            const ex = parseFloat(m[1]), ey = parseFloat(m[2]);
+            if (Math.hypot(ex - p.x, ey - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+          }
+        } else if (el.type === "line") {
+          const mx = (el.x1 + el.x2) / 2, my = (el.y1 + el.y2) / 2;
+          if (Math.hypot(mx - p.x, my - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+        } else if (el.type === "text") {
+          if (Math.hypot(el.x - p.x, el.y - p.y) < thresh * 5) { onRemoveElement(el.id); return; }
+        }
+      }
+    }
+
+    if (tool === "pen" && drawing.current) {
+      currentPath.current += ` L${p.x.toFixed(4)},${p.y.toFixed(4)}`;
+      setLiveStroke(currentPath.current);
+    }
+
+    if (tool === "line" && lineStart.current) {
+      setLiveLine({ x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y });
+    }
+  }
+
+  function onPointerUp(e: React.PointerEvent) {
+    if (!canDraw) return;
+    const p = toRel(e);
+
+    if (tool === "pen" && drawing.current) {
+      drawing.current = false;
+      if (currentPath.current.length > 10) {
+        onAddElement({ id: uid(), type: "path", d: currentPath.current, color, width: strokeWidth });
+      }
+      setLiveStroke("");
+      currentPath.current = "";
+    }
+
+    if (tool === "line" && lineStart.current && p) {
+      onAddElement({ id: uid(), type: "line",
+        x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y,
+        color, width: strokeWidth });
+      lineStart.current = null;
+      setLiveLine(null);
+    }
+  }
+
+  function commitText() {
+    if (textVal.trim() && textInput) {
+      onAddElement({ id: uid(), type: "text", x: textInput.x, y: textInput.y,
+        text: textVal.trim(), color, size: Math.max(12, strokeWidth * 3) });
+    }
+    setTextInput(null);
+    setTextVal("");
+  }
+
+  // SVG-Koordinate aus 0–1 Wert (SVG viewBox ist 0 0 1 1)
+  const svgCursor =
+    tool === "pointer" ? "default" :
+    tool === "eraser"  ? "cell" :
+    tool === "text"    ? "text" :
+    "crosshair";
+
+  return (
+    <div className="absolute inset-0 z-5" style={{ pointerEvents: tool === "pointer" ? "none" : "auto" }}>
+      <svg
+        ref={svgRef}
+        className="absolute inset-0 w-full h-full"
+        viewBox="0 0 1 1"
+        preserveAspectRatio="none"
+        style={{ cursor: svgCursor, overflow: "visible" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
+        {/* Gespeicherte Elemente */}
+        {elements.map((el) => {
+          if (el.type === "path") {
+            return <path key={el.id} d={el.d} stroke={el.color} strokeWidth={el.width / 1000}
+              fill="none" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />;
+          }
+          if (el.type === "line") {
+            return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2}
+              stroke={el.color} strokeWidth={el.width / 1000} strokeLinecap="round" vectorEffect="non-scaling-stroke" />;
+          }
+          if (el.type === "text") {
+            return (
+              <text key={el.id} x={el.x} y={el.y} fill={el.color}
+                fontSize={el.size / 1000} fontFamily="Arial, sans-serif"
+                dominantBaseline="hanging" vectorEffect="non-scaling-stroke"
+                style={{ userSelect: "none" }}>
+                {el.text}
+              </text>
+            );
+          }
+          return null;
+        })}
+
+        {/* Live-Stroke (während des Zeichnens) */}
+        {liveStroke && (
+          <path d={liveStroke} stroke={color} strokeWidth={strokeWidth / 1000}
+            fill="none" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        )}
+        {liveLine && (
+          <line x1={liveLine.x1} y1={liveLine.y1} x2={liveLine.x2} y2={liveLine.y2}
+            stroke={color} strokeWidth={strokeWidth / 1000} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+
+      {/* Text-Eingabefeld */}
+      {textInput && (
+        <div className="absolute z-50 pointer-events-auto"
+          style={{
+            left: `${textInput.x * 100}%`,
+            top:  `${textInput.y * 100}%`,
+            transform: "translate(0, -2px)",
+          }}>
+          <input
+            ref={textRef}
+            className="bg-gray-900 bg-opacity-90 border border-blue-500 text-white text-sm px-2 py-1 rounded shadow-lg outline-none min-w-[120px]"
+            style={{ color }}
+            value={textVal}
+            onChange={(e) => setTextVal(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") commitText();
+              if (e.key === "Escape") { setTextInput(null); setTextVal(""); }
+            }}
+            onBlur={commitText}
+            placeholder="Text eingeben…"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // ZOOMABLE MAP
 // BUGFIX: Mausrad = nur Scrollen/Panning, kein Zoom. Zoom nur über Buttons.
 // ─────────────────────────────────────────────────────────────
@@ -711,6 +1062,7 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken,
+  drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -719,8 +1071,11 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   canWriteTokens: boolean; isAdmin: boolean;
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
-  activeMapId: string;
-  onRemoveToken: (gId: string, mapId: string) => void;
+  activeMapId: string; onRemoveToken: (gId: string, mapId: string) => void;
+  drawElements: DrawElement[]; drawTool: DrawTool; drawColor: string; drawWidth: number;
+  canDraw: boolean;
+  onAddDrawElement: (el: DrawElement) => void;
+  onRemoveDrawElement: (id: string) => void;
 }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -825,11 +1180,14 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 
   return (
     <div className="w-full h-full overflow-hidden relative"
-      style={{ cursor: panning ? "grabbing" : "grab" }}
-      onWheel={onWheel} onPointerDown={onBgDown} onPointerMove={onBgMove} onPointerUp={onBgUp}>
+      style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
+      onWheel={onWheel}
+      onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
+      onPointerMove={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgMove(e); }}
+      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}>
 
-      {/* Zoom-Buttons (Buttons only, kein Mausrad-Zoom) */}
-      <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-1">
+      {/* Zoom-Buttons */}
+      <div className="absolute bottom-16 right-4 z-30 flex flex-col gap-1">
         {[
           { lbl: "+", fn: () => setScale((s) => Math.min(8, s * 1.3)) },
           { lbl: "−", fn: () => setScale((s) => Math.max(0.3, s / 1.3)) },
@@ -850,6 +1208,19 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         width: "100%", height: "100%", position: "relative",
       }}>
         <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
+
+        {/* Drawing Layer – über dem Bild, unter Tokens/Markern */}
+        <DrawingLayer
+          elements={drawElements}
+          tool={drawTool}
+          color={drawColor}
+          strokeWidth={drawWidth}
+          canDraw={canDraw}
+          scale={scale}
+          offset={offset}
+          onAddElement={onAddDrawElement}
+          onRemoveElement={onRemoveDrawElement}
+        />
 
         {/* Marker – Doppelklick öffnet, Einfachklick / Drag verschiebt */}
         {/* markerClickCounters: id → count, stored outside map via closure */}
@@ -1053,6 +1424,13 @@ function BoardApp() {
   const [notesText, setNotesText] = useState("");
   const [notesVisible, setNotesVisible] = useState(true);
 
+  // Drawing state
+  const [drawings, setDrawings] = useState<DrawingsMap>({});
+  const [drawTool, setDrawTool] = useState<DrawTool>("pointer");
+  const [drawColor, setDrawColor] = useState("#ffffff");
+  const [drawWidth, setDrawWidth] = useState(4);
+  const drawingsRef = useRef<DrawingsMap>({});
+
   const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | "aliveStatus" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
@@ -1079,6 +1457,7 @@ function BoardApp() {
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
   useEffect(() => { notesRef.current = notesText; }, [notesText]);
   useEffect(() => { groupRolesRef.current = groupRoles; }, [groupRoles]);
+  useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
 
   // auth
   useEffect(() => {
@@ -1125,6 +1504,7 @@ function BoardApp() {
       if (data.panelLayout) setPanelLayout(data.panelLayout);
       if (typeof data.notesText === "string") setNotesText(data.notesText);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
+      if (data.drawings) setDrawings(data.drawings);
     });
     return () => unsub();
   }, [user, roomId]);
@@ -1145,6 +1525,7 @@ function BoardApp() {
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
         groupRoles: ngr ?? groupRolesRef.current,
+        drawings: drawingsRef.current,
         updatedAt: serverTimestamp(),
       }, { merge: true });
     } catch (err) { console.error("Firestore:", err); }
@@ -1390,6 +1771,64 @@ function BoardApp() {
     if (!canWrite) return;
     const next = tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === mapId));
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+  }
+
+  // ── DRAWINGS ──────────────────────────────────────────────
+
+  // Separate Firestore-Schreibfunktion für Drawings (debounced)
+  const drawDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function pushDrawings(nd: DrawingsMap) {
+    if (drawDebounce.current) clearTimeout(drawDebounce.current);
+    drawDebounce.current = setTimeout(() => {
+      setDoc(doc(db, "rooms", roomId, "state", "board"),
+        { drawings: nd, updatedAt: serverTimestamp() }, { merge: true }
+      ).catch(console.error);
+    }, 300);
+  }
+
+  function addDrawElement(el: DrawElement) {
+    if (!canWrite) return;
+    setDrawings((prev) => {
+      const mapEls = [...(prev[activeMapId] ?? []), el];
+      const next = { ...prev, [activeMapId]: mapEls };
+      drawingsRef.current = next;
+      pushDrawings(next);
+      return next;
+    });
+  }
+
+  function removeDrawElement(id: string) {
+    if (!canWrite) return;
+    setDrawings((prev) => {
+      const mapEls = (prev[activeMapId] ?? []).filter((el) => el.id !== id);
+      const next = { ...prev, [activeMapId]: mapEls };
+      drawingsRef.current = next;
+      pushDrawings(next);
+      return next;
+    });
+  }
+
+  function undoDrawElement() {
+    if (!canWrite) return;
+    setDrawings((prev) => {
+      const mapEls = (prev[activeMapId] ?? []);
+      if (mapEls.length === 0) return prev;
+      const next = { ...prev, [activeMapId]: mapEls.slice(0, -1) };
+      drawingsRef.current = next;
+      pushDrawings(next);
+      return next;
+    });
+  }
+
+  function clearDrawings() {
+    if (!canWrite) return;
+    setDrawings((prev) => {
+      const next = { ...prev, [activeMapId]: [] };
+      drawingsRef.current = next;
+      pushDrawings(next);
+      return next;
+    });
   }
 
   // BOARD DND – auch Gruppen-Spalten verschiebbar (via Gruppen-ID als active)
@@ -1660,11 +2099,30 @@ function BoardApp() {
               <ZoomableMap imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
                 playersById={playersById} aliveState={aliveState} groupRoles={groupRoles}
                 onMoveTokenLocal={moveTokenLocal} onCommitToken={commitToken}
-                canWriteTokens={canWrite} isAdmin={isAdmin} markers={markersOnActive}
+                canWriteTokens={canWrite && drawTool === "pointer"}
+                isAdmin={isAdmin} markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
-                activeMapId={activeMapId} onRemoveToken={removeToken} />
+                activeMapId={activeMapId} onRemoveToken={removeToken}
+                drawElements={drawings[activeMapId] ?? []}
+                drawTool={drawTool} drawColor={drawColor} drawWidth={drawWidth}
+                canDraw={canWrite}
+                onAddDrawElement={addDrawElement}
+                onRemoveDrawElement={removeDrawElement}
+              />
             )}
           </div>
+
+          {/* Drawing Toolbar – nur wenn Bild vorhanden */}
+          {activeImage && (
+            <DrawingToolbar
+              tool={drawTool} setTool={setDrawTool}
+              color={drawColor} setColor={setDrawColor}
+              width={drawWidth} setWidth={setDrawWidth}
+              canDraw={canWrite}
+              onUndo={undoDrawElement}
+              onClear={clearDrawings}
+            />
+          )}
 
           <DraggablePanel title="Karten" canDrag={canWrite} x={panelLayout.nav.x} y={panelLayout.nav.y} onMove={movePanelNav}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
