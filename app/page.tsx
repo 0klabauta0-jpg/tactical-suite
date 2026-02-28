@@ -51,6 +51,8 @@ type PanelLayout = {
   notes:  { x: number; y: number; w: number; h: number };
 };
 
+type ImageBounds = { left: number; top: number; width: number; height: number };
+
 const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
 const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
 
@@ -148,6 +150,26 @@ function normalizeImageUrl(url: string): string {
 // Gruppenfarbe als CSS-Wert (mit #)
 function groupColor(g: Group): string {
   return g.color ? `#${g.color}` : "#3b82f6";
+}
+
+function getContainedImageBounds(containerWidth: number, containerHeight: number, imageAspect: number): ImageBounds {
+  if (!containerWidth || !containerHeight || !imageAspect) {
+    return { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  const containerAspect = containerWidth / containerHeight;
+
+  if (containerAspect > imageAspect) {
+    const height = containerHeight;
+    const width = height * imageAspect;
+    const left = (containerWidth - width) / 2;
+    return { left, top: 0, width, height };
+  }
+
+  const width = containerWidth;
+  const height = width / imageAspect;
+  const top = (containerHeight - height) / 2;
+  return { left: 0, top, width, height };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -319,13 +341,11 @@ function Card({ player, aliveState, currentPlayerId, canWrite, onToggleAlive, sp
         style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-1 min-w-0 flex-1">
-            {/* Sterne-Anzeige */}
             {isLeader  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
             {isDeputy  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
             <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>{player.name}</div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Rollen-Buttons (Admin/Commander) */}
             {canWrite && groupId !== "unassigned" && (
               <>
                 <button className={`text-xs px-1 rounded ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
@@ -450,7 +470,7 @@ function ColorPicker({ current, onChange }: { current?: string; onChange: (hex: 
 }
 
 // ─────────────────────────────────────────────────────────────
-// DROPPABLE COLUMN  (jetzt mit Gruppen-DnD, Farbe, Rollen)
+// DROPPABLE COLUMN
 // ─────────────────────────────────────────────────────────────
 
 const COLUMN_HEIGHT = 760;
@@ -466,7 +486,6 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetColor: (id: string, hex: string) => void;
 }) {
-  // useSortable für Spalten-Drag (Gruppe verschieben) + useDroppable für Spieler-Drop
   const {
     attributes: colAttrs,
     listeners: colListeners,
@@ -477,7 +496,6 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   } = useSortable({ id: group.id });
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: group.id });
 
-  // Beide Refs zusammenführen
   const setRef = (el: HTMLDivElement | null) => { setSortableRef(el); setDropRef(el); };
 
   const safeIds = ids ?? [];
@@ -500,7 +518,6 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0"
           style={{ borderTop: `3px solid ${gColor}` }}>
           <div className="font-semibold text-sm flex items-center gap-1 min-w-0 flex-1 text-white">
-            {/* Drag-Handle für Spalte (nur Admin/Commander) */}
             {canWrite && !isSystem && (
               <span
                 {...colAttrs} {...colListeners}
@@ -508,7 +525,6 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                 title="Spalte verschieben"
               >⠿</span>
             )}
-            {/* Farbwähler */}
             {canWrite && !isSystem && (
               <ColorPicker current={group.color} onChange={(hex) => onSetColor(group.id, hex)} />
             )}
@@ -549,7 +565,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAP NAV – Doppelklick zum Wechseln, Einfachklick nur Auswahl
+// MAP NAV
 // ─────────────────────────────────────────────────────────────
 
 function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenameMap, onDeleteMap,
@@ -608,7 +624,6 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
   const icon = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
   const ml = indent === 0 ? "" : indent === 1 ? "ml-4" : "ml-8";
 
-  // BUGFIX: Doppelklick → Karte wechseln; Einfachklick → nur highlight (kein ungewollter Wechsel beim Draggen)
   const clickCount = useRef(0);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -616,12 +631,10 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
     clickCount.current += 1;
     if (clickTimer.current) clearTimeout(clickTimer.current);
     if (clickCount.current >= 2) {
-      // Doppelklick → wechseln
       setActiveMapId(map.id);
       clickCount.current = 0;
       return;
     }
-    // Hauptkarte: Einfachklick reicht
     if (indent === 0) {
       setActiveMapId(map.id);
       clickCount.current = 0;
@@ -756,7 +769,6 @@ function DrawingToolbar({
       style={{ bottom: 16, transform: "translateX(-50%)" }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Tools */}
       <div className="flex gap-1">
         {tools.map((t) => (
           <button key={t.id}
@@ -774,7 +786,6 @@ function DrawingToolbar({
 
       <div className="w-px h-6 bg-gray-700" />
 
-      {/* Farben */}
       <div className="flex gap-1">
         {DRAW_COLORS.map((c) => (
           <button key={c}
@@ -790,7 +801,6 @@ function DrawingToolbar({
 
       <div className="w-px h-6 bg-gray-700" />
 
-      {/* Strichstärke */}
       <div className="flex gap-1 items-center">
         {DRAW_WIDTHS.map((w) => (
           <button key={w}
@@ -807,7 +817,6 @@ function DrawingToolbar({
 
       <div className="w-px h-6 bg-gray-700" />
 
-      {/* Undo / Clear */}
       <button title="Rückgängig" onClick={onUndo}
         className="w-8 h-8 rounded-lg text-sm border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">
         ↩
@@ -821,16 +830,16 @@ function DrawingToolbar({
 }
 
 // ─────────────────────────────────────────────────────────────
-// DRAWING LAYER  (SVG über dem Kartenbild, unter Tokens)
+// DRAWING LAYER
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements, tool, color, strokeWidth, canDraw, scale, offset,
+  elements, tool, color, strokeWidth, canDraw, scale, bounds,
   onAddElement, onRemoveElement,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
-  canDraw: boolean; scale: number; offset: { x: number; y: number };
+  canDraw: boolean; scale: number; bounds: ImageBounds;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
 }) {
@@ -841,21 +850,22 @@ function DrawingLayer({
   const [liveStroke, setLiveStroke] = useState<string>("");
   const [liveLine, setLiveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
-  // Text-Eingabe
   const [textInput, setTextInput] = useState<{ x: number; y: number } | null>(null);
   const [textVal, setTextVal] = useState("");
   const textRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
-  // Koordinaten normalisieren: Pixel → 0–1 relativ zur SVG-Größe
   function toRel(e: React.PointerEvent): { x: number; y: number } | null {
     const svg = svgRef.current;
     if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / rect.width,
-      y: (e.clientY - rect.top)  / rect.height,
-    };
+    if (!rect.width || !rect.height) return null;
+
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y };
   }
 
   function onPointerDown(e: React.PointerEvent) {
@@ -872,11 +882,9 @@ function DrawingLayer({
     }
 
     if (tool === "eraser") {
-      // Lösche alle Elemente die nah am Klickpunkt liegen
       const thresh = 0.03 / scale;
       for (const el of elements) {
         if (el.type === "path") {
-          // Grobe Prüfung: parse erste M-Koordinate
           const m = el.d.match(/M([\d.]+),([\d.]+)/);
           if (m) {
             const ex = parseFloat(m[1]), ey = parseFloat(m[2]);
@@ -914,7 +922,6 @@ function DrawingLayer({
     if (!p) return;
 
     if (tool === "eraser" && e.buttons === 1) {
-      // Kontinuierliches Radieren beim Ziehen
       const thresh = 0.03 / scale;
       for (const el of elements) {
         if (el.type === "path") {
@@ -956,9 +963,16 @@ function DrawingLayer({
     }
 
     if (tool === "line" && lineStart.current && p) {
-      onAddElement({ id: uid(), type: "line",
-        x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y,
-        color, width: strokeWidth });
+      onAddElement({
+        id: uid(),
+        type: "line",
+        x1: lineStart.current.x,
+        y1: lineStart.current.y,
+        x2: p.x,
+        y2: p.y,
+        color,
+        width: strokeWidth
+      });
       lineStart.current = null;
       setLiveLine(null);
     }
@@ -966,22 +980,39 @@ function DrawingLayer({
 
   function commitText() {
     if (textVal.trim() && textInput) {
-      onAddElement({ id: uid(), type: "text", x: textInput.x, y: textInput.y,
-        text: textVal.trim(), color, size: Math.max(12, strokeWidth * 3) });
+      onAddElement({
+        id: uid(),
+        type: "text",
+        x: textInput.x,
+        y: textInput.y,
+        text: textVal.trim(),
+        color,
+        size: Math.max(12, strokeWidth * 3)
+      });
     }
     setTextInput(null);
     setTextVal("");
   }
 
-  // SVG-Koordinate aus 0–1 Wert (SVG viewBox ist 0 0 1 1)
   const svgCursor =
     tool === "pointer" ? "default" :
     tool === "eraser"  ? "cell" :
     tool === "text"    ? "text" :
     "crosshair";
 
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+
   return (
-    <div className="absolute inset-0 z-5" style={{ pointerEvents: tool === "pointer" ? "none" : "auto" }}>
+    <div
+      className="absolute z-10"
+      style={{
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+        pointerEvents: tool === "pointer" ? "none" : "auto",
+      }}
+    >
       <svg
         ref={svgRef}
         className="absolute inset-0 w-full h-full"
@@ -992,7 +1023,6 @@ function DrawingLayer({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
       >
-        {/* Gespeicherte Elemente */}
         {elements.map((el) => {
           if (el.type === "path") {
             return <path key={el.id} d={el.d} stroke={el.color} strokeWidth={el.width / 1000}
@@ -1015,7 +1045,6 @@ function DrawingLayer({
           return null;
         })}
 
-        {/* Live-Stroke (während des Zeichnens) */}
         {liveStroke && (
           <path d={liveStroke} stroke={color} strokeWidth={strokeWidth / 1000}
             fill="none" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
@@ -1026,7 +1055,6 @@ function DrawingLayer({
         )}
       </svg>
 
-      {/* Text-Eingabefeld */}
       {textInput && (
         <div className="absolute z-50 pointer-events-auto"
           style={{
@@ -1056,7 +1084,6 @@ function DrawingLayer({
 
 // ─────────────────────────────────────────────────────────────
 // ZOOMABLE MAP
-// BUGFIX: Mausrad = nur Scrollen/Panning, kein Zoom. Zoom nur über Buttons.
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
@@ -1082,27 +1109,67 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [panning, setPanning] = useState(false);
+  const [hoveredToken, setHoveredToken] = useState<string | null>(null);
+  const [imageAspect, setImageAspect] = useState<number | null>(null);
+  const [imageBounds, setImageBounds] = useState<ImageBounds>({ left: 0, top: 0, width: 0, height: 0 });
+
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
-  const [hoveredToken, setHoveredToken] = useState<string | null>(null);
-  // Double-click tracking for markers (stored outside render map)
+
   const markerClickCount = useRef<Record<string, number>>({});
   const markerClickTimer = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  const stageRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  const recalcImageBounds = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage || !imageAspect) return;
+    const bounds = getContainedImageBounds(stage.clientWidth, stage.clientHeight, imageAspect);
+    setImageBounds(bounds);
+  }, [imageAspect]);
+
+  useEffect(() => {
+    recalcImageBounds();
+  }, [recalcImageBounds, imageSrc]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      recalcImageBounds();
+    });
+    resizeObserver.observe(stage);
+
+    window.addEventListener("resize", recalcImageBounds);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", recalcImageBounds);
+    };
+  }, [recalcImageBounds]);
+
+  function handleImageLoad() {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+    setImageAspect(img.naturalWidth / img.naturalHeight);
+  }
+
   function getMapCoords(e: React.PointerEvent) {
-    const img = document.getElementById("map-img");
+    const img = imgRef.current;
     if (!img) return null;
     const rect = img.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
     return {
-      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y)),
     };
   }
 
-  // BUGFIX: Mausrad → nur Panning (kein Zoom), Zoom nur über Buttons
   function onWheel(e: React.WheelEvent) {
-    // Panning mit Mausrad: horizontal und vertikal
     setOffset((o) => ({ x: o.x - e.deltaX * 0.8, y: o.y - e.deltaY * 0.8 }));
   }
 
@@ -1119,7 +1186,11 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     }
     if (tokenDrag && canWriteTokens) {
       const c = getMapCoords(e);
-      if (c) { lastTokenPos.current = c; const [gId] = tokenDrag.split(":"); onMoveTokenLocal(gId, c.x, c.y, activeMapId); }
+      if (c) {
+        lastTokenPos.current = c;
+        const [gId] = tokenDrag.split(":");
+        onMoveTokenLocal(gId, c.x, c.y, activeMapId);
+      }
     }
     if (markerDrag) {
       const c = getMapCoords(e);
@@ -1133,15 +1204,17 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       onCommitToken(gId, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
     }
     if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
-    setPanning(false); setTokenDrag(null); lastTokenPos.current = null;
-    setMarkerDrag(null); lastMarkerPos.current = null;
+    setPanning(false);
+    setTokenDrag(null);
+    lastTokenPos.current = null;
+    setMarkerDrag(null);
+    lastMarkerPos.current = null;
   }
 
   const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
   const groupById = (gId: string) => groups.find((g) => g.id === gId);
   const groupCount = (gId: string) => (board.columns[gId] ?? []).length;
 
-  // Hover-Tooltip: Members, Leader, Deputy
   function buildTooltip(gId: string): React.ReactNode {
     const g = groupById(gId);
     if (!g) return null;
@@ -1178,15 +1251,21 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     );
   }
 
+  function absPos(relX: number, relY: number) {
+    return {
+      left: imageBounds.left + relX * imageBounds.width,
+      top: imageBounds.top + relY * imageBounds.height,
+    };
+  }
+
   return (
     <div className="w-full h-full overflow-hidden relative"
       style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
       onWheel={onWheel}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
       onPointerMove={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgMove(e); }}
-      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}>
+      onPointerUp={() => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}>
 
-      {/* Zoom-Buttons */}
       <div className="absolute bottom-16 right-4 z-30 flex flex-col gap-1">
         {[
           { lbl: "+", fn: () => setScale((s) => Math.min(8, s * 1.3)) },
@@ -1207,111 +1286,122 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
       }}>
-        <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
+        <div ref={stageRef} className="absolute inset-0">
+          <img
+            ref={imgRef}
+            id="map-img"
+            src={imageSrc}
+            alt="Map"
+            onLoad={handleImageLoad}
+            className="block select-none absolute"
+            draggable={false}
+            style={{
+              left: imageBounds.left,
+              top: imageBounds.top,
+              width: imageBounds.width,
+              height: imageBounds.height,
+            }}
+          />
 
-        {/* Drawing Layer – über dem Bild, unter Tokens/Markern */}
-        <DrawingLayer
-          elements={drawElements}
-          tool={drawTool}
-          color={drawColor}
-          strokeWidth={drawWidth}
-          canDraw={canDraw}
-          scale={scale}
-          offset={offset}
-          onAddElement={onAddDrawElement}
-          onRemoveElement={onRemoveDrawElement}
-        />
+          <DrawingLayer
+            elements={drawElements}
+            tool={drawTool}
+            color={drawColor}
+            strokeWidth={drawWidth}
+            canDraw={canDraw}
+            scale={scale}
+            bounds={imageBounds}
+            onAddElement={onAddDrawElement}
+            onRemoveElement={onRemoveDrawElement}
+          />
 
-        {/* Marker – Doppelklick öffnet, Einfachklick / Drag verschiebt */}
-        {/* markerClickCounters: id → count, stored outside map via closure */}
-        {markers.map((m) => (
-            <div key={m.id}
-              className={`absolute z-10 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
-              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-50%)" }}
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                if (isAdmin) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (markerDrag) return;
-                // Doppelklick → Ebene wechseln
-                markerClickCount.current[m.id] = (markerClickCount.current[m.id] ?? 0) + 1;
-                if (markerClickTimer.current[m.id]) clearTimeout(markerClickTimer.current[m.id]);
-                if (markerClickCount.current[m.id] >= 2) {
-                  onOpenMarker(m.id); markerClickCount.current[m.id] = 0; return;
-                }
-                markerClickTimer.current[m.id] = setTimeout(() => { markerClickCount.current[m.id] = 0; }, 350);
-              }}>
-              <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
-                m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
-              }`}>
-                {m.isPOI ? "🔵" : "📍"} {m.label}
-                {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
-              </div>
-            </div>
-        ))}
-
-        {/* Gruppen-Tokens mit Hover-Tooltip + Entfernen-Button */}
-        {visibleTokens.map((t) => {
-          const g = groupById(t.groupId);
-          const count = groupCount(t.groupId);
-          const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`;
-          const color = g ? groupColor(g) : "#3b82f6";
-          const isHovered = hoveredToken === tokenKey;
-
-          return (
-            <div key={tokenKey}
-              className={`absolute z-10 flex flex-col items-center select-none ${
-                canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
-              } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
-              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
-              onPointerDown={(e) => {
-                if (!canWriteTokens) return;
-                // Kein Drag starten wenn auf ✕ geklickt
-                if ((e.target as HTMLElement).dataset.removeBtn) return;
-                e.stopPropagation();
-                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                setTokenDrag(tokenKey); lastTokenPos.current = null;
-              }}
-              onMouseEnter={() => setHoveredToken(tokenKey)}
-              onMouseLeave={() => setHoveredToken(null)}
-              title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
-              {/* Token-Pille */}
-              <div className="relative">
-                <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap`}
-                  style={{
-                    backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
-                    borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
-                    color: tokenDrag === tokenKey ? "black" : "white",
-                  }}>
-                  <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
-                  <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
+          {markers.map((m) => {
+            const pos = absPos(m.x, m.y);
+            return (
+              <div key={m.id}
+                className={`absolute z-20 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
+                style={{ left: pos.left, top: pos.top, transform: "translate(-50%,-50%)" }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (isAdmin) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (markerDrag) return;
+                  markerClickCount.current[m.id] = (markerClickCount.current[m.id] ?? 0) + 1;
+                  if (markerClickTimer.current[m.id]) clearTimeout(markerClickTimer.current[m.id]);
+                  if (markerClickCount.current[m.id] >= 2) {
+                    onOpenMarker(m.id); markerClickCount.current[m.id] = 0; return;
+                  }
+                  markerClickTimer.current[m.id] = setTimeout(() => { markerClickCount.current[m.id] = 0; }, 350);
+                }}>
+                <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
+                  m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
+                }`}>
+                  {m.isPOI ? "🔵" : "📍"} {m.label}
+                  {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
                 </div>
-                {/* ✕ Entfernen-Button – erscheint beim Hovern für Admin/Commander */}
-                {canWriteTokens && isHovered && !tokenDrag && (
-                  <button
-                    data-remove-btn="1"
-                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-700 border border-red-500 text-white text-xs flex items-center justify-center hover:bg-red-600 shadow-lg cursor-pointer"
-                    title="Token von Karte entfernen"
-                    onPointerDown={(e) => { e.stopPropagation(); }}
-                    onClick={(e) => { e.stopPropagation(); onRemoveToken(t.groupId, activeMapId); setHoveredToken(null); }}
-                  >✕</button>
+              </div>
+            );
+          })}
+
+          {visibleTokens.map((t) => {
+            const g = groupById(t.groupId);
+            const count = groupCount(t.groupId);
+            const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`;
+            const color = g ? groupColor(g) : "#3b82f6";
+            const isHovered = hoveredToken === tokenKey;
+            const pos = absPos(t.x, t.y);
+
+            return (
+              <div key={tokenKey}
+                className={`absolute z-20 flex flex-col items-center select-none ${
+                  canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
+                } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
+                style={{ left: pos.left, top: pos.top, transform: "translate(-50%,-50%)" }}
+                onPointerDown={(e) => {
+                  if (!canWriteTokens) return;
+                  if ((e.target as HTMLElement).dataset.removeBtn) return;
+                  e.stopPropagation();
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                  setTokenDrag(tokenKey); lastTokenPos.current = null;
+                }}
+                onMouseEnter={() => setHoveredToken(tokenKey)}
+                onMouseLeave={() => setHoveredToken(null)}
+                title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
+                <div className="relative">
+                  <div className="px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap"
+                    style={{
+                      backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
+                      borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
+                      color: tokenDrag === tokenKey ? "black" : "white",
+                    }}>
+                    <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
+                    <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
+                  </div>
+                  {canWriteTokens && isHovered && !tokenDrag && (
+                    <button
+                      data-remove-btn="1"
+                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-700 border border-red-500 text-white text-xs flex items-center justify-center hover:bg-red-600 shadow-lg cursor-pointer"
+                      title="Token von Karte entfernen"
+                      onPointerDown={(e) => { e.stopPropagation(); }}
+                      onClick={(e) => { e.stopPropagation(); onRemoveToken(t.groupId, activeMapId); setHoveredToken(null); }}
+                    >✕</button>
+                  )}
+                </div>
+
+                {isHovered && !tokenDrag && (
+                  <div className="absolute z-50 pointer-events-none"
+                    style={{ top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)", minWidth: 160, maxWidth: 240 }}>
+                    <div className="bg-gray-900 border border-gray-600 rounded-xl shadow-2xl px-3 py-2 text-xs">
+                      {buildTooltip(t.groupId)}
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {/* Hover-Tooltip */}
-              {isHovered && !tokenDrag && (
-                <div className="absolute z-50 pointer-events-none"
-                  style={{ top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)", minWidth: 160, maxWidth: 240 }}>
-                  <div className="bg-gray-900 border border-gray-600 rounded-xl shadow-2xl px-3 py-2 text-xs">
-                    {buildTooltip(t.groupId)}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1424,7 +1514,6 @@ function BoardApp() {
   const [notesText, setNotesText] = useState("");
   const [notesVisible, setNotesVisible] = useState(true);
 
-  // Drawing state
   const [drawings, setDrawings] = useState<DrawingsMap>({});
   const [drawTool, setDrawTool] = useState<DrawTool>("pointer");
   const [drawColor, setDrawColor] = useState("#ffffff");
@@ -1439,7 +1528,6 @@ function BoardApp() {
   const canWrite = role === "admin" || role === "commander";
   const isAdmin = role === "admin";
 
-  // refs
   const boardRef = useRef(board);
   const aliveRef = useRef(aliveState);
   const spawnRef = useRef(spawnState);
@@ -1459,13 +1547,11 @@ function BoardApp() {
   useEffect(() => { groupRolesRef.current = groupRoles; }, [groupRoles]);
   useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
 
-  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
     return () => unsub();
   }, []);
 
-  // csv
   useEffect(() => {
     loadPlayers().then((list) => {
       setPlayers(list);
@@ -1478,7 +1564,6 @@ function BoardApp() {
     });
   }, []);
 
-  // role
   useEffect(() => {
     if (!user || !currentPlayer) return;
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
@@ -1486,7 +1571,6 @@ function BoardApp() {
     setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
-  // snapshot
   useEffect(() => {
     if (!user) return;
     const ref = doc(db, "rooms", roomId, "state", "board");
@@ -1509,7 +1593,6 @@ function BoardApp() {
     return () => unsub();
   }, [user, roomId]);
 
-  // writes
   async function pushTokensOnly(nt: Token[]) {
     const ref = doc(db, "rooms", roomId, "state", "board");
     try { await updateDoc(ref, { tokens: nt, updatedAt: serverTimestamp() }); }
@@ -1531,7 +1614,6 @@ function BoardApp() {
     } catch (err) { console.error("Firestore:", err); }
   }
 
-  // GroupRoles
   function setGroupRole(gId: string, pid: string, r: "leader" | "deputy" | null) {
     if (!canWrite) return;
     setGroupRoles((prev) => {
@@ -1540,7 +1622,6 @@ function BoardApp() {
         if (gr.leader === pid) delete gr.leader;
         if (gr.deputy === pid) delete gr.deputy;
       } else {
-        // Entferne Spieler aus anderem Slot der gleichen Gruppe
         if (r === "leader") { if (gr.deputy === pid) delete gr.deputy; gr.leader = pid; }
         if (r === "deputy") { if (gr.leader === pid) delete gr.leader; gr.deputy = pid; }
       }
@@ -1551,7 +1632,6 @@ function BoardApp() {
     });
   }
 
-  // Gruppenfarbe
   function setGroupColor(id: string, hex: string) {
     if (!canWrite) return;
     setBoard((prev) => {
@@ -1666,7 +1746,6 @@ function BoardApp() {
       boardRef.current = next;
       const nt = tokensRef.current.filter((t) => t.groupId !== id);
       setTokens(nt); tokensRef.current = nt; pushTokensOnly(nt);
-      // GroupRoles bereinigen
       const ngr = { ...groupRolesRef.current }; delete ngr[id]; groupRolesRef.current = ngr; setGroupRoles(ngr);
       pushAll(next, nt, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, undefined, ngr);
       return next;
@@ -1750,7 +1829,6 @@ function BoardApp() {
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
 
-  // TOKENS
   function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
     setTokens((prev) => {
       const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
@@ -1773,9 +1851,6 @@ function BoardApp() {
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
   }
 
-  // ── DRAWINGS ──────────────────────────────────────────────
-
-  // Separate Firestore-Schreibfunktion für Drawings (debounced)
   const drawDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function pushDrawings(nd: DrawingsMap) {
@@ -1831,7 +1906,6 @@ function BoardApp() {
     });
   }
 
-  // BOARD DND – auch Gruppen-Spalten verschiebbar (via Gruppen-ID als active)
   function findContainer(pid: string): string | null {
     for (const [gId, ids] of Object.entries(board.columns)) {
       if ((ids ?? []).includes(pid)) return gId;
@@ -1846,13 +1920,11 @@ function BoardApp() {
     const overId = e.over?.id?.toString();
     if (!overId) return;
 
-    // BUGFIX: Gruppen-Spalten verschieben (activeId ist eine Gruppen-ID, nicht Spieler-ID)
     const groupIds = board.groups.map((g) => g.id);
     const isGroupDrag = groupIds.includes(activeId) && activeId !== "unassigned";
     const overIsGroup = groupIds.includes(overId);
 
     if (isGroupDrag && overIsGroup && canWrite) {
-      // Gruppe an neue Position in groups-Array schieben
       setBoard((prev) => {
         const oldIdx = prev.groups.findIndex((g) => g.id === activeId);
         const newIdx = prev.groups.findIndex((g) => g.id === overId);
@@ -1999,7 +2071,6 @@ function BoardApp() {
         </div>
       </header>
 
-      {/* BOARD */}
       {tab === "board" && (
         <div className="flex-1 overflow-auto p-4">
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -2008,7 +2079,6 @@ function BoardApp() {
               onDelete={deleteGroup} onClear={clearGroup} />
 
             <div className="flex gap-3 items-start overflow-x-auto pb-4">
-              {/* Unassigned */}
               <div style={{ width: 220, flexShrink: 0 }}>
                 <div className="rounded-t-xl border border-b-0 border-gray-700 bg-gray-900 px-3 py-2">
                   <input className="w-full bg-gray-800 border border-gray-600 text-white text-xs rounded px-2 py-1 mb-2 focus:outline-none focus:border-blue-500"
@@ -2051,7 +2121,6 @@ function BoardApp() {
                 </div>
               </div>
 
-              {/* Tactical groups – SortableContext für Spalten-DnD */}
               <SortableContext items={tacticalGroups.map((g) => g.id)} strategy={rectSortingStrategy}>
                 <div className="flex flex-wrap gap-3 flex-1 items-start">
                   {tacticalGroups.map((g) => (
@@ -2075,7 +2144,6 @@ function BoardApp() {
         </div>
       )}
 
-      {/* MAP */}
       {tab === "map" && (
         <div className="flex-1 relative overflow-hidden">
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
@@ -2112,7 +2180,6 @@ function BoardApp() {
             )}
           </div>
 
-          {/* Drawing Toolbar – nur wenn Bild vorhanden */}
           {activeImage && (
             <DrawingToolbar
               tool={drawTool} setTool={setDrawTool}
