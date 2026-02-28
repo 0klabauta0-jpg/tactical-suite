@@ -918,8 +918,9 @@ function DrawingLayer({
   useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth]);
 
   function getImgRect(): DOMRect | null {
-    const img = document.getElementById("map-img") as HTMLImageElement | null;
-    return img ? img.getBoundingClientRect() : null;
+    // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
+    // damit Koordinaten korrekt sind wenn Canvas innerhalb der transform-Div sitzt
+    return canvasRef.current ? canvasRef.current.getBoundingClientRect() : null;
   }
 
   function toRel(clientX: number, clientY: number): { x: number; y: number } | null {
@@ -1027,20 +1028,23 @@ function DrawingLayer({
     }
   }
 
-  // Canvas-Größe an Bild anpassen
+  // Canvas-Größe an Bild anpassen – wir verwenden offsetWidth/offsetHeight
+  // (die CSS-Größe des Elements VOR dem äußeren CSS-transform/scale),
+  // damit canvas.width/height in natürlichen Pixeln bleibt und nicht zoom-skaliert wird.
   function syncCanvasSize() {
     const canvas = canvasRef.current;
     const img = document.getElementById("map-img") as HTMLImageElement | null;
     if (!canvas || !img) return;
-    const rect = img.getBoundingClientRect();
-    if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.round(rect.height)) {
-      canvas.width  = Math.round(rect.width);
-      canvas.height = Math.round(rect.height);
+    const w = img.offsetWidth;
+    const h = img.offsetHeight;
+    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+      canvas.width  = w;
+      canvas.height = h;
       redraw();
     }
   }
 
-  // ResizeObserver: Canvas neu skalieren wenn Bild sich verändert (Zoom, Fenstergröße)
+  // ResizeObserver: Canvas neu skalieren wenn Bild sich verändert (Fenstergröße)
   useEffect(() => {
     const img = document.getElementById("map-img");
     if (!img) return;
@@ -1178,6 +1182,7 @@ function DrawingLayer({
         style={{
           position: "absolute",
           top: 0, left: 0,
+          width: "100%", height: "100%",
           cursor: cursorStyle,
           touchAction: "none",
         }}
@@ -1413,6 +1418,18 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       }}>
         <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
 
+        {/* Drawing Layer – innerhalb der transform-Div, bewegt/skaliert mit der Karte */}
+        <DrawingLayer
+          elements={drawElements}
+          tool={drawTool}
+          color={drawColor}
+          strokeWidth={drawWidth}
+          canDraw={canDraw}
+          showGrid={showGrid}
+          onAddElement={onAddDrawElement}
+          onRemoveElement={onRemoveDrawElement}
+        />
+
         {/* Gitternetz – skaliert mit Karte mit, Buchstaben-Spalten + Zahlen-Zeilen */}
         {showGrid && (
           <svg
@@ -1552,18 +1569,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           );
         })}
       </div>
-
-      {/* Drawing Layer – außerhalb der transform-Div, direkt über dem Viewport */}
-      <DrawingLayer
-        elements={drawElements}
-        tool={drawTool}
-        color={drawColor}
-        strokeWidth={drawWidth}
-        canDraw={canDraw}
-        showGrid={showGrid}
-        onAddElement={onAddDrawElement}
-        onRemoveElement={onRemoveDrawElement}
-      />
     </div>
   );
 }
