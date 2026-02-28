@@ -46,9 +46,11 @@ type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
 type Role = "admin" | "commander" | "viewer";
 type PanelLayout = {
-  nav: { x: number; y: number };
-  placer: { x: number; y: number };
-  notes: { x: number; y: number; w: number; h: number };
+  nav:     { x: number; y: number };
+  placer:  { x: number; y: number };
+  notes:   { x: number; y: number; w: number; h: number };
+  toolbar: { x: number; y: number };
+  zoom:    { x: number; y: number };
 };
 
 const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
@@ -65,9 +67,11 @@ const DEFAULT_GROUPS: Group[] = [
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
-  nav: { x: 16, y: 16 },
-  placer: { x: 16, y: 340 },
-  notes: { x: 300, y: 16, w: 320, h: 200 },
+  nav:     { x: 16,  y: 16  },
+  placer:  { x: 16,  y: 340 },
+  notes:   { x: 300, y: 16, w: 320, h: 200 },
+  toolbar: { x: 300, y: 16  },   // wird beim ersten Render auf Bildschirmmitte gesetzt
+  zoom:    { x: 16,  y: 600 },
 };
 
 // ─── DRAWING TYPES ───────────────────────────────────────────
@@ -90,21 +94,21 @@ type DrawText = {
 type DrawElement = DrawStroke | DrawText | DrawLine;
 type DrawingsMap = Record<string, DrawElement[]>;
 
-const DRAW_COLORS = ["#ffffff", "#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#a855f7", "#000000"];
+const DRAW_COLORS = ["#ffffff","#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#a855f7","#000000"];
 const DRAW_WIDTHS = [2, 4, 8, 16];
 
 // ─────────────────────────────────────────────────────────────
 // Preset-Farben für Gruppen
 const GROUP_COLORS = [
-  { label: "Blau", hex: "3b82f6" },
-  { label: "Grün", hex: "22c55e" },
-  { label: "Rot", hex: "ef4444" },
-  { label: "Orange", hex: "f97316" },
-  { label: "Lila", hex: "a855f7" },
-  { label: "Cyan", hex: "06b6d4" },
-  { label: "Gelb", hex: "eab308" },
-  { label: "Pink", hex: "ec4899" },
-  { label: "Grau", hex: "6b7280" },
+  { label: "Blau",    hex: "3b82f6" },
+  { label: "Grün",    hex: "22c55e" },
+  { label: "Rot",     hex: "ef4444" },
+  { label: "Orange",  hex: "f97316" },
+  { label: "Lila",    hex: "a855f7" },
+  { label: "Cyan",    hex: "06b6d4" },
+  { label: "Gelb",    hex: "eab308" },
+  { label: "Pink",    hex: "ec4899" },
+  { label: "Grau",    hex: "6b7280" },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -308,8 +312,8 @@ function Card({ player, aliveState, currentPlayerId, canWrite, onToggleAlive, sp
   const canToggle = isSelf || canWrite;
 
   const gr = groupRoles[groupId] ?? {};
-  const isLeader = gr.leader === player.id;
-  const isDeputy = gr.deputy === player.id;
+  const isLeader  = gr.leader  === player.id;
+  const isDeputy  = gr.deputy  === player.id;
 
   return (
     <div ref={setNodeRef}
@@ -319,11 +323,13 @@ function Card({ player, aliveState, currentPlayerId, canWrite, onToggleAlive, sp
         style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-1 min-w-0 flex-1">
-            {isLeader && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
-            {isDeputy && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
+            {/* Sterne-Anzeige */}
+            {isLeader  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
+            {isDeputy  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
             <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>{player.name}</div>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Rollen-Buttons (Admin/Commander) */}
             {canWrite && groupId !== "unassigned" && (
               <>
                 <button className={`text-xs px-1 rounded ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
@@ -386,32 +392,62 @@ function SpawnBar({ spawnGroups, board, playersById, aliveState, canWrite, onRen
       {spawnGroups.map((g) => {
         const ids = board.columns[g.id] ?? [];
         return (
-          <div key={g.id} className="rounded-xl border border-yellow-800 bg-gray-900 px-3 py-2 flex items-center gap-2 min-w-[160px]">
-            <span className="text-yellow-400 text-xs font-semibold flex items-center gap-1">
-              ⚓ {canWrite ? <InlineEdit value={g.label} onSave={(v) => onRename(g.id, v)} /> : g.label}
-              <span className="text-gray-500 font-normal">({ids.length})</span>
-            </span>
-            <div className="flex gap-1 flex-wrap">
-              {ids.slice(0, 5).map((pid) => {
-                const p = playersById[pid];
-                if (!p) return null;
-                return (
-                  <span key={pid} className={`text-xs px-1.5 py-0.5 rounded border ${aliveState[pid] === "dead" ? "border-red-800 text-red-400 line-through" : "border-gray-600 text-gray-300"}`}>
-                    {p.name}
-                  </span>
-                );
-              })}
-              {ids.length > 5 && <span className="text-xs text-gray-500">+{ids.length - 5}</span>}
+          <div key={g.id} className="rounded-xl border border-yellow-800 bg-gray-900 flex flex-col min-w-[200px] max-w-[280px]">
+            {/* Header */}
+            <div className="flex items-center gap-1 px-3 py-2 border-b border-yellow-900">
+              <span className="text-yellow-400 text-xs font-semibold flex items-center gap-1 flex-1 min-w-0">
+                ⚓ {canWrite ? <InlineEdit value={g.label} onSave={(v) => onRename(g.id, v)} /> : g.label}
+                <span className="text-gray-500 font-normal">({ids.length})</span>
+              </span>
+              {canWrite && (
+                <div className="flex gap-1 flex-shrink-0">
+                  <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={() => onClear(g.id)} title="Leeren">↩</button>
+                  <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(g.id)} title="Löschen">✕</button>
+                </div>
+              )}
             </div>
-            {canWrite && (
-              <div className="flex gap-1 ml-auto flex-shrink-0">
-                <button className="text-xs text-gray-600 hover:text-yellow-400" onClick={() => onClear(g.id)} title="Leeren">↩</button>
-                <button className="text-xs text-gray-600 hover:text-red-500" onClick={() => onDelete(g.id)} title="Löschen">✕</button>
-              </div>
-            )}
+            {/* Drop-Zone mit DnD-fähigen Karten */}
+            <SpawnDropZone groupId={g.id}>
+              <SortableContext items={ids} strategy={rectSortingStrategy}>
+                <div className="px-2 py-1.5 flex flex-col gap-1 min-h-[32px]">
+                  {ids.length === 0 && (
+                    <div className="text-xs text-gray-600 border border-dashed border-yellow-900 rounded p-2 text-center">hierher ziehen</div>
+                  )}
+                  {ids.map((pid) => {
+                    const p = playersById[pid];
+                    if (!p) return null;
+                    return <SpawnPlayerCard key={pid} player={p} aliveState={aliveState} />;
+                  })}
+                </div>
+              </SortableContext>
+            </SpawnDropZone>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function SpawnDropZone({ groupId, children }: { groupId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: groupId });
+  return (
+    <div ref={setNodeRef} className={`flex-1 rounded-b-xl transition-colors ${isOver ? "bg-yellow-950" : ""}`}>
+      {children}
+    </div>
+  );
+}
+
+function SpawnPlayerCard({ player, aliveState }: { player: Player; aliveState: PlayerAliveState }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
+  const isDead = aliveState[player.id] === "dead";
+  return (
+    <div ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+      {...attributes} {...listeners}
+      className={`text-xs px-2 py-1 rounded border cursor-grab active:cursor-grabbing select-none ${
+        isDead ? "border-red-800 text-red-400 line-through" : "border-yellow-800 text-gray-300 hover:border-yellow-600"
+      }`}>
+      {player.name}
     </div>
   );
 }
@@ -448,7 +484,7 @@ function ColorPicker({ current, onChange }: { current?: string; onChange: (hex: 
 }
 
 // ─────────────────────────────────────────────────────────────
-// DROPPABLE COLUMN
+// DROPPABLE COLUMN  (jetzt mit Gruppen-DnD, Farbe, Rollen)
 // ─────────────────────────────────────────────────────────────
 
 const COLUMN_HEIGHT = 760;
@@ -464,6 +500,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetColor: (id: string, hex: string) => void;
 }) {
+  // useSortable für Spalten-Drag (Gruppe verschieben) + useDroppable für Spieler-Drop
   const {
     attributes: colAttrs,
     listeners: colListeners,
@@ -474,6 +511,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   } = useSortable({ id: group.id });
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: group.id });
 
+  // Beide Refs zusammenführen
   const setRef = (el: HTMLDivElement | null) => { setSortableRef(el); setDropRef(el); };
 
   const safeIds = ids ?? [];
@@ -496,6 +534,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0"
           style={{ borderTop: `3px solid ${gColor}` }}>
           <div className="font-semibold text-sm flex items-center gap-1 min-w-0 flex-1 text-white">
+            {/* Drag-Handle für Spalte (nur Admin/Commander) */}
             {canWrite && !isSystem && (
               <span
                 {...colAttrs} {...colListeners}
@@ -503,6 +542,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                 title="Spalte verschieben"
               >⠿</span>
             )}
+            {/* Farbwähler */}
             {canWrite && !isSystem && (
               <ColorPicker current={group.color} onChange={(hex) => onSetColor(group.id, hex)} />
             )}
@@ -543,7 +583,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAP NAV
+// MAP NAV – Doppelklick zum Wechseln, Einfachklick nur Auswahl
 // ─────────────────────────────────────────────────────────────
 
 function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenameMap, onDeleteMap,
@@ -602,6 +642,7 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
   const icon = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
   const ml = indent === 0 ? "" : indent === 1 ? "ml-4" : "ml-8";
 
+  // BUGFIX: Doppelklick → Karte wechseln; Einfachklick → nur highlight (kein ungewollter Wechsel beim Draggen)
   const clickCount = useRef(0);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -609,10 +650,12 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
     clickCount.current += 1;
     if (clickTimer.current) clearTimeout(clickTimer.current);
     if (clickCount.current >= 2) {
+      // Doppelklick → wechseln
       setActiveMapId(map.id);
       clickCount.current = 0;
       return;
     }
+    // Hauptkarte: Einfachklick reicht
     if (indent === 0) {
       setActiveMapId(map.id);
       clickCount.current = 0;
@@ -722,458 +765,512 @@ function TokenPlacerPanel({ groups, onPlace, activeMapId }: {
 // DRAWING TOOLBAR
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// ZOOM PANEL  (verschiebbares Fenster für Zoom-Steuerung)
+// ─────────────────────────────────────────────────────────────
+
 function DrawingToolbar({
   tool, setTool, color, setColor, width, setWidth, canDraw,
-  onUndo, onClear,
+  onUndo, onClear, x, y, onMove, showGrid, onToggleGrid,
 }: {
   tool: DrawTool; setTool: (t: DrawTool) => void;
   color: string; setColor: (c: string) => void;
   width: number; setWidth: (w: number) => void;
   canDraw: boolean; onUndo: () => void; onClear: () => void;
+  x: number; y: number; onMove: (x: number, y: number) => void;
+  showGrid: boolean; onToggleGrid: () => void;
 }) {
   if (!canDraw) return null;
 
+  const dragging = useRef(false);
+  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+
+  function onHandleDown(e: React.PointerEvent) {
+    dragging.current = true;
+    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault(); e.stopPropagation();
+  }
+  function onHandleMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    onMove(
+      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
+      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
+    );
+  }
+  function onHandleUp() { dragging.current = false; }
+
   const tools: { id: DrawTool; icon: string; title: string }[] = [
     { id: "pointer", icon: "↖", title: "Zeiger (normal)" },
-    { id: "pen", icon: "✏", title: "Freihand zeichnen" },
-    { id: "line", icon: "╱", title: "Linie ziehen" },
-    { id: "eraser", icon: "⌫", title: "Radiergummi" },
-    { id: "text", icon: "T", title: "Text einfügen" },
+    { id: "pen",     icon: "✏", title: "Freihand zeichnen" },
+    { id: "line",    icon: "╱", title: "Linie ziehen" },
+    { id: "eraser",  icon: "⌫", title: "Radiergummi" },
+    { id: "text",    icon: "T",  title: "Text einfügen" },
   ];
 
   return (
     <div
-      className="absolute left-1/2 z-30 flex items-center gap-2 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl px-3 py-2 shadow-xl select-none"
-      style={{ bottom: 16, transform: "translateX(-50%)" }}
+      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
+      style={{ left: x, top: y, minWidth: 176 }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="flex gap-1">
-        {tools.map((t) => (
-          <button key={t.id}
-            title={t.title}
-            onClick={() => setTool(t.id)}
-            className={`w-8 h-8 rounded-lg text-sm font-bold border transition-colors ${
-              tool === t.id
-                ? "bg-blue-600 border-blue-400 text-white"
-                : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
+      {/* Drag Handle */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
+        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
+      >
+        <span className="text-gray-500 text-xs">⠿</span>
+        <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
+      </div>
+
+      <div className="flex flex-col gap-2 p-2">
+        {/* Tools + Grid */}
+        <div className="flex gap-1 flex-wrap">
+          {tools.map((t) => (
+            <button key={t.id} title={t.title} onClick={() => setTool(t.id)}
+              className={`w-8 h-8 rounded-lg text-sm font-bold border transition-colors ${
+                tool === t.id ? "bg-blue-600 border-blue-400 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
+              }`}>
+              {t.icon}
+            </button>
+          ))}
+          <button title="Gitternetz ein/aus" onClick={onToggleGrid}
+            className={`w-8 h-8 rounded-lg text-xs font-bold border transition-colors ${
+              showGrid ? "bg-green-700 border-green-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700"
             }`}>
-            {t.icon}
+            ⊞
           </button>
-        ))}
-      </div>
+        </div>
 
-      <div className="w-px h-6 bg-gray-700" />
+        {/* Farben */}
+        <div className="flex gap-1 flex-wrap">
+          {DRAW_COLORS.map((c) => (
+            <button key={c} title={c} onClick={() => setColor(c)}
+              className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${
+                color === c ? "border-white scale-125" : "border-transparent"
+              }`}
+              style={{ backgroundColor: c }} />
+          ))}
+        </div>
 
-      <div className="flex gap-1">
-        {DRAW_COLORS.map((c) => (
-          <button key={c}
-            title={c}
-            onClick={() => setColor(c)}
-            className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${
-              color === c ? "border-white scale-125" : "border-transparent"
-            }`}
-            style={{ backgroundColor: c }}
-          />
-        ))}
-      </div>
+        {/* Strichstärke */}
+        <div className="flex gap-1 items-center">
+          {DRAW_WIDTHS.map((w) => (
+            <button key={w} title={`${w}px`} onClick={() => setWidth(w)}
+              className={`rounded border flex items-center justify-center transition-colors ${
+                width === w ? "border-blue-400 bg-blue-900" : "border-gray-600 bg-gray-800 hover:bg-gray-700"
+              }`}
+              style={{ width: 28, height: 28 }}>
+              <div className="rounded-full bg-white" style={{ width: Math.min(w * 1.5, 20), height: Math.min(w * 1.5, 20) }} />
+            </button>
+          ))}
+        </div>
 
-      <div className="w-px h-6 bg-gray-700" />
-
-      <div className="flex gap-1 items-center">
-        {DRAW_WIDTHS.map((w) => (
-          <button key={w}
-            title={`${w}px`}
-            onClick={() => setWidth(w)}
-            className={`rounded border flex items-center justify-center transition-colors ${
-              width === w ? "border-blue-400 bg-blue-900" : "border-gray-600 bg-gray-800 hover:bg-gray-700"
-            }`}
-            style={{ width: 28, height: 28 }}>
-            <div className="rounded-full bg-white" style={{ width: Math.min(w * 1.5, 20), height: Math.min(w * 1.5, 20) }} />
+        {/* Undo / Clear */}
+        <div className="flex gap-1">
+          <button title="Rückgängig (letzter Strich)" onClick={onUndo}
+            className="flex-1 h-7 rounded-lg text-xs border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">
+            ↩ Undo
           </button>
-        ))}
+          <button title="Alles löschen (diese Ebene)" onClick={onClear}
+            className="flex-1 h-7 rounded-lg text-xs border border-red-900 bg-red-950 text-red-400 hover:bg-red-900">
+            🗑 Alles
+          </button>
+        </div>
       </div>
-
-      <div className="w-px h-6 bg-gray-700" />
-
-      <button title="Rückgängig" onClick={onUndo}
-        className="w-8 h-8 rounded-lg text-sm border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">
-        ↩
-      </button>
-      <button title="Alles löschen" onClick={onClear}
-        className="w-8 h-8 rounded-lg text-sm border border-red-900 bg-red-950 text-red-400 hover:bg-red-900">
-        🗑
-      </button>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// DRAWING LAYER
+// DRAWING LAYER  (SVG über dem Kartenbild, unter Tokens)
+// ─────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// DRAWING LAYER  – Canvas-basiert, sitzt direkt über dem Kartenbild
+// Koordinaten: 0–1 relativ zur tatsächlichen Bildgröße (getBoundingClientRect)
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements,
-  tool,
-  color,
-  strokeWidth,
-  canDraw,
-  scale,
-  imageBox,
-  onAddElement,
-  onRemoveElement,
+  elements, tool, color, strokeWidth, canDraw, showGrid,
+  onAddElement, onRemoveElement,
 }: {
   elements: DrawElement[];
-  tool: DrawTool;
-  color: string;
-  strokeWidth: number;
-  canDraw: boolean;
-  scale: number;
-  imageBox: { left: number; top: number; width: number; height: number } | null;
+  tool: DrawTool; color: string; strokeWidth: number;
+  canDraw: boolean; showGrid: boolean;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
 }) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const drawing = useRef(false);
-  const currentPath = useRef<string>("");
+  const pathPoints = useRef<{ x: number; y: number }[]>([]);
   const lineStart = useRef<{ x: number; y: number } | null>(null);
-  const [liveStroke, setLiveStroke] = useState<string>("");
-  const [liveLine, setLiveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const lastPos = useRef<{ x: number; y: number } | null>(null);
 
-  const [textInput, setTextInput] = useState<{ x: number; y: number } | null>(null);
+  // Text
+  const [textInput, setTextInput] = useState<{ x: number; y: number; px: number; py: number } | null>(null);
   const [textVal, setTextVal] = useState("");
   const textRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
-  useEffect(() => {
-    if (textInput && textRef.current) textRef.current.focus();
-  }, [textInput]);
+  // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth]);
 
-  function distancePointToSegment(
-    px: number,
-    py: number,
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number
-  ) {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    if (dx === 0 && dy === 0) return Math.hypot(px - x1, py - y1);
-
-    const t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
-    const clamped = Math.max(0, Math.min(1, t));
-    const cx = x1 + clamped * dx;
-    const cy = y1 + clamped * dy;
-    return Math.hypot(px - cx, py - cy);
+  function getImgRect(): DOMRect | null {
+    const img = document.getElementById("map-img") as HTMLImageElement | null;
+    return img ? img.getBoundingClientRect() : null;
   }
 
-  function parsePathPoints(d: string): Array<{ x: number; y: number }> {
-    const matches = [...d.matchAll(/[ML]([\d.]+),([\d.]+)/g)];
-    return matches.map((m) => ({ x: parseFloat(m[1]), y: parseFloat(m[2]) }));
+  function toRel(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = getImgRect();
+    if (!rect) return null;
+    return {
+      x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (clientY - rect.top)  / rect.height)),
+    };
   }
 
-  function hitElementAt(p: { x: number; y: number }): string | null {
-    const threshold = Math.max(0.008, 0.018 / scale);
+  function toPixel(rel: { x: number; y: number }, rect: DOMRect): { x: number; y: number } {
+    // Canvas hat dieselbe Größe wie das Bild, Ursprung = Bild-Top-Left
+    const canvas = canvasRef.current!;
+    return {
+      x: rel.x * canvas.width,
+      y: rel.y * canvas.height,
+    };
+  }
 
-    for (let i = elements.length - 1; i >= 0; i--) {
-      const el = elements[i];
+  function redraw(extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
 
-      if (el.type === "path") {
-        const pts = parsePathPoints(el.d);
-        for (let j = 0; j < pts.length - 1; j++) {
-          const a = pts[j];
-          const b = pts[j + 1];
-          if (distancePointToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= threshold) {
-            return el.id;
-          }
+    // Gitternetz
+    if (showGrid) {
+      const cols = 10, rows = 10;
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      ctx.font = "bold 11px Arial";
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.textBaseline = "top";
+      for (let c = 0; c <= cols; c++) {
+        const px = (c / cols) * W;
+        ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+        if (c < cols) {
+          const label = String.fromCharCode(65 + c); // A, B, C …
+          ctx.fillText(label, px + 3, 3);
         }
-      } else if (el.type === "line") {
-        if (distancePointToSegment(p.x, p.y, el.x1, el.y1, el.x2, el.y2) <= threshold) {
-          return el.id;
-        }
-      } else if (el.type === "text") {
-        const approxWidth = Math.max(0.04, el.text.length * (el.size / 1000) * 0.55);
-        const approxHeight = Math.max(0.02, el.size / 1000);
-        if (
-          p.x >= el.x - threshold &&
-          p.x <= el.x + approxWidth + threshold &&
-          p.y >= el.y - threshold &&
-          p.y <= el.y + approxHeight + threshold
-        ) {
-          return el.id;
-        }
+      }
+      for (let r = 0; r <= rows; r++) {
+        const py = (r / rows) * H;
+        ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
+        if (r < rows) ctx.fillText(String(r + 1), 3, py + 3);
       }
     }
 
-    return null;
+    // Gespeicherte Elemente rendern
+    for (const el of elements) {
+      if (el.type === "path" && el.d) {
+        // Parse SVG-Path-Punkte aus "M x,y L x,y L x,y ..."
+        const pts = el.d.replace(/M|L/g, "").trim().split(" ").map((s: string) => {
+          const [x, y] = s.split(",").map(Number);
+          return { x: x * W, y: y * H };
+        }).filter((p: { x: number; y: number }) => !isNaN(p.x) && !isNaN(p.y));
+        if (pts.length < 1) continue;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.strokeStyle = el.color;
+        ctx.lineWidth = el.width;
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.stroke();
+      } else if (el.type === "line") {
+        ctx.beginPath();
+        ctx.moveTo(el.x1 * W, el.y1 * H);
+        ctx.lineTo(el.x2 * W, el.y2 * H);
+        ctx.strokeStyle = el.color;
+        ctx.lineWidth = el.width;
+        ctx.lineCap = "round";
+        ctx.stroke();
+      } else if (el.type === "text") {
+        ctx.font = `bold ${el.size}px Arial`;
+        ctx.fillStyle = el.color;
+        ctx.textBaseline = "hanging";
+        ctx.fillText(el.text, el.x * W, el.y * H);
+      }
+    }
+
+    // Live-Strich
+    if (extraStroke && extraStroke.points.length > 1) {
+      const pts = extraStroke.points;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x * W, pts[0].y * H);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * W, pts[i].y * H);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.stroke();
+    }
+
+    // Live-Linie
+    if (extraLine) {
+      ctx.beginPath();
+      ctx.moveTo(extraLine.x1 * W, extraLine.y1 * H);
+      ctx.lineTo(extraLine.x2 * W, extraLine.y2 * H);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round";
+      ctx.stroke();
+    }
   }
 
-  function toRel(e: React.PointerEvent): { x: number; y: number } | null {
-    if (!imageBox || imageBox.width <= 0 || imageBox.height <= 0) return null;
-
-    const x = (e.clientX - imageBox.left) / imageBox.width;
-    const y = (e.clientY - imageBox.top) / imageBox.height;
-
-    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
-
-    return {
-      x: Math.max(0, Math.min(1, x)),
-      y: Math.max(0, Math.min(1, y)),
-    };
+  // Canvas-Größe an Bild anpassen
+  function syncCanvasSize() {
+    const canvas = canvasRef.current;
+    const img = document.getElementById("map-img") as HTMLImageElement | null;
+    if (!canvas || !img) return;
+    const rect = img.getBoundingClientRect();
+    if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.round(rect.height)) {
+      canvas.width  = Math.round(rect.width);
+      canvas.height = Math.round(rect.height);
+      redraw();
+    }
   }
+
+  // ResizeObserver: Canvas neu skalieren wenn Bild sich verändert (Zoom, Fenstergröße)
+  useEffect(() => {
+    const img = document.getElementById("map-img");
+    if (!img) return;
+    const ro = new ResizeObserver(() => { syncCanvasSize(); });
+    ro.observe(img);
+    syncCanvasSize();
+    return () => ro.disconnect();
+  }, [elements, showGrid]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDraw || tool === "pointer") return;
     e.stopPropagation();
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
-    const p = toRel(e);
+    const p = toRel(e.clientX, e.clientY);
     if (!p) return;
 
     if (tool === "text") {
-      setTextInput(p);
+      const rect = getImgRect()!;
+      setTextInput({ x: p.x, y: p.y, px: e.clientX - rect.left, py: e.clientY - rect.top });
       setTextVal("");
       return;
     }
 
     if (tool === "eraser") {
-      const hitId = hitElementAt(p);
-      if (hitId) onRemoveElement(hitId);
-      return;
+      eraseAt(p); return;
     }
 
     if (tool === "pen") {
       drawing.current = true;
-      currentPath.current = `M${p.x.toFixed(4)},${p.y.toFixed(4)}`;
-      setLiveStroke(currentPath.current);
-      (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+      pathPoints.current = [p];
       return;
     }
 
     if (tool === "line") {
       lineStart.current = p;
-      setLiveLine({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
-      (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+      return;
     }
   }
 
   function onPointerMove(e: React.PointerEvent) {
     if (!canDraw) return;
-    const p = toRel(e);
+    const p = toRel(e.clientX, e.clientY);
     if (!p) return;
+    lastPos.current = p;
 
-    if (tool === "eraser" && e.buttons === 1) {
-      const hitId = hitElementAt(p);
-      if (hitId) {
-        onRemoveElement(hitId);
-        return;
-      }
-    }
+    if (tool === "eraser" && e.buttons === 1) { eraseAt(p); return; }
 
     if (tool === "pen" && drawing.current) {
-      currentPath.current += ` L${p.x.toFixed(4)},${p.y.toFixed(4)}`;
-      setLiveStroke(currentPath.current);
+      pathPoints.current.push(p);
+      redraw({ points: pathPoints.current }, null);
+      return;
     }
 
-    if (tool === "line" && lineStart.current) {
-      setLiveLine({ x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y });
+    if (tool === "line" && lineStart.current && e.buttons === 1) {
+      redraw(null, { x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y });
+      return;
     }
   }
 
   function onPointerUp(e: React.PointerEvent) {
     if (!canDraw) return;
-    const p = toRel(e);
+    const p = toRel(e.clientX, e.clientY) ?? lastPos.current;
 
     if (tool === "pen" && drawing.current) {
       drawing.current = false;
-      if (currentPath.current.length > 10) {
-        onAddElement({
-          id: uid(),
-          type: "path",
-          d: currentPath.current,
-          color,
-          width: strokeWidth,
-        });
+      const pts = pathPoints.current;
+      if (pts.length > 1) {
+        const d = "M" + pts.map((pt) => `${pt.x.toFixed(4)},${pt.y.toFixed(4)}`).join(" L");
+        onAddElement({ id: uid(), type: "path", d, color, width: strokeWidth });
       }
-      setLiveStroke("");
-      currentPath.current = "";
+      pathPoints.current = [];
+      redraw();
+      return;
     }
 
     if (tool === "line" && lineStart.current && p) {
-      onAddElement({
-        id: uid(),
-        type: "line",
-        x1: lineStart.current.x,
-        y1: lineStart.current.y,
-        x2: p.x,
-        y2: p.y,
-        color,
-        width: strokeWidth,
-      });
+      onAddElement({ id: uid(), type: "line",
+        x1: lineStart.current.x, y1: lineStart.current.y, x2: p.x, y2: p.y,
+        color, width: strokeWidth });
       lineStart.current = null;
-      setLiveLine(null);
+      redraw();
+      return;
+    }
+  }
+
+  function eraseAt(p: { x: number; y: number }) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const W = canvas.width, H = canvas.height;
+    // Schwellenwert in Pixel, dann in relative Koordinaten umrechnen
+    const threshPx = Math.max(strokeWidth * 2, 12);
+    const tx = threshPx / W, ty = threshPx / H;
+    for (const el of elements) {
+      if (el.type === "path") {
+        const pts = el.d.replace(/M|L/g, "").trim().split(" ").map((s: string) => {
+          const [x, y] = s.split(",").map(Number);
+          return { x, y };
+        });
+        if (pts.some((pt: { x: number; y: number }) => Math.abs(pt.x - p.x) < tx && Math.abs(pt.y - p.y) < ty)) {
+          onRemoveElement(el.id); return;
+        }
+      } else if (el.type === "line") {
+        const mx = (el.x1 + el.x2) / 2, my = (el.y1 + el.y2) / 2;
+        if (Math.abs(mx - p.x) < tx && Math.abs(my - p.y) < ty) { onRemoveElement(el.id); return; }
+      } else if (el.type === "text") {
+        if (Math.abs(el.x - p.x) < tx && Math.abs(el.y - p.y) < ty) { onRemoveElement(el.id); return; }
+      }
     }
   }
 
   function commitText() {
     if (textVal.trim() && textInput) {
-      onAddElement({
-        id: uid(),
-        type: "text",
-        x: textInput.x,
-        y: textInput.y,
-        text: textVal.trim(),
-        color,
-        size: Math.max(12, strokeWidth * 3),
-      });
+      onAddElement({ id: uid(), type: "text",
+        x: textInput.x, y: textInput.y,
+        text: textVal.trim(), color, size: strokeWidth * 4 + 10 });
     }
-    setTextInput(null);
-    setTextVal("");
+    setTextInput(null); setTextVal("");
   }
 
-  const svgCursor =
+  const cursorStyle =
     tool === "pointer" ? "default" :
-    tool === "eraser" ? "cell" :
-    tool === "text" ? "text" :
-    "crosshair";
-
-  if (!imageBox || imageBox.width <= 0 || imageBox.height <= 0) return null;
+    tool === "eraser"  ? "cell" :
+    tool === "text"    ? "text" : "crosshair";
 
   return (
-    <>
-      <svg
-        ref={svgRef}
-        className="absolute z-10"
-        viewBox="0 0 1 1"
-        preserveAspectRatio="none"
+    <div
+      ref={containerRef}
+      className="absolute inset-0"
+      style={{ zIndex: 20, pointerEvents: tool === "pointer" ? "none" : "auto" }}
+    >
+      <canvas
+        ref={canvasRef}
         style={{
-          left: imageBox.left,
-          top: imageBox.top,
-          width: imageBox.width,
-          height: imageBox.height,
-          overflow: "visible",
-          cursor: svgCursor,
-          pointerEvents: tool === "pointer" ? "none" : "auto",
+          position: "absolute",
+          top: 0, left: 0,
+          cursor: cursorStyle,
+          touchAction: "none",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-      >
-        {elements.map((el) => {
-          if (el.type === "path") {
-            return (
-              <path
-                key={el.id}
-                d={el.d}
-                stroke={el.color}
-                strokeWidth={el.width / 1000}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            );
-          }
-          if (el.type === "line") {
-            return (
-              <line
-                key={el.id}
-                x1={el.x1}
-                y1={el.y1}
-                x2={el.x2}
-                y2={el.y2}
-                stroke={el.color}
-                strokeWidth={el.width / 1000}
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            );
-          }
-          if (el.type === "text") {
-            return (
-              <text
-                key={el.id}
-                x={el.x}
-                y={el.y}
-                fill={el.color}
-                fontSize={el.size / 1000}
-                fontFamily="Arial, sans-serif"
-                dominantBaseline="hanging"
-                vectorEffect="non-scaling-stroke"
-                style={{ userSelect: "none" }}
-              >
-                {el.text}
-              </text>
-            );
-          }
-          return null;
-        })}
+      />
 
-        {liveStroke && (
-          <path
-            d={liveStroke}
-            stroke={color}
-            strokeWidth={strokeWidth / 1000}
-            fill="none"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-
-        {liveLine && (
-          <line
-            x1={liveLine.x1}
-            y1={liveLine.y1}
-            x2={liveLine.x2}
-            y2={liveLine.y2}
-            stroke={color}
-            strokeWidth={strokeWidth / 1000}
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-      </svg>
-
+      {/* Text-Eingabefeld – positioniert relativ zum Bild */}
       {textInput && (
         <div
           className="absolute z-50 pointer-events-auto"
-          style={{
-            left: imageBox.left + textInput.x * imageBox.width,
-            top: imageBox.top + textInput.y * imageBox.height,
-            transform: "translate(0, -2px)",
-          }}
+          style={{ left: textInput.px, top: textInput.py }}
         >
           <input
             ref={textRef}
-            className="bg-gray-900 bg-opacity-90 border border-blue-500 text-white text-sm px-2 py-1 rounded shadow-lg outline-none min-w-[120px]"
+            className="bg-gray-900 bg-opacity-90 border border-blue-500 text-white text-sm px-2 py-1 rounded shadow-lg outline-none min-w-[140px]"
             style={{ color }}
             value={textVal}
             onChange={(e) => setTextVal(e.target.value)}
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Enter") commitText();
-              if (e.key === "Escape") {
-                setTextInput(null);
-                setTextVal("");
-              }
+              if (e.key === "Escape") { setTextInput(null); setTextVal(""); }
             }}
             onBlur={commitText}
-            placeholder="Text eingeben…"
+            placeholder="Text… Enter bestätigt"
           />
         </div>
       )}
-    </>
+    </div>
+  );
+}
+
+// ZOOMABLE MAP
+// BUGFIX: Mausrad = nur Scrollen/Panning, kein Zoom. Zoom nur über Buttons.
+// ─────────────────────────────────────────────────────────────
+// ZOOM PANEL – verschiebbares Fenster für Zoom-Steuerung
+// ─────────────────────────────────────────────────────────────
+
+function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
+  x: number; y: number; onMove: (x: number, y: number) => void;
+  onZoomIn: () => void; onZoomOut: () => void; onReset: () => void;
+  scale: number;
+}) {
+  const dragging = useRef(false);
+  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+
+  function onHandleDown(e: React.PointerEvent) {
+    dragging.current = true;
+    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault(); e.stopPropagation();
+  }
+  function onHandleMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    onMove(
+      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
+      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
+    );
+  }
+  function onHandleUp() { dragging.current = false; }
+
+  return (
+    <div
+      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
+      style={{ left: x, top: y, minWidth: 90 }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
+        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
+      >
+        <span className="text-gray-500 text-xs">⠿</span>
+        <span className="text-xs font-semibold text-gray-300">🔍</span>
+        <span className="text-xs text-gray-500 ml-auto">{Math.round(scale * 100)}%</span>
+      </div>
+      <div className="flex flex-col gap-1 p-2">
+        <button onClick={onZoomIn}  onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">＋</button>
+        <button onClick={onZoomOut} onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">－</button>
+        <button onClick={onReset}   onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-xs border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">⊙ Reset</button>
+      </div>
+    </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// ZOOMABLE MAP
-// ─────────────────────────────────────────────────────────────
 
-function ZoomableMap({
-  imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
+function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement,
+  showGrid, onScaleChange,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -1187,102 +1284,43 @@ function ZoomableMap({
   canDraw: boolean;
   onAddDrawElement: (el: DrawElement) => void;
   onRemoveDrawElement: (id: string) => void;
+  showGrid: boolean;
+  onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+
+  function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+  // expose scale control to parent (for ZoomPanel)
+  useEffect(() => {
+    onScaleChange(scale, setScale, resetView);
+  }, [scale]);
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [panning, setPanning] = useState(false);
-  const [hoveredToken, setHoveredToken] = useState<string | null>(null);
-
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
+  const [hoveredToken, setHoveredToken] = useState<string | null>(null);
+  // Double-click tracking for markers (stored outside render map)
   const markerClickCount = useRef<Record<string, number>>({});
   const markerClickTimer = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const stageRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  const [imageBox, setImageBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-
-  function updateImageBox() {
-    const stage = stageRef.current;
-    const img = imgRef.current;
-    if (!stage || !img) return;
-
-    const stageRect = stage.getBoundingClientRect();
-
-    const naturalW = img.naturalWidth || 1;
-    const naturalH = img.naturalHeight || 1;
-    const imgRatio = naturalW / naturalH;
-    const stageRatio = stageRect.width / stageRect.height;
-
-    let width = 0;
-    let height = 0;
-    let left = 0;
-    let top = 0;
-
-    if (imgRatio > stageRatio) {
-      width = stageRect.width;
-      height = width / imgRatio;
-      left = 0;
-      top = (stageRect.height - height) / 2;
-    } else {
-      height = stageRect.height;
-      width = height * imgRatio;
-      top = 0;
-      left = (stageRect.width - width) / 2;
-    }
-
-    setImageBox({ left, top, width, height });
-  }
-
-  useEffect(() => {
-    const onResize = () => updateImageBox();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  useEffect(() => {
-    requestAnimationFrame(updateImageBox);
-  }, [imageSrc]);
-
   function getMapCoords(e: React.PointerEvent) {
-    if (!imageBox) return null;
-
-    const stage = stageRef.current;
-    if (!stage) return null;
-
-    const stageRect = stage.getBoundingClientRect();
-
-    const localX = e.clientX - stageRect.left;
-    const localY = e.clientY - stageRect.top;
-
-    const x = (localX - imageBox.left) / imageBox.width;
-    const y = (localY - imageBox.top) / imageBox.height;
-
-    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
-
+    const img = document.getElementById("map-img");
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.min(1, x)),
-      y: Math.max(0, Math.min(1, y)),
+      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
     };
   }
 
-  function relToLocal(x: number, y: number) {
-    if (!imageBox) return { left: 0, top: 0 };
-    return {
-      left: imageBox.left + x * imageBox.width,
-      top: imageBox.top + y * imageBox.height,
-    };
-  }
-
+  // BUGFIX: Mausrad → nur Panning (kein Zoom), Zoom nur über Buttons
   function onWheel(e: React.WheelEvent) {
-    setOffset((o) => ({
-      x: o.x - e.deltaX * 0.8,
-      y: o.y - e.deltaY * 0.8,
-    }));
+    // Panning mit Mausrad: horizontal und vertikal
+    setOffset((o) => ({ x: o.x - e.deltaX * 0.8, y: o.y - e.deltaY * 0.8 }));
   }
 
   function onBgDown(e: React.PointerEvent) {
@@ -1294,21 +1332,12 @@ function ZoomableMap({
 
   function onBgMove(e: React.PointerEvent) {
     if (panning && !tokenDrag && !markerDrag) {
-      setOffset({
-        x: panStart.current.ox + e.clientX - panStart.current.x,
-        y: panStart.current.oy + e.clientY - panStart.current.y,
-      });
+      setOffset({ x: panStart.current.ox + e.clientX - panStart.current.x, y: panStart.current.oy + e.clientY - panStart.current.y });
     }
-
     if (tokenDrag && canWriteTokens) {
       const c = getMapCoords(e);
-      if (c) {
-        lastTokenPos.current = c;
-        const [gId] = tokenDrag.split(":");
-        onMoveTokenLocal(gId, c.x, c.y, activeMapId);
-      }
+      if (c) { lastTokenPos.current = c; const [gId] = tokenDrag.split(":"); onMoveTokenLocal(gId, c.x, c.y, activeMapId); }
     }
-
     if (markerDrag) {
       const c = getMapCoords(e);
       if (c) lastMarkerPos.current = c;
@@ -1320,22 +1349,16 @@ function ZoomableMap({
       const [gId] = tokenDrag.split(":");
       onCommitToken(gId, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
     }
-
-    if (markerDrag && lastMarkerPos.current) {
-      onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
-    }
-
-    setPanning(false);
-    setTokenDrag(null);
-    setMarkerDrag(null);
-    lastTokenPos.current = null;
-    lastMarkerPos.current = null;
+    if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
+    setPanning(false); setTokenDrag(null); lastTokenPos.current = null;
+    setMarkerDrag(null); lastMarkerPos.current = null;
   }
 
   const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
   const groupById = (gId: string) => groups.find((g) => g.id === gId);
   const groupCount = (gId: string) => (board.columns[gId] ?? []).length;
 
+  // Hover-Tooltip: Members, Leader, Deputy
   function buildTooltip(gId: string): React.ReactNode {
     const g = groupById(gId);
     if (!g) return null;
@@ -1343,21 +1366,19 @@ function ZoomableMap({
     const gr = groupRoles[gId] ?? {};
 
     const sortedIds = [...ids].sort((a, b) => {
-      const aRank = gr.leader === a ? 0 : gr.deputy === a ? 1 : 2;
-      const bRank = gr.leader === b ? 0 : gr.deputy === b ? 1 : 2;
-      return aRank - bRank;
+      const aIsLeader  = gr.leader  === a ? 0 : gr.deputy === a ? 1 : 2;
+      const bIsLeader  = gr.leader  === b ? 0 : gr.deputy === b ? 1 : 2;
+      return aIsLeader - bIsLeader;
     });
 
     return (
       <div className="text-left">
-        <div className="font-bold text-sm mb-1 border-b border-gray-600 pb-1" style={{ color: groupColor(g) }}>
-          {g.label}
-        </div>
+        <div className="font-bold text-sm mb-1 border-b border-gray-600 pb-1" style={{ color: groupColor(g) }}>{g.label}</div>
         {sortedIds.map((pid) => {
           const p = playersById[pid];
           if (!p) return null;
-          const isL = gr.leader === pid;
-          const isD = gr.deputy === pid;
+          const isL = gr.leader  === pid;
+          const isD = gr.deputy  === pid;
           const isDead = aliveState[pid] === "dead";
           return (
             <div key={pid} className={`text-xs flex items-center gap-1 py-0.5 ${isDead ? "line-through text-gray-500" : "text-gray-200"}`}>
@@ -1375,181 +1396,174 @@ function ZoomableMap({
   }
 
   return (
-    <div
-      className="w-full h-full overflow-hidden relative"
+    <div className="w-full h-full overflow-hidden relative"
       style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
       onWheel={onWheel}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
       onPointerMove={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgMove(e); }}
-      onPointerUp={() => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}
-    >
-      <div className="absolute bottom-16 right-4 z-30 flex flex-col gap-1">
-        {[
-          { lbl: "+", fn: () => setScale((s) => Math.min(8, s * 1.3)) },
-          { lbl: "−", fn: () => setScale((s) => Math.max(0.3, s / 1.3)) },
-          { lbl: "⊙", fn: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
-        ].map((b) => (
-          <button
-            key={b.lbl}
-            onClick={(e) => {
-              e.stopPropagation();
-              b.fn();
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="w-9 h-9 bg-gray-800 border border-gray-600 text-white rounded-lg text-sm font-bold hover:bg-gray-700 shadow"
+      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}>
+
+      {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
+
+      <div style={{
+        transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
+        transformOrigin: "center center",
+        transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
+        width: "100%", height: "100%", position: "relative",
+      }}>
+        <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
+
+        {/* Gitternetz – skaliert mit Karte mit, Buchstaben-Spalten + Zahlen-Zeilen */}
+        {showGrid && (
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+            style={{ overflow: "visible", zIndex: 8 }}
           >
-            {b.lbl}
-          </button>
-        ))}
-      </div>
+            {/* 10×10 Raster */}
+            {Array.from({ length: 9 }, (_, i) => {
+              const pos = (i + 1) / 10;
+              return (
+                <g key={i}>
+                  <line x1={pos} y1={0} x2={pos} y2={1}
+                    stroke="rgba(255,255,255,0.15)" strokeWidth={0.001} vectorEffect="non-scaling-stroke" />
+                  <line x1={0} y1={pos} x2={1} y2={pos}
+                    stroke="rgba(255,255,255,0.15)" strokeWidth={0.001} vectorEffect="non-scaling-stroke" />
+                </g>
+              );
+            })}
+            {/* Außenrahmen */}
+            <rect x={0} y={0} width={1} height={1} fill="none"
+              stroke="rgba(255,255,255,0.25)" strokeWidth={0.002} vectorEffect="non-scaling-stroke" />
+            {/* Spalten-Buchstaben (A–J) oben */}
+            {Array.from({ length: 10 }, (_, i) => (
+              <text key={`col-${i}`}
+                x={(i + 0.5) / 10} y={-0.008}
+                textAnchor="middle" dominantBaseline="auto"
+                fontSize={0.018} fill="rgba(255,255,255,0.55)"
+                fontFamily="monospace" fontWeight="bold"
+                vectorEffect="non-scaling-stroke">
+                {String.fromCharCode(65 + i)}
+              </text>
+            ))}
+            {/* Zeilen-Zahlen (1–10) links */}
+            {Array.from({ length: 10 }, (_, i) => (
+              <text key={`row-${i}`}
+                x={-0.008} y={(i + 0.5) / 10}
+                textAnchor="end" dominantBaseline="middle"
+                fontSize={0.018} fill="rgba(255,255,255,0.55)"
+                fontFamily="monospace" fontWeight="bold"
+                vectorEffect="non-scaling-stroke">
+                {i + 1}
+              </text>
+            ))}
+          </svg>
+        )}
 
-      <div
-        style={{
-          transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
-          transformOrigin: "center center",
-          transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
-          width: "100%",
-          height: "100%",
-          position: "relative",
-        }}
-      >
-        <div ref={stageRef} className="absolute inset-0">
-          <img
-            ref={imgRef}
-            id="map-img"
-            src={imageSrc}
-            alt="Map"
-            className="w-full h-full object-contain block select-none"
-            draggable={false}
-            onLoad={() => {
-              requestAnimationFrame(updateImageBox);
-            }}
-          />
-
-          <DrawingLayer
-            elements={drawElements}
-            tool={drawTool}
-            color={drawColor}
-            strokeWidth={drawWidth}
-            canDraw={canDraw}
-            scale={scale}
-            imageBox={imageBox}
-            onAddElement={onAddDrawElement}
-            onRemoveElement={onRemoveDrawElement}
-          />
-
-          {markers.map((m) => {
-            const pos = relToLocal(m.x, m.y);
-            return (
-              <div
-                key={m.id}
-                className={`absolute z-20 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
-                style={{ left: pos.left, top: pos.top, transform: "translate(-50%,-50%)" }}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  if (isAdmin) {
-                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                    setMarkerDrag(m.id);
-                    lastMarkerPos.current = null;
-                  }
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (markerDrag) return;
-                  markerClickCount.current[m.id] = (markerClickCount.current[m.id] ?? 0) + 1;
-                  if (markerClickTimer.current[m.id]) clearTimeout(markerClickTimer.current[m.id]);
-                  if (markerClickCount.current[m.id] >= 2) {
-                    onOpenMarker(m.id);
-                    markerClickCount.current[m.id] = 0;
-                    return;
-                  }
-                  markerClickTimer.current[m.id] = setTimeout(() => {
-                    markerClickCount.current[m.id] = 0;
-                  }, 350);
-                }}
-              >
-                <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
-                  m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
-                }`}>
-                  {m.isPOI ? "🔵" : "📍"} {m.label}
-                  {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
-                </div>
+        {/* Marker – Doppelklick öffnet, Einfachklick / Drag verschiebt */}
+        {/* markerClickCounters: id → count, stored outside map via closure */}
+        {markers.map((m) => (
+            <div key={m.id}
+              className={`absolute z-10 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
+              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                if (isAdmin) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (markerDrag) return;
+                // Doppelklick → Ebene wechseln
+                markerClickCount.current[m.id] = (markerClickCount.current[m.id] ?? 0) + 1;
+                if (markerClickTimer.current[m.id]) clearTimeout(markerClickTimer.current[m.id]);
+                if (markerClickCount.current[m.id] >= 2) {
+                  onOpenMarker(m.id); markerClickCount.current[m.id] = 0; return;
+                }
+                markerClickTimer.current[m.id] = setTimeout(() => { markerClickCount.current[m.id] = 0; }, 350);
+              }}>
+              <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
+                m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
+              }`}>
+                {m.isPOI ? "🔵" : "📍"} {m.label}
+                {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
               </div>
-            );
-          })}
+            </div>
+        ))}
 
-          {visibleTokens.map((t) => {
-            const g = groupById(t.groupId);
-            const count = groupCount(t.groupId);
-            const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`;
-            const color = g ? groupColor(g) : "#3b82f6";
-            const isHovered = hoveredToken === tokenKey;
-            const pos = relToLocal(t.x, t.y);
+        {/* Gruppen-Tokens mit Hover-Tooltip + Entfernen-Button */}
+        {visibleTokens.map((t) => {
+          const g = groupById(t.groupId);
+          const count = groupCount(t.groupId);
+          const tokenKey = `${t.groupId}:${t.mapId ?? "main"}`;
+          const color = g ? groupColor(g) : "#3b82f6";
+          const isHovered = hoveredToken === tokenKey;
 
-            return (
-              <div
-                key={tokenKey}
-                className={`absolute z-20 flex flex-col items-center select-none ${
-                  canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
-                } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
-                style={{ left: pos.left, top: pos.top, transform: "translate(-50%,-50%)" }}
-                onPointerDown={(e) => {
-                  if (!canWriteTokens) return;
-                  if ((e.target as HTMLElement).dataset.removeBtn) return;
-                  e.stopPropagation();
-                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                  setTokenDrag(tokenKey);
-                  lastTokenPos.current = null;
-                }}
-                onMouseEnter={() => setHoveredToken(tokenKey)}
-                onMouseLeave={() => setHoveredToken(null)}
-                title={canWriteTokens ? "Ziehen · ✕ zum Entfernen" : "Nur Ansicht"}
-              >
-                <div className="relative">
-                  <div
-                    className="px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap"
-                    style={{
-                      backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
-                      borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
-                      color: tokenDrag === tokenKey ? "black" : "white",
-                    }}
-                  >
-                    <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
-                    <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
-                  </div>
-
-                  {canWriteTokens && isHovered && !tokenDrag && (
-                    <button
-                      data-remove-btn="1"
-                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-700 border border-red-500 text-white text-xs flex items-center justify-center hover:bg-red-600 shadow-lg cursor-pointer"
-                      title="Token von Karte entfernen"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveToken(t.groupId, activeMapId);
-                        setHoveredToken(null);
-                      }}
-                    >
-                      ✕
-                    </button>
-                  )}
+          return (
+            <div key={tokenKey}
+              className={`absolute z-10 flex flex-col items-center select-none ${
+                canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
+              } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
+              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={(e) => {
+                if (!canWriteTokens) return;
+                // Kein Drag starten wenn auf ✕ geklickt
+                if ((e.target as HTMLElement).dataset.removeBtn) return;
+                e.stopPropagation();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                setTokenDrag(tokenKey); lastTokenPos.current = null;
+              }}
+              onMouseEnter={() => setHoveredToken(tokenKey)}
+              onMouseLeave={() => setHoveredToken(null)}
+              title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
+              {/* Token-Pille */}
+              <div className="relative">
+                <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap`}
+                  style={{
+                    backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
+                    borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
+                    color: tokenDrag === tokenKey ? "black" : "white",
+                  }}>
+                  <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
+                  <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
                 </div>
-
-                {isHovered && !tokenDrag && (
-                  <div
-                    className="absolute z-50 pointer-events-none"
-                    style={{ top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)", minWidth: 160, maxWidth: 240 }}
-                  >
-                    <div className="bg-gray-900 border border-gray-600 rounded-xl shadow-2xl px-3 py-2 text-xs">
-                      {buildTooltip(t.groupId)}
-                    </div>
-                  </div>
+                {/* ✕ Entfernen-Button – erscheint beim Hovern für Admin/Commander */}
+                {canWriteTokens && isHovered && !tokenDrag && (
+                  <button
+                    data-remove-btn="1"
+                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-700 border border-red-500 text-white text-xs flex items-center justify-center hover:bg-red-600 shadow-lg cursor-pointer"
+                    title="Token von Karte entfernen"
+                    onPointerDown={(e) => { e.stopPropagation(); }}
+                    onClick={(e) => { e.stopPropagation(); onRemoveToken(t.groupId, activeMapId); setHoveredToken(null); }}
+                  >✕</button>
                 )}
               </div>
-            );
-          })}
-        </div>
+
+              {/* Hover-Tooltip */}
+              {isHovered && !tokenDrag && (
+                <div className="absolute z-50 pointer-events-none"
+                  style={{ top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)", minWidth: 160, maxWidth: 240 }}>
+                  <div className="bg-gray-900 border border-gray-600 rounded-xl shadow-2xl px-3 py-2 text-xs">
+                    {buildTooltip(t.groupId)}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {/* Drawing Layer – außerhalb der transform-Div, direkt über dem Viewport */}
+      <DrawingLayer
+        elements={drawElements}
+        tool={drawTool}
+        color={drawColor}
+        strokeWidth={drawWidth}
+        canDraw={canDraw}
+        showGrid={showGrid}
+        onAddElement={onAddDrawElement}
+        onRemoveElement={onRemoveDrawElement}
+      />
     </div>
   );
 }
@@ -1584,7 +1598,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
   function onResizeMove(e: React.PointerEvent) {
     if (!resizing.current) return;
     onResize(Math.max(180, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
-      Math.max(120, resizeStart.current.ph + e.clientY - resizeStart.current.my));
+             Math.max(120, resizeStart.current.ph + e.clientY - resizeStart.current.my));
   }
   function onResizeUp() { resizing.current = false; }
 
@@ -1606,7 +1620,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
       <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
         onPointerDown={onResizeDown} title="Größe ändern">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-          <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z" />
+          <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
         </svg>
       </div>
     </div>
@@ -1661,11 +1675,30 @@ function BoardApp() {
   const [notesText, setNotesText] = useState("");
   const [notesVisible, setNotesVisible] = useState(true);
 
+  // Drawing state
   const [drawings, setDrawings] = useState<DrawingsMap>({});
   const [drawTool, setDrawTool] = useState<DrawTool>("pointer");
   const [drawColor, setDrawColor] = useState("#ffffff");
   const [drawWidth, setDrawWidth] = useState(4);
   const drawingsRef = useRef<DrawingsMap>({});
+  const [showGrid, setShowGrid] = useState(false);
+
+  // Zoom-Steuerung: Callbacks aus ZoomableMap hochgereicht
+  const zoomInRef  = useRef<() => void>(() => {});
+  const zoomOutRef = useRef<() => void>(() => {});
+  const resetViewRef = useRef<() => void>(() => {});
+  const [mapScale, setMapScale] = useState(1);
+
+  function handleScaleChange(
+    scale: number,
+    setScaleFn: (fn: (s: number) => number) => void,
+    resetFn: () => void,
+  ) {
+    setMapScale(scale);
+    zoomInRef.current  = () => setScaleFn((s) => Math.min(8, s * 1.3));
+    zoomOutRef.current = () => setScaleFn((s) => Math.max(0.3, s / 1.3));
+    resetViewRef.current = resetFn;
+  }
 
   const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | "aliveStatus" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -1675,6 +1708,7 @@ function BoardApp() {
   const canWrite = role === "admin" || role === "commander";
   const isAdmin = role === "admin";
 
+  // refs
   const boardRef = useRef(board);
   const aliveRef = useRef(aliveState);
   const spawnRef = useRef(spawnState);
@@ -1694,11 +1728,13 @@ function BoardApp() {
   useEffect(() => { groupRolesRef.current = groupRoles; }, [groupRoles]);
   useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
 
+  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
     return () => unsub();
   }, []);
 
+  // csv
   useEffect(() => {
     loadPlayers().then((list) => {
       setPlayers(list);
@@ -1711,6 +1747,7 @@ function BoardApp() {
     });
   }, []);
 
+  // role
   useEffect(() => {
     if (!user || !currentPlayer) return;
     const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
@@ -1718,6 +1755,7 @@ function BoardApp() {
     setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
+  // snapshot
   useEffect(() => {
     if (!user) return;
     const ref = doc(db, "rooms", roomId, "state", "board");
@@ -1740,6 +1778,7 @@ function BoardApp() {
     return () => unsub();
   }, [user, roomId]);
 
+  // writes
   async function pushTokensOnly(nt: Token[]) {
     const ref = doc(db, "rooms", roomId, "state", "board");
     try { await updateDoc(ref, { tokens: nt, updatedAt: serverTimestamp() }); }
@@ -1761,6 +1800,7 @@ function BoardApp() {
     } catch (err) { console.error("Firestore:", err); }
   }
 
+  // GroupRoles
   function setGroupRole(gId: string, pid: string, r: "leader" | "deputy" | null) {
     if (!canWrite) return;
     setGroupRoles((prev) => {
@@ -1769,6 +1809,7 @@ function BoardApp() {
         if (gr.leader === pid) delete gr.leader;
         if (gr.deputy === pid) delete gr.deputy;
       } else {
+        // Entferne Spieler aus anderem Slot der gleichen Gruppe
         if (r === "leader") { if (gr.deputy === pid) delete gr.deputy; gr.leader = pid; }
         if (r === "deputy") { if (gr.leader === pid) delete gr.leader; gr.deputy = pid; }
       }
@@ -1779,6 +1820,7 @@ function BoardApp() {
     });
   }
 
+  // Gruppenfarbe
   function setGroupColor(id: string, hex: string) {
     if (!canWrite) return;
     setBoard((prev) => {
@@ -1801,6 +1843,16 @@ function BoardApp() {
     const next = { ...panelLayout, placer: { x, y } };
     setPanelLayout(next);
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+  }
+
+  function movePanelToolbar(x: number, y: number) {
+    const next = { ...panelLayout, toolbar: { x, y } };
+    setPanelLayout(next);
+  }
+
+  function movePanelZoom(x: number, y: number) {
+    const next = { ...panelLayout, zoom: { x, y } };
+    setPanelLayout(next);
   }
 
   const notesMoveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1893,6 +1945,7 @@ function BoardApp() {
       boardRef.current = next;
       const nt = tokensRef.current.filter((t) => t.groupId !== id);
       setTokens(nt); tokensRef.current = nt; pushTokensOnly(nt);
+      // GroupRoles bereinigen
       const ngr = { ...groupRolesRef.current }; delete ngr[id]; groupRolesRef.current = ngr; setGroupRoles(ngr);
       pushAll(next, nt, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, undefined, ngr);
       return next;
@@ -1976,6 +2029,7 @@ function BoardApp() {
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, next);
   }
 
+  // TOKENS
   function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
     setTokens((prev) => {
       const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
@@ -1998,6 +2052,9 @@ function BoardApp() {
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
   }
 
+  // ── DRAWINGS ──────────────────────────────────────────────
+
+  // Separate Firestore-Schreibfunktion für Drawings (debounced)
   const drawDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function pushDrawings(nd: DrawingsMap) {
@@ -2053,6 +2110,7 @@ function BoardApp() {
     });
   }
 
+  // BOARD DND – auch Gruppen-Spalten verschiebbar (via Gruppen-ID als active)
   function findContainer(pid: string): string | null {
     for (const [gId, ids] of Object.entries(board.columns)) {
       if ((ids ?? []).includes(pid)) return gId;
@@ -2067,11 +2125,13 @@ function BoardApp() {
     const overId = e.over?.id?.toString();
     if (!overId) return;
 
+    // BUGFIX: Gruppen-Spalten verschieben (activeId ist eine Gruppen-ID, nicht Spieler-ID)
     const groupIds = board.groups.map((g) => g.id);
     const isGroupDrag = groupIds.includes(activeId) && activeId !== "unassigned";
     const overIsGroup = groupIds.includes(overId);
 
     if (isGroupDrag && overIsGroup && canWrite) {
+      // Gruppe an neue Position in groups-Array schieben
       setBoard((prev) => {
         const oldIdx = prev.groups.findIndex((g) => g.id === activeId);
         const newIdx = prev.groups.findIndex((g) => g.id === overId);
@@ -2102,13 +2162,10 @@ function BoardApp() {
     }
 
     setBoard((prev) => {
-      const next: BoardState = {
-        ...prev, columns: {
-          ...prev.columns,
-          [from]: (prev.columns[from] ?? []).filter((x) => x !== activeId),
-          [to]: [activeId, ...(prev.columns[to] ?? [])],
-        }
-      };
+      const next: BoardState = { ...prev, columns: { ...prev.columns,
+        [from]: (prev.columns[from] ?? []).filter((x) => x !== activeId),
+        [to]: [activeId, ...(prev.columns[to] ?? [])],
+      }};
       boardRef.current = next; pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
       return next;
     });
@@ -2187,8 +2244,8 @@ function BoardApp() {
 
   const roleBadge =
     role === "admin" ? "bg-red-900 text-red-300 border border-red-700" :
-      role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
-        "bg-gray-800 text-gray-400 border border-gray-600";
+    role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
+    "bg-gray-800 text-gray-400 border border-gray-600";
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
@@ -2221,6 +2278,7 @@ function BoardApp() {
         </div>
       </header>
 
+      {/* BOARD */}
       {tab === "board" && (
         <div className="flex-1 overflow-auto p-4">
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -2229,6 +2287,7 @@ function BoardApp() {
               onDelete={deleteGroup} onClear={clearGroup} />
 
             <div className="flex gap-3 items-start overflow-x-auto pb-4">
+              {/* Unassigned */}
               <div style={{ width: 220, flexShrink: 0 }}>
                 <div className="rounded-t-xl border border-b-0 border-gray-700 bg-gray-900 px-3 py-2">
                   <input className="w-full bg-gray-800 border border-gray-600 text-white text-xs rounded px-2 py-1 mb-2 focus:outline-none focus:border-blue-500"
@@ -2271,6 +2330,7 @@ function BoardApp() {
                 </div>
               </div>
 
+              {/* Tactical groups – SortableContext für Spalten-DnD */}
               <SortableContext items={tacticalGroups.map((g) => g.id)} strategy={rectSortingStrategy}>
                 <div className="flex flex-wrap gap-3 flex-1 items-start">
                   {tacticalGroups.map((g) => (
@@ -2294,6 +2354,7 @@ function BoardApp() {
         </div>
       )}
 
+      {/* MAP */}
       {tab === "map" && (
         <div className="flex-1 relative overflow-hidden">
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
@@ -2326,10 +2387,13 @@ function BoardApp() {
                 canDraw={canWrite}
                 onAddDrawElement={addDrawElement}
                 onRemoveDrawElement={removeDrawElement}
+                showGrid={showGrid}
+                onScaleChange={handleScaleChange}
               />
             )}
           </div>
 
+          {/* Drawing Toolbar – verschiebbar, nur wenn Bild vorhanden */}
           {activeImage && (
             <DrawingToolbar
               tool={drawTool} setTool={setDrawTool}
@@ -2338,6 +2402,24 @@ function BoardApp() {
               canDraw={canWrite}
               onUndo={undoDrawElement}
               onClear={clearDrawings}
+              x={panelLayout.toolbar?.x ?? 300}
+              y={panelLayout.toolbar?.y ?? 16}
+              onMove={movePanelToolbar}
+              showGrid={showGrid}
+              onToggleGrid={() => setShowGrid(v => !v)}
+            />
+          )}
+
+          {/* Zoom Panel – verschiebbares Fenster */}
+          {activeImage && (
+            <ZoomPanel
+              x={panelLayout.zoom?.x ?? 16}
+              y={panelLayout.zoom?.y ?? 600}
+              onMove={movePanelZoom}
+              scale={mapScale}
+              onZoomIn={() => zoomInRef.current()}
+              onZoomOut={() => zoomOutRef.current()}
+              onReset={() => resetViewRef.current()}
             />
           )}
 
