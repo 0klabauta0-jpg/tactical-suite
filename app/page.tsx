@@ -1007,13 +1007,14 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
 // PLAYER CARD
 // ─────────────────────────────────────────────────────────────
 
-function Card({ player, aliveState, currentPlayerId, canWrite, onToggleAlive, spawnGroups, spawnState, onSetSpawn,
-  groupRoles, groupId, onSetRole, groupColor: gColor,
+function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive, spawnGroups, spawnState, onSetSpawn,
+  groupRoles, groupId, onSetRole, onSetAppRole, groupColor: gColor,
 }: {
-  player: Player; aliveState: PlayerAliveState; currentPlayerId: string; canWrite: boolean;
+  player: Player; aliveState: PlayerAliveState; currentPlayerId: string; canWrite: boolean; isAdmin: boolean;
   onToggleAlive: (id: string) => void; spawnGroups: Group[]; spawnState: PlayerSpawnState;
   onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; groupId: string; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
+  onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
   groupColor: string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
@@ -1073,14 +1074,29 @@ function Card({ player, aliveState, currentPlayerId, canWrite, onToggleAlive, sp
           {player.area}{player.role ? ` · ${player.role}` : ""}{player.homeLocation ? ` · 📍${player.homeLocation}` : ""}
         </div>
       </div>
-      {(isSelf || canWrite) && spawnGroups.length > 0 && (
-        <div className="px-2 pb-2" onPointerDown={(e) => e.stopPropagation()}>
-          <select className="w-full bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
-            value={spawnState[player.id] ?? ""}
-            onChange={(e) => onSetSpawn(player.id, e.target.value)}>
-            <option value="">⚓ Spawn…</option>
-            {spawnGroups.map((sg) => <option key={sg.id} value={sg.id}>{sg.label}</option>)}
-          </select>
+      {/* Kompakte Dropdown-Zeile: Spawn + AppRole nebeneinander */}
+      {(isSelf || canWrite) && (spawnGroups.length > 0 || (canWrite && isAdmin)) && (
+        <div className="px-2 pb-2 grid grid-cols-2 gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          {spawnGroups.length > 0 && (
+            <select
+              className="bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
+              value={spawnState[player.id] ?? ""}
+              onChange={(e) => onSetSpawn(player.id, e.target.value)}>
+              <option value="">⚓ Spawn…</option>
+              {spawnGroups.map((sg) => <option key={sg.id} value={sg.id}>{sg.label}</option>)}
+            </select>
+          )}
+          {canWrite && isAdmin && (
+            <select
+              className="bg-gray-700 border border-orange-700 text-orange-300 text-xs rounded px-1 py-0.5 focus:outline-none"
+              value={player.appRole ?? "viewer"}
+              onChange={(e) => onSetAppRole(player.id, e.target.value as "admin" | "commander" | "viewer")}
+              title="AppRolle setzen">
+              <option value="viewer">viewer</option>
+              <option value="commander">commander</option>
+              <option value="admin">admin</option>
+            </select>
+          )}
         </div>
       )}
     </div>
@@ -1199,8 +1215,8 @@ function ColorPicker({ current, onChange }: { current?: string; onChange: (hex: 
 
 const COLUMN_HEIGHT = 760;
 
-function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId, canWrite, onToggleAlive,
-  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetColor, onSetIcon,
+function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive,
+  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetAppRole, onSetColor, onSetIcon,
 }: {
   group: Group; ids: string[]; playersById: Record<string, Player>; aliveState: PlayerAliveState;
   currentPlayerId: string; canWrite: boolean;
@@ -1208,6 +1224,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   onDelete: (id: string) => void; onClear?: () => void;
   spawnGroups: Group[]; spawnState: PlayerSpawnState; onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
+  isAdmin: boolean; onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
   onSetColor: (id: string, hex: string) => void;
   onSetIcon: (id: string, icon: string) => void;
 }) {
@@ -1292,6 +1309,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                   canWrite={canWrite} onToggleAlive={onToggleAlive} spawnGroups={spawnGroups}
                   spawnState={spawnState} onSetSpawn={onSetSpawn}
                   groupRoles={groupRoles} groupId={group.id} onSetRole={onSetRole}
+                  isAdmin={isAdmin} onSetAppRole={onSetAppRole}
                   groupColor={gColor} />
               ) : null
             )}
@@ -1515,15 +1533,24 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
 
 function HelpTip({ text }: { text: string }) {
   const [show, setShow] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleEnter() {
+    timerRef.current = setTimeout(() => setShow(true), 600);
+  }
+  function handleLeave() {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setShow(false);
+  }
+
   return (
     <span className="relative inline-flex items-center">
       <button
         className="w-4 h-4 rounded-full bg-gray-700 border border-gray-500 text-gray-400 text-xs flex items-center justify-center hover:bg-gray-600 hover:text-white flex-shrink-0 leading-none"
-        onMouseEnter={() => setShow(true)}
-        onMouseLeave={() => setShow(false)}
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
-        title={text}
       >?</button>
       {show && (
         <span
@@ -1690,7 +1717,7 @@ function DrawingToolbar({
 
 function DrawingLayer({
   elements, tool, color, strokeWidth, canDraw, showGrid,
-  onAddElement, onRemoveElement, onUpdateElement,
+  onAddElement, onRemoveElement, onUpdateElement, onResetTool,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
@@ -1698,6 +1725,7 @@ function DrawingLayer({
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
   onUpdateElement: (el: DrawElement) => void;
+  onResetTool?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1930,6 +1958,7 @@ function DrawingLayer({
     if (tool === "marker_infantry" || tool === "marker_ground" || tool === "marker_air") {
       const kind = tool.replace("marker_", "") as "infantry" | "ground" | "air";
       onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: Date.now() });
+      onResetTool?.();
       return;
     }
 
@@ -2236,6 +2265,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
+  onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
   showGrid, onScaleChange,
 }: {
@@ -2250,6 +2280,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   orderMarkers: OrderMarker[];
   onMoveOrderMarkerLocal: (gId: string, x: number, y: number, mapId: string) => void;
   onCommitOrderMarker: (gId: string, x: number, y: number, mapId: string) => void;
+  onResetDrawTool?: () => void;
   onRemoveOrderMarker: (gId: string, mapId: string) => void;
   drawElements: DrawElement[]; drawTool: DrawTool; drawColor: string; drawWidth: number;
   canDraw: boolean;
@@ -2408,6 +2439,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
           onUpdateElement={onUpdateDrawElement}
+          onResetTool={onResetDrawTool}
         />
 
         {/* Gitternetz – skaliert mit Karte mit, Buchstaben-Spalten + Zahlen-Zeilen */}
@@ -2825,10 +2857,27 @@ function BoardApp() {
     });
   }
 
-  // Initialer Load (nur wenn bereits eingeloggt & config bekannt)
+  // Initialer Load + Echtzeit-Listener auf playerOverrides
+  // Wenn ein neuer Spieler sich selbst registriert (self-registration), schreibt er sich
+  // in playerOverrides → onSnapshot triggert → alle anderen Clients sehen ihn sofort.
   useEffect(() => {
     if (!roomCfg) return;
-    loadPlayersForRoom(roomId).then((list) => applyPlayerList(list, false));
+    // Initialer Load
+    loadPlayersForRoom(roomId).then((sheetList) => {
+      loadFirestoreOverrides(roomId).then((ov) => {
+        applyPlayerList(mergeWithOverrides(sheetList, ov), false);
+      });
+    });
+    // Echtzeit-Listener auf playerOverrides
+    const overridesRef = doc(db, "rooms", roomId, "config", "playerOverrides");
+    const unsub = onSnapshot(overridesRef, (snap) => {
+      if (!snap.exists()) return;
+      const ov = snap.data() as Record<string, Partial<Player>>;
+      firestoreOverrideCache[roomId] = ov;
+      const sheetList = cachedPlayersByRoom[roomId] ?? [];
+      applyPlayerList(mergeWithOverrides(sheetList, ov), false);
+    });
+    return () => unsub();
   }, [roomId, roomCfg]);
 
   // Auto-Polling alle 5 Minuten
@@ -2933,6 +2982,17 @@ function BoardApp() {
   }
 
   // GroupRoles
+  async function setPlayerAppRole(playerId: string, newRole: "admin" | "commander" | "viewer") {
+    const existing = await loadFirestoreOverrides(roomId);
+    const next = {
+      ...existing,
+      [playerId]: { ...(existing[playerId] ?? {}), appRole: newRole, lastSheetAppRole: newRole },
+    };
+    firestoreOverrideCache[roomId] = next;
+    await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+    setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, appRole: newRole } : p));
+  }
+
   function setGroupRole(gId: string, pid: string, r: "leader" | "deputy" | null) {
     if (!canWrite) return;
     setGroupRoles((prev) => {
@@ -3591,6 +3651,7 @@ function BoardApp() {
                             currentPlayerId={currentPlayer.id} canWrite={canWrite} onToggleAlive={toggleAlive}
                             spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                             groupRoles={groupRoles} groupId="unassigned" onSetRole={setGroupRole}
+                            isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
                             groupColor="#6b7280" />
                         ) : null
                       )}
@@ -3608,7 +3669,9 @@ function BoardApp() {
                       canWrite={canWrite} onToggleAlive={toggleAlive} onRename={renameGroup}
                       onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
                       spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
-                      groupRoles={groupRoles} onSetRole={setGroupRole} onSetColor={setGroupColor} onSetIcon={setGroupIcon} />
+                      groupRoles={groupRoles} onSetRole={setGroupRole}
+                      isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                      onSetColor={setGroupColor} onSetIcon={setGroupIcon} />
                   ))}
                   {canWrite && (
                     <div className="flex flex-col gap-2">
@@ -3663,6 +3726,7 @@ function BoardApp() {
                 onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
                 onScaleChange={handleScaleChange}
+                onResetDrawTool={() => setDrawTool("pointer")}
               />
             )}
           </div>
