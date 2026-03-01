@@ -13,6 +13,7 @@ import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
+  updatePassword,
   User,
 } from "firebase/auth";
 
@@ -145,8 +146,10 @@ const GROUP_COLORS = [
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function nameToFakeEmail(n: string) {
-  return `${n.toLowerCase().replace(/[^a-z0-9]/g, "")}@tcs.internal`;
+function nameToFakeEmail(n: string, roomId = "default") {
+  const safeName = n.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const safeRoom = roomId.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `${safeName}.${safeRoom}@tcs.internal`;
 }
 
 function ampelColor(a?: string) {
@@ -378,10 +381,18 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
       const players = await loadPlayersForRoom(roomId);
       const found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
       if (!found) { setMsg(`"${playerName}" nicht gefunden. Spielerliste ggf. neu laden.`); setLoading(false); return; }
-      const email = nameToFakeEmail(found.name);
+      const email = nameToFakeEmail(found.name, roomId);
       const pw = cfg.password + "_tcs_internal";
-      try { await signInWithEmailAndPassword(auth, email, pw); }
-      catch { await createUserWithEmailAndPassword(auth, email, pw); }
+      try {
+        await signInWithEmailAndPassword(auth, email, pw);
+      } catch (signInErr: any) {
+        // Account existiert noch nicht → neu anlegen
+        if (signInErr?.code === "auth/user-not-found" || signInErr?.code === "auth/invalid-credential") {
+          await createUserWithEmailAndPassword(auth, email, pw);
+        } else {
+          throw signInErr;
+        }
+      }
       onLogin(found, cfg);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
