@@ -211,6 +211,37 @@ function groupColor(g: Group): string {
 // Pro-Room Player-Cache (roomId → Player[])
 const cachedPlayersByRoom: Record<string, Player[]> = {};
 
+// Firestore-Override-Cache: roomId → { playerId → Partial<Player> }
+// Wird bei Login geladen. Enthält nur Felder die Firestore überschreibt (z.B. appRole).
+const firestoreOverrideCache: Record<string, Record<string, Partial<Player>>> = {};
+
+async function loadFirestoreOverrides(roomId: string): Promise<Record<string, Partial<Player>>> {
+  if (firestoreOverrideCache[roomId]) return firestoreOverrideCache[roomId];
+  try {
+    const snap = await getDoc(doc(db, "rooms", roomId, "config", "playerOverrides"));
+    if (!snap.exists()) { firestoreOverrideCache[roomId] = {}; return {}; }
+    const data = snap.data() as Record<string, Partial<Player>>;
+    firestoreOverrideCache[roomId] = data;
+    return data;
+  } catch { return {}; }
+}
+
+async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Player>) {
+  const overrides = await loadFirestoreOverrides(roomId);
+  const next = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
+  firestoreOverrideCache[roomId] = next;
+  await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+}
+
+// Spieler aus Sheet mit Firestore-Overrides mergen
+function mergeWithOverrides(players: Player[], overrides: Record<string, Partial<Player>>): Player[] {
+  return players.map((p) => {
+    const ov = overrides[p.id];
+    if (!ov) return p;
+    return { ...p, ...ov };
+  });
+}
+
 function parsePlayersFromCsv(text: string): Player[] {
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   const list: Player[] = [];
@@ -235,13 +266,25 @@ function parsePlayersFromCsv(text: string): Player[] {
   return list;
 }
 
+// Startzeile für Spielerdaten (Zeile 10 = Header, Zeile 11 = erste Datenzeile).
+// Für Google Sheets: range=A10:Z10000 liefert CSV ab Zeile 10.
+// Der erste CSV-Row wird dann automatisch als Header interpretiert (Papa.parse header:true).
+const SHEET_HEADER_ROW = 10; // 1-basiert, wie im Sheet sichtbar
+
 async function loadPlayersForRoom(roomId: string, force = false): Promise<Player[]> {
   if (!force && cachedPlayersByRoom[roomId]?.length) return cachedPlayersByRoom[roomId];
   const cfg = await loadRoomConfig(roomId);
   if (!cfg?.sheetUrl.startsWith("http")) return cachedPlayersByRoom[roomId] ?? [];
   try {
-    const sep = cfg.sheetUrl.includes("?") ? "&" : "?";
-    const url = cfg.sheetUrl + sep + "_t=" + Date.now();
+    // Range-Parameter: Ab Zeile SHEET_HEADER_ROW bis Zeile 10000, alle Spalten A-Z
+    let url = cfg.sheetUrl;
+    // Nur anhängen wenn noch kein range-Parameter gesetzt ist
+    if (!url.includes("range=")) {
+      const sep = url.includes("?") ? "&" : "?";
+      url += sep + "range=A" + SHEET_HEADER_ROW + ":Z10000";
+    }
+    const sep2 = url.includes("?") ? "&" : "?";
+    url += sep2 + "_t=" + Date.now();
     const res = await fetch(url, { cache: "no-store" });
     const text = await res.text();
     const list = parsePlayersFromCsv(text);
@@ -255,6 +298,137 @@ async function loadPlayersForRoom(roomId: string, force = false): Promise<Player
 // ─────────────────────────────────────────────────────────────
 // LOGIN
 // ─────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// PROFIL-MODAL – Spieler kann eigene Daten bearbeiten (außer AppRolle)
+// ─────────────────────────────────────────────────────────────
+
+function ProfileModal({
+  player, roomId, onSave, onClose, isNew,
+}: {
+  player: Player; roomId: string;
+  onSave: (updated: Player) => void;
+  onClose: () => void;
+  isNew: boolean;
+}) {
+  const [name, setName]         = useState(player.name);
+  const [area, setArea]         = useState(player.area ?? "");
+  const [role, setRole]         = useState(player.role ?? "");
+  const [squadron, setSquadron] = useState(player.squadron ?? "");
+  const [home, setHome]         = useState(player.homeLocation ?? "");
+  const [ampel, setAmpel]       = useState(player.ampel ?? "");
+  const [saving, setSaving]     = useState(false);
+  const [msg, setMsg]           = useState("");
+
+  async function handleSave() {
+    if (!name.trim()) { setMsg("Name darf nicht leer sein."); return; }
+    setSaving(true);
+    const updated: Player = {
+      ...player, name: name.trim(), area, role, squadron,
+      homeLocation: home, ampel,
+      // appRole bleibt unverändert – nur Admin kann das ändern
+    };
+    try {
+      // In Firestore-Override speichern (Sheet bleibt Primärquelle)
+      await saveFirestoreOverride(roomId, player.id, {
+        name: updated.name, area, role, squadron,
+        homeLocation: home, ampel,
+      });
+      onSave(updated);
+    } catch (e: any) { setMsg(e?.message ?? "Fehler beim Speichern."); }
+    setSaving(false);
+  }
+
+  const inputCls = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500";
+  const labelCls = "text-gray-400 text-xs mb-1 block";
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black bg-opacity-70 px-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-white font-bold text-lg">
+              {isNew ? "👋 Willkommen! Profil anlegen" : "✏ Profil bearbeiten"}
+            </h2>
+            {isNew && (
+              <p className="text-gray-400 text-xs mt-1">
+                Du wurdest automatisch angelegt. Bitte fülle dein Profil aus.
+                <span className="text-yellow-400 ml-1">AppRolle wird vom Admin vergeben.</span>
+              </p>
+            )}
+          </div>
+          {!isNew && (
+            <button className="text-gray-500 hover:text-gray-300 text-xl" onClick={onClose}>✕</button>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className={labelCls}>Handle / Name *</label>
+            <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="KRT_Bjoern" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Bereich / Org</label>
+              <input className={inputCls} value={area} onChange={(e) => setArea(e.target.value)} placeholder="Logistics" />
+            </div>
+            <div>
+              <label className={labelCls}>Rolle / Job</label>
+              <input className={inputCls} value={role} onChange={(e) => setRole(e.target.value)} placeholder="Pilot" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Staffel / Squadron</label>
+              <input className={inputCls} value={squadron} onChange={(e) => setSquadron(e.target.value)} placeholder="Alpha" />
+            </div>
+            <div>
+              <label className={labelCls}>Heimatort</label>
+              <input className={inputCls} value={home} onChange={(e) => setHome(e.target.value)} placeholder="Stanton" />
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Verfügbarkeit (Ampel)</label>
+            <div className="flex gap-2 mt-1">
+              {[
+                { val: "gut",    label: "✓ Gut",    color: "bg-green-700 border-green-500" },
+                { val: "mittel", label: "~ Mittel",  color: "bg-yellow-700 border-yellow-500" },
+                { val: "",       label: "✕ Nicht da",color: "bg-red-800 border-red-600" },
+              ].map((opt) => (
+                <button key={opt.val}
+                  className={`flex-1 py-1.5 rounded-lg border text-xs font-medium text-white transition-opacity ${opt.color} ${ampel === opt.val ? "opacity-100 ring-2 ring-white" : "opacity-40 hover:opacity-70"}`}
+                  onClick={() => setAmpel(opt.val)}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 bg-gray-800 rounded-lg px-3 py-2">
+            <span className="text-gray-500 text-xs">AppRolle:</span>
+            <span className="text-gray-300 text-xs font-mono">{player.appRole ?? "viewer"}</span>
+            <span className="text-gray-600 text-xs ml-1">(nur Admin kann ändern)</span>
+          </div>
+
+          {msg && <p className="text-red-400 text-xs">{msg}</p>}
+
+          <div className="flex gap-2 mt-2">
+            <button
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+              onClick={handleSave} disabled={saving}>
+              {saving ? "Speichern…" : isNew ? "Profil anlegen & einloggen" : "Speichern"}
+            </button>
+            {!isNew && (
+              <button className="px-4 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg py-2 text-sm" onClick={onClose}>
+                Abbrechen
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // ROOM SETUP (Admin-Konfiguration via ?setup=1)
@@ -382,24 +556,43 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
   async function handleLogin() {
     setMsg(""); setLoading(true);
     try {
-      // Config nochmal laden (könnte inzwischen gesetzt worden sein)
       const cfg = await loadRoomConfig(roomId);
-      if (!cfg) { setMsg("Dieser Raum hat noch keine Konfiguration. Ein Admin muss sheetUrl und Passwort in Firestore hinterlegen."); setLoading(false); return; }
+      if (!cfg) { setMsg("Dieser Raum hat noch keine Konfiguration."); setLoading(false); return; }
       if (password !== cfg.password) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
-      const players = await loadPlayersForRoom(roomId);
-      const found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
-      if (!found) { setMsg(`"${playerName}" nicht gefunden. Spielerliste ggf. neu laden.`); setLoading(false); return; }
+
+      // Spieler aus Sheet laden + Firestore-Overrides mergen
+      const sheetPlayers = await loadPlayersForRoom(roomId);
+      const overrides = await loadFirestoreOverrides(roomId);
+      const players = mergeWithOverrides(sheetPlayers, overrides);
+
+      let found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
+
+      // ── Self-Registration: Spieler nicht im Sheet → neu anlegen ──────────
+      if (!found) {
+        const newId = stableId(playerName.trim());
+        const newPlayer: Player = {
+          id: newId,
+          name: playerName.trim(),
+          area: "", role: "", squadron: "", status: "",
+          ampel: "", appRole: "viewer", homeLocation: "",
+        };
+        // Spieler als Firestore-Override speichern (Sheet bleibt unberührt)
+        await saveFirestoreOverride(roomId, newId, newPlayer);
+        // Lokalen Cache aktualisieren
+        cachedPlayersByRoom[roomId] = [...sheetPlayers, newPlayer];
+        firestoreOverrideCache[roomId] = { ...overrides, [newId]: newPlayer };
+        found = newPlayer;
+      }
+
+      // Firebase Auth
       const email = nameToFakeEmail(found.name, roomId);
       const pw = cfg.password + "_tcs_internal";
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (signInErr: any) {
-        // Account existiert noch nicht → neu anlegen
         if (signInErr?.code === "auth/user-not-found" || signInErr?.code === "auth/invalid-credential") {
           await createUserWithEmailAndPassword(auth, email, pw);
-        } else {
-          throw signInErr;
-        }
+        } else { throw signInErr; }
       }
       onLogin(found, cfg);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
@@ -440,8 +633,8 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
 
         {!cfgMissing && (
           <>
-            <p className="text-gray-500 text-xs mb-5 mt-1">Spielername exakt wie im Sheet.</p>
-            <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
+            <p className="text-gray-500 text-xs mb-5 mt-1">Dein Handle. Neu? Einfach einloggen – Account wird automatisch angelegt.</p>
+            <label className="text-gray-300 text-xs mb-1 block">Handle / Name</label>
             <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
               placeholder="z.B. KRT_Bjoern" value={playerName} onChange={(e) => setPlayerName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
@@ -3091,7 +3284,12 @@ function BoardApp() {
     <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
   );
   if (!user || !currentPlayer) return (
-    <LoginView roomId={roomId} onLogin={(p, cfg) => { setCurrentPlayer(p); setRoomCfg(cfg); }} />
+    <LoginView roomId={roomId} onLogin={(p, cfg) => {
+        const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
+        setIsNewPlayer(!hasProfile);
+        setShowProfile(!hasProfile);
+        setCurrentPlayer(p); setRoomCfg(cfg);
+      }} />
   );
 
   const roleBadge =
@@ -3102,30 +3300,49 @@ function BoardApp() {
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
-        <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-3">
-            <span className="font-bold text-white">KlabsCom</span>
+        {/* Zeile 1: Tabs links (groß), Rest rechts */}
+        <div className="px-4 pt-2 pb-0 flex items-end justify-between gap-4">
+          {/* Tabs – groß, links, als Tab-Reiter */}
+          <div className="flex items-end gap-0.5">
+            {(["board", "map"] as [string, string][]).map(([t, label]) => {
+              const tVal = t as "board" | "map";
+              return (
+                <button key={t}
+                  className={`px-8 py-2.5 text-base font-bold border-t border-l border-r rounded-t-xl transition-colors ${
+                    tab === tVal
+                      ? "bg-gray-950 border-gray-600 text-white"
+                      : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-850"
+                  }`}
+                  onClick={() => setTab(tVal)}>
+                  {tVal === "board" ? "Board" : "Karte"}
+                </button>
+              );
+            })}
+            <span className="text-xs text-gray-600 font-mono ml-3 mb-1">KlabsCom · {roomId}</span>
             <HelpTip text={"Board-Übersicht:\nSpieler per Drag & Drop verschieben\n★★ = Leader, ★ = Stellvertreter\n✓/☠ = Lebend/Tot (jeder kann sich selbst)\nFarbe + Icon pro Gruppe einstellbar\n↻ Spieler = Spielerliste neu laden"} />
-            <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+
+          {/* Rechts: Alive-Button (breit, mittig), Name, Rolle, Profil, Reload, Logout */}
+          <div className="flex items-center gap-3 flex-wrap pb-1.5">
+            {/* Lebt/Tot – breiter Button, zentriert */}
             <span className="flex items-center gap-1">
-              <button className={`px-4 py-2 rounded-lg border font-bold text-sm transition-colors ${
-                selfAlive === "dead" ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800" : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
-              }`} onClick={() => toggleAlive(currentPlayer.id)}>
+              <button
+                className={`px-10 py-2 rounded-lg border-2 font-bold text-base transition-colors min-w-[140px] text-center ${
+                  selfAlive === "dead"
+                    ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
+                    : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
+                }`}
+                onClick={() => toggleAlive(currentPlayer.id)}>
                 {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
               </button>
               <HelpTip text="Eigenen Status umschalten. Tote Spieler erscheinen durchgestrichen und ausgegraut auf dem Board." />
             </span>
             <span className="text-sm text-gray-300">{currentPlayer.name}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
-            {(["board", "map"] as const).map((t) => (
-              <button key={t}
-                className={`rounded-lg px-3 py-1.5 text-sm border transition-colors ${tab === t ? "bg-white text-black border-white" : "bg-transparent text-gray-300 border-gray-600 hover:border-gray-400"}`}
-                onClick={() => setTab(t)}>
-                {t === "board" ? "Board" : "Karte"}
-              </button>
-            ))}
+            <button title="Eigenes Profil bearbeiten" onClick={() => setShowProfile(true)}
+              className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
+              ✎ Profil
+            </button>
             <button
               title="Spielerliste aus Sheet neu laden"
               onClick={refreshPlayers}
@@ -3134,13 +3351,30 @@ function BoardApp() {
               <span className={refreshingPlayers ? "animate-spin inline-block" : ""}>↻</span>
               Spieler
             </button>
-            <button className="text-xs text-gray-500 hover:text-gray-300"
-              onClick={handleLogout}>
+            <button className="text-xs text-gray-500 hover:text-gray-300" onClick={handleLogout}>
               Logout
             </button>
           </div>
         </div>
       </header>
+
+      {/* Profil-Modal */}
+      {showProfile && currentPlayer && (
+        <ProfileModal
+          player={currentPlayer}
+          roomId={roomId}
+          isNew={isNewPlayer}
+          onSave={(updated) => {
+            setCurrentPlayer(updated);
+            setIsNewPlayer(false);
+            setShowProfile(false);
+            cachedPlayersByRoom[roomId] = (cachedPlayersByRoom[roomId] ?? []).map(
+              (p) => p.id === updated.id ? updated : p
+            );
+          }}
+          onClose={() => { if (!isNewPlayer) setShowProfile(false); }}
+        />
+      )}
 
       {/* Toast – neue Spieler gefunden */}
       {playerToast && (
