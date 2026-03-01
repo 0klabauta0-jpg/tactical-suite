@@ -2579,6 +2579,8 @@ function BoardApp() {
   const [maps, setMaps] = useState<MapEntry[]>(DEFAULT_MAPS);
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
+  const [showProfile, setShowProfile] = useState(false);
+  const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   const [notesText, setNotesText] = useState("");
@@ -3304,10 +3306,9 @@ function BoardApp() {
         <div className="px-4 pt-2 pb-0 flex items-end justify-between gap-4">
           {/* Tabs – groß, links, als Tab-Reiter */}
           <div className="flex items-end gap-0.5">
-            {(["board", "map"] as [string, string][]).map(([t, label]) => {
-              const tVal = t as "board" | "map";
+            {(["board", "map"] as ("board" | "map")[]).map((tVal) => {
               return (
-                <button key={t}
+                <button key={tVal}
                   className={`px-8 py-2.5 text-base font-bold border-t border-l border-r rounded-t-xl transition-colors ${
                     tab === tVal
                       ? "bg-gray-950 border-gray-600 text-white"
@@ -3319,7 +3320,7 @@ function BoardApp() {
               );
             })}
             <span className="text-xs text-gray-600 font-mono ml-3 mb-1">KlabsCom · {roomId}</span>
-            <HelpTip text={"Board-Übersicht:\nSpieler per Drag & Drop verschieben\n★★ = Leader, ★ = Stellvertreter\n✓/☠ = Lebend/Tot (jeder kann sich selbst)\nFarbe + Icon pro Gruppe einstellbar\n↻ Spieler = Spielerliste neu laden"} />
+            <HelpTip text={"Board-Übersicht:\\nSpieler per Drag & Drop verschieben\\n★★ = Leader, ★ = Stellvertreter\\n✓/☠ = Lebend/Tot (jeder kann sich selbst)\\nFarbe + Icon pro Gruppe einstellbar\\n↻ Spieler = Spielerliste neu laden"} />
           </div>
 
           {/* Rechts: Alive-Button (breit, mittig), Name, Rolle, Profil, Reload, Logout */}
