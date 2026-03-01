@@ -7,7 +7,7 @@ import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@d
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
-import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -62,15 +62,24 @@ const roomConfigCache: Record<string, RoomConfig> = {};
 async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
   if (roomConfigCache[roomId]) return roomConfigCache[roomId];
   try {
-    const { getDoc, doc: fsDoc } = await import("firebase/firestore");
-    const snap = await getDoc(fsDoc(db, "rooms", roomId, "config", "main"));
-    if (!snap.exists()) return null;
+    const snap = await getDoc(doc(db, "rooms", roomId, "config", "main"));
+    if (!snap.exists()) {
+      console.warn("[TCS] loadRoomConfig: Dokument nicht gefunden:", `rooms/${roomId}/config/main`);
+      return null;
+    }
     const d = snap.data() as any;
-    if (!d.sheetUrl || !d.password) return null;
+    console.log("[TCS] loadRoomConfig: Felder geladen:", Object.keys(d));
+    if (!d.sheetUrl || !d.password) {
+      console.warn("[TCS] loadRoomConfig: sheetUrl oder password fehlt", d);
+      return null;
+    }
     const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password };
     roomConfigCache[roomId] = cfg;
     return cfg;
-  } catch { return null; }
+  } catch (e) {
+    console.error("[TCS] loadRoomConfig Fehler:", e);
+    return null;
+  }
 }
 
 function invalidateRoomConfig(roomId: string) {
