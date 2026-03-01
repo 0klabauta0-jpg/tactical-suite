@@ -510,7 +510,14 @@ function GroupIconDisplay({ icon, size = 20 }: { icon?: string; size?: number })
 // GROUP ICON PICKER
 // ─────────────────────────────────────────────────────────────
 
-const EMOJI_ICONS = ["🔴","🟠","🟡","🟢","🔵","🟣","⚫","⚪","🎯","🛡","⚔","🚁","✈","🚀","🚗","🚢","🦅","🐺","🐻","🦁","👊","💪","🔱","⚡","💥","🔥","❄","☠","🎖","🏴","🚩","⭐","🌟"];
+// Gruppen-Icons: militärisch & Star Citizen thematisch, in Kategorien
+const EMOJI_ICON_GROUPS: { label: string; icons: string[] }[] = [
+  { label: "Einheit / Rolle",  icons: ["⚔","🗡","🛡","🪖","🎖","🏅","☠","💀","🔱","⚜","👁","🧠","🦾","🤺","🫡","🧬","⚙","🔧","🛠","🔩"] },
+  { label: "Raumschiff / Fahrzeug", icons: ["🚀","🛸","🛩","🛰","🌌","🪐","🌠","💫","🌑","🌒","🔭","🛟","⚓","🛡","🗺","📍"] },
+  { label: "Waffe / Kampf",   icons: ["💥","⚡","🔥","❄","☢","☣","💣","🎯","🧨","🪤","🔫","🗡","⚔","🪃","🏹","💢","🌀","🌪","🔆","⚠"] },
+  { label: "Signal / Status", icons: ["🚩","🏴","📡","📻","⛔","🚫","❗","❓","🔒","🔓","🕵","📌","🗂","📂","🔐","🛑","✴","☢","☣","⚠"] },
+  { label: "Sci-Fi / Lore",   icons: ["🌐","🔮","💠","🧿","🪬","🏛","⚗","🧪","🪙","💎","🧲","🔋","💡","🖥","🕹","🤖","👾","🎮","🃏","🎴"] },
+];
 
 function GroupIconPicker({ current, onChange }: { current?: string; onChange: (icon: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -564,11 +571,18 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
           </div>
 
           {tab === "emoji" && (
-            <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
-              {EMOJI_ICONS.map((em) => (
-                <button key={em}
-                  className={`w-8 h-8 rounded text-lg hover:bg-gray-700 flex items-center justify-center border transition-colors ${current === em ? "border-blue-400 bg-blue-900" : "border-transparent"}`}
-                  onClick={() => { onChange(em); setOpen(false); }}>{em}</button>
+            <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-0.5">
+              {EMOJI_ICON_GROUPS.map((grp) => (
+                <div key={grp.label}>
+                  <div className="text-gray-600 text-[10px] font-semibold uppercase tracking-wide mb-0.5 px-0.5">{grp.label}</div>
+                  <div className="flex flex-wrap gap-0.5">
+                    {grp.icons.map((em) => (
+                      <button key={em}
+                        className={`w-8 h-8 rounded text-lg hover:bg-gray-700 flex items-center justify-center border transition-colors ${current === em ? "border-blue-400 bg-blue-900" : "border-transparent"}`}
+                        onClick={() => { onChange(em); setOpen(false); }}>{em}</button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
