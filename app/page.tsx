@@ -34,7 +34,7 @@ type Player = {
 };
 
 // color: optional hex ohne #, z.B. "e63946"
-type Group = { id: string; label: string; isSpawn?: boolean; color?: string };
+type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string };
 type BoardState = { groups: Group[]; columns: Record<string, string[]> };
 
 // GroupRoles: leader/deputy pro Gruppe
@@ -106,7 +106,7 @@ const DEFAULT_PANEL_LAYOUT: PanelLayout = {
 };
 
 // ─── DRAWING TYPES ───────────────────────────────────────────
-type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text" | "marker_infantry" | "marker_ground" | "marker_air";
+type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text" | "move" | "marker_infantry" | "marker_ground" | "marker_air";
 
 type DrawStroke = {
   id: string; type: "path";
@@ -492,12 +492,120 @@ function InlineEdit({ value, onSave, className = "" }: { value: string; onSave: 
   );
 }
 
+
+// Small helper: renders a group icon (emoji or URL image)
+function GroupIconDisplay({ icon, size = 20 }: { icon?: string; size?: number }) {
+  if (!icon) return null;
+  const isUrl = icon.startsWith("http") || icon.startsWith("/");
+  if (isUrl) {
+    const src = icon.includes("drive.google.com/file/d/")
+      ? icon.replace(/drive\.google\.com\/file\/d\/([^/]+).*/, "drive.google.com/uc?export=view&id=$1")
+      : icon;
+    return <img src={src} style={{ width: size, height: size, borderRadius: 3, objectFit: "cover", flexShrink: 0 }} alt="icon" />;
+  }
+  return <span style={{ fontSize: size * 0.85, lineHeight: 1, flexShrink: 0 }}>{icon}</span>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// GROUP ICON PICKER
+// ─────────────────────────────────────────────────────────────
+
+const EMOJI_ICONS = ["🔴","🟠","🟡","🟢","🔵","🟣","⚫","⚪","🎯","🛡","⚔","🚁","✈","🚀","🚗","🚢","🦅","🐺","🐻","🦁","👊","💪","🔱","⚡","💥","🔥","❄","☠","🎖","🏴","🚩","⭐","🌟"];
+
+function GroupIconPicker({ current, onChange }: { current?: string; onChange: (icon: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const [tab, setTab] = useState<"emoji" | "url">("emoji");
+
+  function handleUrl() {
+    const v = urlInput.trim();
+    if (v) { onChange(v); setOpen(false); setUrlInput(""); }
+  }
+
+  function handleClear(e: React.MouseEvent) {
+    e.stopPropagation();
+    onChange("");
+    setOpen(false);
+  }
+
+  // Preview: emoji or img
+  const isUrl = current && (current.startsWith("http") || current.startsWith("/"));
+  const preview = current
+    ? isUrl
+      ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(e) => { (e.target as any).style.display="none"; }} />
+      : <span className="text-base leading-none">{current}</span>
+    : <span className="text-gray-500 text-xs">🖼</span>;
+
+  return (
+    <div className="relative">
+      <button
+        className="w-6 h-6 rounded border border-gray-600 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-white bg-gray-800"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        title="Gruppen-Icon wählen"
+      >{preview}</button>
+
+      {open && (
+        <div
+          className="absolute top-8 left-0 z-50 bg-gray-900 border border-gray-600 rounded-xl p-2 shadow-2xl"
+          style={{ width: 240 }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {/* Tabs */}
+          <div className="flex gap-1 mb-2">
+            <button onClick={() => setTab("emoji")}
+              className={`flex-1 text-xs py-1 rounded border transition-colors ${tab === "emoji" ? "bg-blue-700 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400"}`}>
+              Emoji
+            </button>
+            <button onClick={() => setTab("url")}
+              className={`flex-1 text-xs py-1 rounded border transition-colors ${tab === "url" ? "bg-blue-700 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400"}`}>
+              URL / Drive
+            </button>
+          </div>
+
+          {tab === "emoji" && (
+            <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
+              {EMOJI_ICONS.map((em) => (
+                <button key={em}
+                  className={`w-8 h-8 rounded text-lg hover:bg-gray-700 flex items-center justify-center border transition-colors ${current === em ? "border-blue-400 bg-blue-900" : "border-transparent"}`}
+                  onClick={() => { onChange(em); setOpen(false); }}>{em}</button>
+              ))}
+            </div>
+          )}
+
+          {tab === "url" && (
+            <div className="flex flex-col gap-2">
+              <input
+                className="w-full bg-gray-800 border border-gray-600 text-white text-xs rounded px-2 py-1.5 focus:outline-none focus:border-blue-500"
+                placeholder="https://... oder Drive-URL"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") handleUrl(); }}
+              />
+              <button className="w-full bg-blue-700 hover:bg-blue-600 text-white text-xs rounded py-1.5 font-medium" onClick={handleUrl}>
+                Übernehmen
+              </button>
+              <p className="text-gray-600 text-xs text-center">Google Drive: drive.google.com/file/d/…</p>
+            </div>
+          )}
+
+          {current && (
+            <button className="w-full mt-2 text-xs text-red-400 hover:text-red-300 border-t border-gray-700 pt-1.5" onClick={handleClear}>
+              ✕ Icon entfernen
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // DRAGGABLE PANEL
 // ─────────────────────────────────────────────────────────────
 
-function DraggablePanel({ title, x, y, onMove, canDrag, children, minWidth = 220 }: {
-  title: string; x: number; y: number; onMove: (x: number, y: number) => void;
+function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 220 }: {
+  title: string; tooltip?: string; x: number; y: number; onMove: (x: number, y: number) => void;
   canDrag: boolean; children: React.ReactNode; minWidth?: number;
 }) {
   const dragging = useRef(false);
@@ -521,6 +629,7 @@ function DraggablePanel({ title, x, y, onMove, canDrag, children, minWidth = 220
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
         {canDrag && <span className="text-gray-500 text-xs">⠿</span>}
         <span className="text-xs font-semibold text-gray-300">{title}</span>
+        {tooltip && <HelpTip text={tooltip} />}
       </div>
       <div className="p-3">{children}</div>
     </div>
@@ -724,7 +833,7 @@ function ColorPicker({ current, onChange }: { current?: string; onChange: (hex: 
 const COLUMN_HEIGHT = 760;
 
 function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId, canWrite, onToggleAlive,
-  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetColor,
+  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetColor, onSetIcon,
 }: {
   group: Group; ids: string[]; playersById: Record<string, Player>; aliveState: PlayerAliveState;
   currentPlayerId: string; canWrite: boolean;
@@ -733,6 +842,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   spawnGroups: Group[]; spawnState: PlayerSpawnState; onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetColor: (id: string, hex: string) => void;
+  onSetIcon: (id: string, icon: string) => void;
 }) {
   // useSortable für Spalten-Drag (Gruppe verschieben) + useDroppable für Spieler-Drop
   const {
@@ -780,6 +890,14 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
             {/* Farbwähler */}
             {canWrite && !isSystem && (
               <ColorPicker current={group.color} onChange={(hex) => onSetColor(group.id, hex)} />
+            )}
+            {/* Icon-Wähler */}
+            {canWrite && !isSystem && (
+              <GroupIconPicker current={group.icon} onChange={(icon) => onSetIcon(group.id, icon)} />
+            )}
+            {/* Icon-Anzeige (readonly) */}
+            {!canWrite && !isSystem && group.icon && (
+              <GroupIconDisplay icon={group.icon} size={18} />
             )}
             {canWrite && !isSystem
               ? <InlineEdit value={group.label} onSave={(v) => onRename(group.id, v)} className="flex-1" />
@@ -1025,6 +1143,32 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
 // ─────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────
+// HELP TIP – kleines ? mit Hover-Tooltip
+// ─────────────────────────────────────────────────────────────
+
+function HelpTip({ text }: { text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="relative inline-flex items-center">
+      <button
+        className="w-4 h-4 rounded-full bg-gray-700 border border-gray-500 text-gray-400 text-xs flex items-center justify-center hover:bg-gray-600 hover:text-white flex-shrink-0 leading-none"
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        title={text}
+      >?</button>
+      {show && (
+        <span
+          className="absolute z-[999] left-6 top-0 bg-gray-900 border border-gray-500 text-gray-200 text-xs rounded-lg px-3 py-2 shadow-2xl pointer-events-none"
+          style={{ minWidth: 180, maxWidth: 280, whiteSpace: "pre-wrap", lineHeight: 1.5 }}
+        >{text}</span>
+      )}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // ZOOM PANEL  (verschiebbares Fenster für Zoom-Steuerung)
 // ─────────────────────────────────────────────────────────────
 
@@ -1065,6 +1209,7 @@ function DrawingToolbar({
     { id: "line",             icon: "╱",  title: "Linie ziehen" },
     { id: "eraser",           icon: "⌫",  title: "Radiergummi" },
     { id: "text",             icon: "T",   title: "Text einfügen" },
+    { id: "move",             icon: "✥",  title: "Element verschieben" },
   ];
   const markerTools: { id: DrawTool; icon: string; title: string; label: string }[] = [
     { id: "marker_infantry", icon: "✖", title: "Feindmarker: Infantrie", label: "Inf" },
@@ -1085,6 +1230,14 @@ function DrawingToolbar({
       >
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
+        <HelpTip text={"Zeichenwerkzeuge:
+↖ Zeiger – normal bewegen
+✏ Freihand – Linie zeichnen
+╱ Linie – gerade Linie
+⌫ Radierer – Element löschen
+T Text – Text platzieren
+✥ Verschieben – Element anfassen & ziehen
+Feindmarker: auf Karte klicken, werden alle 30s blasser und verschwinden automatisch"} />
       </div>
 
       <div className="flex flex-col gap-2 p-2">
@@ -1177,13 +1330,14 @@ function DrawingToolbar({
 
 function DrawingLayer({
   elements, tool, color, strokeWidth, canDraw, showGrid,
-  onAddElement, onRemoveElement,
+  onAddElement, onRemoveElement, onUpdateElement,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
   canDraw: boolean; showGrid: boolean;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
+  onUpdateElement: (el: DrawElement) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1192,6 +1346,10 @@ function DrawingLayer({
   const lineStart = useRef<{ x: number; y: number } | null>(null);
   const lastPos = useRef<{ x: number; y: number } | null>(null);
 
+  // Move tool state
+  const [movingEl, setMovingEl] = useState<{ el: DrawElement; startRel: { x: number; y: number }; origEl: DrawElement } | null>(null);
+  const movingPreviewRef = useRef<DrawElement | null>(null);
+
   // Text
   const [textInput, setTextInput] = useState<{ x: number; y: number; px: number; py: number } | null>(null);
   const [textVal, setTextVal] = useState("");
@@ -1199,7 +1357,7 @@ function DrawingLayer({
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
   // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth]);
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl]);
 
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
@@ -1256,8 +1414,10 @@ function DrawingLayer({
       }
     }
 
-    // Gespeicherte Elemente rendern
-    for (const el of elements) {
+    // Gespeicherte Elemente rendern (mit optionalem Move-Preview)
+    const preview = movingPreviewRef.current;
+    const renderEls = preview ? elements.map((el) => el.id === preview.id ? preview : el) : elements;
+    for (const el of renderEls) {
       if (el.type === "path" && el.d) {
         // Parse SVG-Path-Punkte aus "M x,y L x,y L x,y ..."
         const pts = el.d.replace(/M|L/g, "").trim().split(" ").map((s: string) => {
@@ -1413,6 +1573,15 @@ function DrawingLayer({
       return;
     }
 
+    if (tool === "move") {
+      const found = hitTest(p);
+      if (found) {
+        setMovingEl({ el: found, startRel: p, origEl: found });
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
+
     if (tool === "eraser") {
       eraseAt(p); return;
     }
@@ -1436,6 +1605,26 @@ function DrawingLayer({
     lastPos.current = p;
 
     if (tool === "eraser" && e.buttons === 1) { eraseAt(p); return; }
+
+    if (tool === "move" && movingEl && e.buttons === 1) {
+      const dx = p.x - movingEl.startRel.x;
+      const dy = p.y - movingEl.startRel.y;
+      const moved = applyDelta(movingEl.origEl, dx, dy);
+      setMovingEl((prev) => prev ? { ...prev, el: moved } : null);
+      // Live preview: temporarily replace in elements for redraw
+      const previewEls = elements.map((el) => el.id === moved.id ? moved : el);
+      // Trigger redraw via direct call (we pass the preview elements)
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          // Minimal redraw with preview – we store moved el in a ref for render
+          movingPreviewRef.current = moved;
+          redraw();
+        }
+      }
+      return;
+    }
 
     if (tool === "pen" && drawing.current) {
       pathPoints.current.push(p);
@@ -1473,6 +1662,60 @@ function DrawingLayer({
       redraw();
       return;
     }
+
+    if (tool === "move" && movingEl) {
+      const dx = (p?.x ?? movingEl.startRel.x) - movingEl.startRel.x;
+      const dy = (p?.y ?? movingEl.startRel.y) - movingEl.startRel.y;
+      const committed = applyDelta(movingEl.origEl, dx, dy);
+      movingPreviewRef.current = null;
+      setMovingEl(null);
+      onUpdateElement(committed);
+      return;
+    }
+  }
+
+  // Hit-test: find element at relative coords p
+  function hitTest(p: { x: number; y: number }): DrawElement | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const W = canvas.width, H = canvas.height;
+    const hitPx = Math.max(16, 12);
+    const tx = hitPx / W, ty = hitPx / H;
+
+    // Reverse iterate so topmost (last drawn) wins
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i];
+      if (el.type === "marker") {
+        if (Math.abs(el.x - p.x) < tx * 1.5 && Math.abs(el.y - p.y) < ty * 1.5) return el;
+      } else if (el.type === "text") {
+        const estW = (el.text.length * el.size * 0.6) / W;
+        const estH = (el.size * 1.4) / H;
+        if (p.x >= el.x - tx && p.x <= el.x + estW + tx && p.y >= el.y - ty && p.y <= el.y + estH + ty) return el;
+      } else if (el.type === "line") {
+        const mx = (el.x1 + el.x2) / 2, my = (el.y1 + el.y2) / 2;
+        if (Math.abs(mx - p.x) < tx * 2 && Math.abs(my - p.y) < ty * 2) return el;
+      } else if (el.type === "path") {
+        const pts = el.d.replace(/M|L/g, "").trim().split(" ").map((s: string) => {
+          const [x, y] = s.split(",").map(Number); return { x, y };
+        });
+        if (pts.some((pt: { x: number; y: number }) => Math.abs(pt.x - p.x) < tx && Math.abs(pt.y - p.y) < ty)) return el;
+      }
+    }
+    return null;
+  }
+
+  // Apply a delta (dx, dy) to an element, returning a moved copy
+  function applyDelta(el: DrawElement, dx: number, dy: number): DrawElement {
+    if (el.type === "marker" || el.type === "text") return { ...el, x: el.x + dx, y: el.y + dy };
+    if (el.type === "line") return { ...el, x1: el.x1 + dx, y1: el.y1 + dy, x2: el.x2 + dx, y2: el.y2 + dy };
+    if (el.type === "path") {
+      // Shift all path points
+      const newD = el.d.replace(/(-?\d+\.?\d*),(-?\d+\.?\d*)/g, (_: string, sx: string, sy: string) => {
+        return `${(parseFloat(sx) + dx).toFixed(4)},${(parseFloat(sy) + dy).toFixed(4)}`;
+      });
+      return { ...el, d: newD };
+    }
+    return el;
   }
 
   function eraseAt(p: { x: number; y: number }) {
@@ -1526,6 +1769,7 @@ function DrawingLayer({
     tool === "pointer" ? "default" :
     tool === "eraser"  ? "cell" :
     tool === "text"    ? "text" :
+    tool === "move"    ? (movingEl ? "grabbing" : "grab") :
     tool.startsWith("marker_") ? "crosshair" : "crosshair";
 
   return (
@@ -1632,7 +1876,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
-  drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement,
+  drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
   showGrid, onScaleChange,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
@@ -1651,6 +1895,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   canDraw: boolean;
   onAddDrawElement: (el: DrawElement) => void;
   onRemoveDrawElement: (id: string) => void;
+  onUpdateDrawElement: (el: DrawElement) => void;
   showGrid: boolean;
   onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
@@ -1802,6 +2047,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           showGrid={showGrid}
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
+          onUpdateElement={onUpdateDrawElement}
         />
 
         {/* Gitternetz – skaliert mit Karte mit, Buchstaben-Spalten + Zahlen-Zeilen */}
@@ -1915,6 +2161,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                     borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
                     color: tokenDrag === tokenKey ? "black" : "white",
                   }}>
+                  {g?.icon && <GroupIconDisplay icon={g.icon} size={16} />}
                   <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
                   <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
                 </div>
@@ -2357,6 +2604,16 @@ function BoardApp() {
     });
   }
 
+  function setGroupIcon(id: string, icon: string) {
+    if (!canWrite) return;
+    setBoard((prev) => {
+      const next = { ...prev, groups: prev.groups.map((g) => g.id === id ? { ...g, icon: icon || undefined } : g) };
+      boardRef.current = next;
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+      return next;
+    });
+  }
+
   function movePanelNav(x: number, y: number) {
     if (!canWrite) return;
     const next = { ...panelLayout, nav: { x, y } };
@@ -2663,6 +2920,17 @@ function BoardApp() {
     });
   }
 
+  function updateDrawElement(el: DrawElement) {
+    if (!canWrite) return;
+    setDrawings((prev) => {
+      const mapEls = (prev[activeMapId] ?? []).map((e) => e.id === el.id ? el : e);
+      const next = { ...prev, [activeMapId]: mapEls };
+      drawingsRef.current = next;
+      pushDrawings(next);
+      return next;
+    });
+  }
+
   function undoDrawElement() {
     if (!canWrite) return;
     setDrawings((prev) => {
@@ -2830,14 +3098,23 @@ function BoardApp() {
         <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="font-bold text-white">KlabsCom</span>
+            <HelpTip text={"Board-Übersicht:
+Spieler per Drag & Drop verschieben
+★★ = Leader, ★ = Stellvertreter
+✓/☠ = Lebend/Tot (jeder kann sich selbst)
+Farbe + Icon pro Gruppe einstellbar
+↻ Spieler = Spielerliste neu laden"} />
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <button className={`px-4 py-2 rounded-lg border font-bold text-sm transition-colors ${
-              selfAlive === "dead" ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800" : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
-            }`} onClick={() => toggleAlive(currentPlayer.id)}>
-              {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
-            </button>
+            <span className="flex items-center gap-1">
+              <button className={`px-4 py-2 rounded-lg border font-bold text-sm transition-colors ${
+                selfAlive === "dead" ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800" : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
+              }`} onClick={() => toggleAlive(currentPlayer.id)}>
+                {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
+              </button>
+              <HelpTip text="Eigenen Status umschalten. Tote Spieler erscheinen durchgestrichen und ausgegraut auf dem Board." />
+            </span>
             <span className="text-sm text-gray-300">{currentPlayer.name}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
             {(["board", "map"] as const).map((t) => (
@@ -2931,7 +3208,7 @@ function BoardApp() {
                       canWrite={canWrite} onToggleAlive={toggleAlive} onRename={renameGroup}
                       onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
                       spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
-                      groupRoles={groupRoles} onSetRole={setGroupRole} onSetColor={setGroupColor} />
+                      groupRoles={groupRoles} onSetRole={setGroupRole} onSetColor={setGroupColor} onSetIcon={setGroupIcon} />
                   ))}
                   {canWrite && (
                     <div className="flex flex-col gap-2">
@@ -2983,6 +3260,7 @@ function BoardApp() {
                 canDraw={canWrite}
                 onAddDrawElement={addDrawElement}
                 onRemoveDrawElement={removeDrawElement}
+                onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
                 onScaleChange={handleScaleChange}
               />
@@ -3019,14 +3297,14 @@ function BoardApp() {
             />
           )}
 
-          <DraggablePanel title="Karten" canDrag={canWrite} x={panelLayout.nav.x} y={panelLayout.nav.y} onMove={movePanelNav}>
+          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={canWrite} x={panelLayout.nav.x} y={panelLayout.nav.y} onMove={movePanelNav}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage} />
           </DraggablePanel>
 
           {canWrite && (
-            <DraggablePanel title="Token setzen" canDrag={canWrite} x={panelLayout.placer.x} y={panelLayout.placer.y} onMove={movePanelPlacer}>
+            <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={canWrite} x={panelLayout.placer.x} y={panelLayout.placer.y} onMove={movePanelPlacer}>
               <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
