@@ -1230,14 +1230,7 @@ function DrawingToolbar({
       >
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
-        <HelpTip text={"Zeichenwerkzeuge:
-↖ Zeiger – normal bewegen
-✏ Freihand – Linie zeichnen
-╱ Linie – gerade Linie
-⌫ Radierer – Element löschen
-T Text – Text platzieren
-✥ Verschieben – Element anfassen & ziehen
-Feindmarker: auf Karte klicken, werden alle 30s blasser und verschwinden automatisch"} />
+        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: Klicken, alle 30s blasser, löscht sich automatisch"} />
       </div>
 
       <div className="flex flex-col gap-2 p-2">
@@ -3098,12 +3091,7 @@ function BoardApp() {
         <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="font-bold text-white">KlabsCom</span>
-            <HelpTip text={"Board-Übersicht:
-Spieler per Drag & Drop verschieben
-★★ = Leader, ★ = Stellvertreter
-✓/☠ = Lebend/Tot (jeder kann sich selbst)
-Farbe + Icon pro Gruppe einstellbar
-↻ Spieler = Spielerliste neu laden"} />
+            <HelpTip text={"Board-Übersicht:\nSpieler per Drag & Drop verschieben\n★★ = Leader, ★ = Stellvertreter\n✓/☠ = Lebend/Tot (jeder kann sich selbst)\nFarbe + Icon pro Gruppe einstellbar\n↻ Spieler = Spielerliste neu laden"} />
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -3350,4 +3338,3 @@ export default function Page() {
     </Suspense>
   );
 }
-//
