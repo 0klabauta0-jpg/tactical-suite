@@ -523,27 +523,43 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
     if (adminKey !== SETUP_KEY) { setMsg({ text: "Falscher Setup-Schlüssel.", ok: false }); return; }
     setSaving(true); setMsg(null);
     try {
+      // ── Schritt 1: Firebase Auth ZUERST (sonst Firestore-Writes geblockt) ──
+      // Wir nutzen den Setup-Schlüssel als temporäres Auth-Passwort für einen
+      // "setup-user" der nur zum Schreiben der Config berechtigt ist.
+      // Falls adminHandle angegeben: direkt als Admin einloggen/anlegen.
+      const authHandle = adminHandle.trim() || "__setup__";
+      const email = nameToFakeEmail(authHandle, roomId);
+      const pw = password.trim() + "_tcs_internal";
+      try {
+        await signInWithEmailAndPassword(auth, email, pw);
+      } catch (authErr: any) {
+        if (authErr?.code === "auth/user-not-found" || authErr?.code === "auth/invalid-credential") {
+          await createUserWithEmailAndPassword(auth, email, pw);
+        } else { throw authErr; }
+      }
+
+      // ── Schritt 2: Firestore schreiben (jetzt authentifiziert) ───────────
       await setDoc(doc(db, "rooms", roomId, "config", "main"), {
         sheetUrl: sheetUrl.trim(),
         password: password.trim(),
         updatedAt: serverTimestamp(),
       });
-      // Admin-Handle als admin in playerOverrides anlegen (falls angegeben)
+
+      // Admin-Handle in playerOverrides als admin eintragen
       if (adminHandle.trim()) {
         const adminId = stableId(adminHandle.trim());
-        const adminPlayer: Partial<Player> & { lastSheetAppRole?: string } = {
-          name: adminHandle.trim(),
-          appRole: "admin",
-          lastSheetAppRole: "admin",
-        };
         const existing = await loadFirestoreOverrides(roomId);
-        const next = { ...existing, [adminId]: { ...(existing[adminId] ?? {}), ...adminPlayer } };
+        const next = {
+          ...existing,
+          [adminId]: { ...(existing[adminId] ?? {}), name: adminHandle.trim(), appRole: "admin", lastSheetAppRole: "admin" },
+        };
         firestoreOverrideCache[roomId] = next;
         await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
       }
+
       invalidateRoomConfig(roomId);
 
-      // Auto-Login: wenn Handle angegeben → direkt einloggen als Admin
+      // ── Schritt 3: Auto-Login wenn Handle angegeben ───────────────────────
       if (onDone && adminHandle.trim()) {
         const adminId = stableId(adminHandle.trim());
         const adminPlayer: Player = {
@@ -552,16 +568,6 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
           ampel: "", appRole: "admin", homeLocation: "",
         };
         const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim() };
-        // Firebase Auth für den Admin
-        const email = nameToFakeEmail(adminHandle.trim(), roomId);
-        const pw = password.trim() + "_tcs_internal";
-        try {
-          await signInWithEmailAndPassword(auth, email, pw);
-        } catch (authErr: any) {
-          if (authErr?.code === "auth/user-not-found" || authErr?.code === "auth/invalid-credential") {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          }
-        }
         onDone(adminPlayer, cfg);
         return;
       }
