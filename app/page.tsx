@@ -619,6 +619,8 @@ function RoomSetupView({ roomId }: { roomId: string }) {
 function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password, setPassword] = useState("");
+  const [setupKey, setSetupKey] = useState("");
+  const [showSetupKey, setShowSetupKey] = useState(false);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -680,6 +682,19 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
           await createUserWithEmailAndPassword(auth, email, pw);
         } else { throw signInErr; }
       }
+      // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
+      const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
+      if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
+        const existing = await loadFirestoreOverrides(roomId);
+        const next = {
+          ...existing,
+          [found.id]: { ...(existing[found.id] ?? {}), appRole: "admin", lastSheetAppRole: "admin" },
+        };
+        firestoreOverrideCache[roomId] = next;
+        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+        found = { ...found, appRole: "admin" };
+      }
+
       onLogin(found, cfg);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
@@ -725,9 +740,27 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
               placeholder="z.B. KRT_Bjoern" value={playerName} onChange={(e) => setPlayerName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
             <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
-            <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500"
+            <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
               type="password" placeholder="Team-Passwort" value={password} onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+
+            {/* Setup-Schlüssel – optional, für Admin-Rechte */}
+            <button
+              className="text-xs text-gray-600 hover:text-gray-400 mb-2 flex items-center gap-1"
+              onClick={() => setShowSetupKey(v => !v)}>
+              {showSetupKey ? "▾" : "▸"} Setup-Schlüssel (optional, für Admin)
+            </button>
+            {showSetupKey && (
+              <input
+                className="w-full bg-gray-800 border border-orange-700 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-orange-500"
+                type="password"
+                placeholder="Setup-Schlüssel → Admin-Rechte"
+                value={setupKey}
+                onChange={(e) => setSetupKey(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+              />
+            )}
+
             <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               onClick={handleLogin} disabled={loading || !playerName || !password}>
               {loading ? "Einloggen..." : "Einloggen"}
