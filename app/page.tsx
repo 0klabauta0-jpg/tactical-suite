@@ -54,8 +54,28 @@ type PanelLayout = {
   zoom:    { x: number; y: number };
 };
 
-const SHEET_CSV_URL = process.env.NEXT_PUBLIC_SHEET_CSV_URL ?? "";
-const TEAM_PASSWORD = process.env.NEXT_PUBLIC_TEAM_PASSWORD ?? "";
+// RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
+// NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
+type RoomConfig = { sheetUrl: string; password: string };
+const roomConfigCache: Record<string, RoomConfig> = {};
+
+async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
+  if (roomConfigCache[roomId]) return roomConfigCache[roomId];
+  try {
+    const { getDoc, doc: fsDoc } = await import("firebase/firestore");
+    const snap = await getDoc(fsDoc(db, "rooms", roomId, "config", "main"));
+    if (!snap.exists()) return null;
+    const d = snap.data() as any;
+    if (!d.sheetUrl || !d.password) return null;
+    const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password };
+    roomConfigCache[roomId] = cfg;
+    return cfg;
+  } catch { return null; }
+}
+
+function invalidateRoomConfig(roomId: string) {
+  delete roomConfigCache[roomId];
+}
 
 const DEFAULT_GROUPS: Group[] = [
   { id: "unassigned", label: "Unzugeteilt" },
@@ -130,6 +150,15 @@ function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
+// Stabiler deterministischer Hash aus einem String (djb2).
+// Wird als Fallback-PlayerId verwendet solange das Sheet kein PlayerId-Feld hat.
+// Gleicher Name → immer gleiche ID, unabhängig von Zeilenreihenfolge.
+function stableId(str: string): string {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return "p_" + (h >>> 0).toString(36);
+}
+
 function safeBoard(data: any, groups: Group[]): BoardState {
   const cols: Record<string, string[]> = {};
   for (const g of groups) cols[g.id] = Array.isArray(data?.columns?.[g.id]) ? data.columns[g.id] : [];
@@ -159,35 +188,47 @@ function groupColor(g: Group): string {
 // CSV
 // ─────────────────────────────────────────────────────────────
 
-let cachedPlayers: Player[] = [];
-async function loadPlayers(force = false): Promise<Player[]> {
-  if (!force && cachedPlayers.length > 0) return cachedPlayers;
-  if (!SHEET_CSV_URL.startsWith("http")) return cachedPlayers;
+// Pro-Room Player-Cache (roomId → Player[])
+const cachedPlayersByRoom: Record<string, Player[]> = {};
+
+function parsePlayersFromCsv(text: string): Player[] {
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  const list: Player[] = [];
+  (parsed.data as any[]).forEach((row) => {
+    const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
+    if (!name) return;
+    // PlayerId: Pflichtfeld aus Sheet, Fallback: stabiler Hash des Namens
+    const explicitId = row["PlayerId"]?.toString().trim();
+    const id = explicitId || stableId(name);
+    list.push({
+      id,
+      name,
+      area:         (row["Bereich"]    ?? "").toString(),
+      role:         (row["Rolle"]      ?? "").toString(),
+      squadron:     (row["Staffel"]    ?? "").toString(),
+      status:       (row["Status"]     ?? "").toString(),
+      ampel:        (row["Ampel"]      ?? "").toString(),
+      appRole:      (row["AppRolle"]   ?? "viewer").toString().toLowerCase(),
+      homeLocation: (row["Heimatort"]  ?? "").toString(),
+    });
+  });
+  return list;
+}
+
+async function loadPlayersForRoom(roomId: string, force = false): Promise<Player[]> {
+  if (!force && cachedPlayersByRoom[roomId]?.length) return cachedPlayersByRoom[roomId];
+  const cfg = await loadRoomConfig(roomId);
+  if (!cfg?.sheetUrl.startsWith("http")) return cachedPlayersByRoom[roomId] ?? [];
   try {
-    const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes("?") ? "&" : "?") + "_t=" + Date.now();
+    const sep = cfg.sheetUrl.includes("?") ? "&" : "?";
+    const url = cfg.sheetUrl + sep + "_t=" + Date.now();
     const res = await fetch(url, { cache: "no-store" });
     const text = await res.text();
-    const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-    const list: Player[] = [];
-    (parsed.data as any[]).forEach((row, idx) => {
-      const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
-      if (!name) return;
-      list.push({
-        id: row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
-        name,
-        area: (row["Bereich"] ?? "").toString(),
-        role: (row["Rolle"] ?? "").toString(),
-        squadron: (row["Staffel"] ?? "").toString(),
-        status: (row["Status"] ?? "").toString(),
-        ampel: (row["Ampel"] ?? "").toString(),
-        appRole: (row["AppRolle"] ?? "viewer").toString().toLowerCase(),
-        homeLocation: (row["Heimatort"] ?? "").toString(),
-      });
-    });
-    cachedPlayers = list;
+    const list = parsePlayersFromCsv(text);
+    cachedPlayersByRoom[roomId] = list;
     return list;
   } catch {
-    return cachedPlayers; // Netzfehler → alten Cache behalten
+    return cachedPlayersByRoom[roomId] ?? []; // Netzfehler → alten Cache behalten
   }
 }
 
@@ -195,26 +236,144 @@ async function loadPlayers(force = false): Promise<Player[]> {
 // LOGIN
 // ─────────────────────────────────────────────────────────────
 
-function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
+// ─────────────────────────────────────────────────────────────
+// ROOM SETUP (Admin-Konfiguration via ?setup=1)
+// ─────────────────────────────────────────────────────────────
+
+function RoomSetupView({ roomId }: { roomId: string }) {
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [password, setPassword] = useState("");
+  const [adminKey, setAdminKey] = useState("");
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Bestehende Config laden
+  useEffect(() => {
+    loadRoomConfig(roomId).then((cfg) => {
+      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); }
+      setLoading(false);
+    });
+  }, [roomId]);
+
+  async function handleSave() {
+    if (!sheetUrl.startsWith("http")) { setMsg({ text: "sheetUrl muss mit http(s):// beginnen.", ok: false }); return; }
+    if (!password.trim()) { setMsg({ text: "Passwort darf nicht leer sein.", ok: false }); return; }
+    // Einfacher Admin-Schlüssel: verhindert dass jeder die Config überschreibt.
+    // Wer den Key kennt, darf konfigurieren. Key wird NICHT in Firestore gespeichert.
+    const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
+    if (adminKey !== SETUP_KEY) { setMsg({ text: "Falscher Setup-Schlüssel.", ok: false }); return; }
+    setSaving(true); setMsg(null);
+    try {
+      await setDoc(doc(db, "rooms", roomId, "config", "main"), {
+        sheetUrl: sheetUrl.trim(),
+        password: password.trim(),
+        updatedAt: serverTimestamp(),
+      });
+      invalidateRoomConfig(roomId);
+      setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
+    } catch (e: any) {
+      setMsg({ text: `Fehler: ${e?.message ?? "Unbekannt"}`, ok: false });
+    }
+    setSaving(false);
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-md shadow-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-orange-400 text-lg">⚙</span>
+          <h1 className="font-bold text-xl text-white">Room Setup</h1>
+        </div>
+        <p className="text-gray-400 text-sm mb-6">
+          Raum: <span className="text-blue-400 font-mono">{roomId}</span>
+        </p>
+
+        {loading ? (
+          <div className="text-gray-500 text-sm text-center py-4">Lade…</div>
+        ) : (
+          <>
+            <label className="text-gray-300 text-xs mb-1 block">Google Sheet CSV-URL</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500 font-mono"
+              placeholder="https://docs.google.com/spreadsheets/d/…/export?format=csv"
+              value={sheetUrl}
+              onChange={(e) => setSheetUrl(e.target.value)}
+            />
+            <p className="text-gray-600 text-xs mb-4">
+              Sheet → Datei → Im Web veröffentlichen → CSV → URL kopieren
+            </p>
+
+            <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500"
+              placeholder="Passwort für alle Spieler dieses Raums"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+
+            <label className="text-gray-300 text-xs mb-1 block">Setup-Schlüssel</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
+              type="password"
+              placeholder="Nur für Admins"
+              value={adminKey}
+              onChange={(e) => setAdminKey(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSave()}
+            />
+
+            <button
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+              onClick={handleSave}
+              disabled={saving}>
+              {saving ? "Speichere…" : "Konfiguration speichern"}
+            </button>
+
+            {msg && (
+              <p className={`mt-3 text-xs ${msg.ok ? "text-green-400" : "text-red-400"}`}>{msg.text}</p>
+            )}
+
+            <div className="mt-5 border-t border-gray-800 pt-4 text-gray-600 text-xs space-y-1">
+              <p>Firestore-Pfad: <span className="font-mono text-gray-500">rooms/{roomId}/config/main</span></p>
+              <p>Felder: <span className="font-mono text-gray-500">sheetUrl</span>, <span className="font-mono text-gray-500">password</span></p>
+              <p>Nach dem Speichern → Seite ohne <span className="font-mono">?setup=1</span> aufrufen.</p>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  // Konfigurationsstatus: null = unbekannt, false = nicht vorhanden, RoomConfig = geladen
+  const [roomCfg, setRoomCfg] = useState<RoomConfig | null | false>(null);
+
+  // Beim Mount: RoomConfig laden um zu wissen ob der Raum existiert
+  useEffect(() => {
+    loadRoomConfig(roomId).then((cfg) => setRoomCfg(cfg ?? false));
+  }, [roomId]);
 
   async function handleLogin() {
     setMsg(""); setLoading(true);
     try {
-      if (password !== TEAM_PASSWORD) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
-      const players = await loadPlayers();
+      // Config nochmal laden (könnte inzwischen gesetzt worden sein)
+      const cfg = await loadRoomConfig(roomId);
+      if (!cfg) { setMsg("Dieser Raum hat noch keine Konfiguration. Ein Admin muss sheetUrl und Passwort in Firestore hinterlegen."); setLoading(false); return; }
+      if (password !== cfg.password) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
+      const players = await loadPlayersForRoom(roomId);
       const found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
       if (!found) { setMsg(`"${playerName}" nicht gefunden. Spielerliste ggf. neu laden.`); setLoading(false); return; }
       const email = nameToFakeEmail(found.name);
-      const pw = TEAM_PASSWORD + "_tcs_internal";
+      const pw = cfg.password + "_tcs_internal";
       try { await signInWithEmailAndPassword(auth, email, pw); }
       catch { await createUserWithEmailAndPassword(auth, email, pw); }
-      onLogin(found);
+      onLogin(found, cfg);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
   }
@@ -222,9 +381,13 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
   async function handleRefresh() {
     setRefreshing(true); setMsg("");
     try {
-      const list = await loadPlayers(true);
+      // Config-Cache leeren damit eventuelle Änderungen ankommen
+      invalidateRoomConfig(roomId);
+      const cfg = await loadRoomConfig(roomId);
+      setRoomCfg(cfg ?? false);
+      if (!cfg) { setMsg("Keine Raum-Konfiguration gefunden."); setRefreshing(false); return; }
+      const list = await loadPlayersForRoom(roomId, true);
       const now = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-      setLastRefresh(now);
       setMsg(`✓ ${list.length} Spieler geladen (${now})`);
     } catch {
       setMsg("Fehler beim Laden der Spielerliste.");
@@ -232,32 +395,47 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
     setRefreshing(false);
   }
 
+  const cfgMissing = roomCfg === false;
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
         <h1 className="font-bold text-xl mb-1 text-white">Tactical Command Suite</h1>
-        <p className="text-gray-400 text-sm mb-6">Pyro Operations Board</p>
-        <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
-        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
-          placeholder="z.B. KRT_Bjoern" value={playerName} onChange={(e) => setPlayerName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-        <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
-        <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-5 text-sm focus:outline-none focus:border-blue-500"
-          type="password" placeholder="Team-Passwort" value={password} onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
-          onClick={handleLogin} disabled={loading || !playerName || !password}>
-          {loading ? "Einloggen..." : "Einloggen"}
-        </button>
+        <p className="text-gray-400 text-sm mb-1">Raum: <span className="text-blue-400 font-mono">{roomId}</span></p>
+
+        {cfgMissing && (
+          <div className="mb-4 mt-3 bg-yellow-950 border border-yellow-700 rounded-lg px-3 py-2 text-yellow-300 text-xs">
+            ⚠ Dieser Raum hat noch keine Konfiguration.<br />
+            Ein Admin muss unter <span className="font-mono">rooms/{roomId}/config/main</span> die Felder <span className="font-mono">sheetUrl</span> und <span className="font-mono">password</span> in Firestore anlegen.
+          </div>
+        )}
+
+        {!cfgMissing && (
+          <>
+            <p className="text-gray-500 text-xs mb-5 mt-1">Spielername exakt wie im Sheet.</p>
+            <label className="text-gray-300 text-xs mb-1 block">Spielername</label>
+            <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
+              placeholder="z.B. KRT_Bjoern" value={playerName} onChange={(e) => setPlayerName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+            <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
+            <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500"
+              type="password" placeholder="Team-Passwort" value={password} onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+            <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+              onClick={handleLogin} disabled={loading || !playerName || !password}>
+              {loading ? "Einloggen..." : "Einloggen"}
+            </button>
+          </>
+        )}
+
         <button className="w-full mt-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-gray-300 rounded-lg py-2 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           onClick={handleRefresh} disabled={refreshing || loading}>
           <span className={refreshing ? "animate-spin inline-block" : ""}>↻</span>
-          {refreshing ? "Lade Spielerliste…" : "Spielerliste neu laden"}
+          {refreshing ? "Lade…" : cfgMissing ? "Konfiguration prüfen" : "Spielerliste neu laden"}
         </button>
         {msg && (
           <p className={`mt-3 text-xs ${msg.startsWith("✓") ? "text-green-400" : "text-red-400"}`}>{msg}</p>
         )}
-        <p className="mt-4 text-gray-600 text-xs text-center">Spielername exakt wie im Sheet.</p>
       </div>
     </div>
   );
@@ -1805,12 +1983,19 @@ function AutoMap({ label, mapId }: { label: string; mapId: string }) {
 function BoardApp() {
   const searchParams = useSearchParams();
   const roomId = searchParams.get("room") || "default";
+  const isSetup = searchParams.get("setup") === "1";
+
+  // Setup-Mode: Admin-Konfigurationsscreen
+  if (isSetup) return <RoomSetupView roomId={roomId} />;
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [role, setRole] = useState<Role>("viewer");
+  // roomConfig: geladen beim Login, cached für die Session
+  const [roomCfg, setRoomCfg] = useState<RoomConfig | null>(null);
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [board, setBoard] = useState<BoardState>({
@@ -1914,29 +2099,30 @@ function BoardApp() {
     });
   }
 
-  // Initialer Load
+  // Initialer Load (nur wenn bereits eingeloggt & config bekannt)
   useEffect(() => {
-    loadPlayers().then((list) => applyPlayerList(list, false));
-  }, []);
+    if (!roomCfg) return;
+    loadPlayersForRoom(roomId).then((list) => applyPlayerList(list, false));
+  }, [roomId, roomCfg]);
 
   // Auto-Polling alle 5 Minuten
   useEffect(() => {
+    if (!roomCfg) return;
     const id = setInterval(async () => {
-      const list = await loadPlayers(true);
+      const list = await loadPlayersForRoom(roomId, true);
       applyPlayerList(list, true);
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [roomId, roomCfg]);
 
   // Manueller Refresh (für den Button im Board-Header)
   async function refreshPlayers() {
     if (refreshingPlayers) return;
     setRefreshingPlayers(true);
     try {
-      const list = await loadPlayers(true);
+      const list = await loadPlayersForRoom(roomId, true);
       applyPlayerList(list, true);
       if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
-        // Kein neuer Spieler – kurz trotzdem Feedback geben
         setPlayerToast(`✓ ${list.length} Spieler – keine neuen`);
         if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
         playerToastTimer.current = setTimeout(() => setPlayerToast(null), 3000);
@@ -1953,6 +2139,15 @@ function BoardApp() {
     setRole(sheetRole);
     setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
+
+  // Beim Logout: Room-Config-Cache invalidieren damit nächster Login frisch lädt
+  function handleLogout() {
+    invalidateRoomConfig(roomId);
+    setCurrentPlayer(null);
+    setRoomCfg(null);
+    setRole("viewer");
+    signOut(auth);
+  }
 
   // snapshot
   useEffect(() => {
@@ -2474,7 +2669,9 @@ function BoardApp() {
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
   );
-  if (!user || !currentPlayer) return <LoginView onLogin={(p) => setCurrentPlayer(p)} />;
+  if (!user || !currentPlayer) return (
+    <LoginView roomId={roomId} onLogin={(p, cfg) => { setCurrentPlayer(p); setRoomCfg(cfg); }} />
+  );
 
   const roleBadge =
     role === "admin" ? "bg-red-900 text-red-300 border border-red-700" :
@@ -2513,7 +2710,7 @@ function BoardApp() {
               Spieler
             </button>
             <button className="text-xs text-gray-500 hover:text-gray-300"
-              onClick={() => { setCurrentPlayer(null); setRole("viewer"); signOut(auth); }}>
+              onClick={handleLogout}>
               Logout
             </button>
           </div>
