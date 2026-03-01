@@ -257,12 +257,20 @@ function mergeWithOverrides(players: Player[], overrides: Record<string, Partial
 // Beim Login: Sheet-AppRolle in Firestore als lastSheetAppRole tracken
 async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: string, overrides: Record<string, any>) {
   const ov = overrides[playerId] ?? {};
-  if (ov.lastSheetAppRole === sheetAppRole) return; // keine Änderung
-  // Sheet-AppRolle hat sich geändert → direkt in Firestore schreiben (kein Partial<Player>-Constraint)
+  // Kein Update nötig wenn Sheet-Wert unverändert
+  if (ov.lastSheetAppRole === sheetAppRole) return;
+  // Prüfen ob appRole manuell (in Firestore) geändert wurde:
+  // Wenn ov.appRole existiert UND sich von lastSheetAppRole unterscheidet → manueller Override → nicht überschreiben
+  const hasManualOverride = ov.appRole !== undefined && ov.appRole !== ov.lastSheetAppRole;
   const existing = await loadFirestoreOverrides(roomId);
   const next = {
     ...existing,
-    [playerId]: { ...(existing[playerId] ?? {}), lastSheetAppRole: sheetAppRole, appRole: sheetAppRole },
+    [playerId]: {
+      ...(existing[playerId] ?? {}),
+      lastSheetAppRole: sheetAppRole,
+      // appRole nur updaten wenn kein manueller Override vorhanden und Sheet sich geändert hat
+      ...(hasManualOverride ? {} : { appRole: sheetAppRole }),
+    },
   };
   firestoreOverrideCache[roomId] = next;
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
@@ -655,24 +663,20 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
         found = freshPlayers.find((p) => p.id === found!.id) ?? found;
       }
 
-      // ── Self-Registration: Spieler nicht im Sheet → neu anlegen ──────────
+      // ── Self-Registration: Player-Objekt vorbereiten (noch nicht speichern) ──
+      let newPlayerData: Player | null = null;
       if (!found) {
         const newId = stableId(playerName.trim());
-        const newPlayer: Player = {
+        newPlayerData = {
           id: newId,
           name: playerName.trim(),
           area: "", role: "", squadron: "", status: "",
           ampel: "", appRole: "viewer", homeLocation: "",
         };
-        // Spieler als Firestore-Override speichern (Sheet bleibt unberührt)
-        await saveFirestoreOverride(roomId, newId, newPlayer);
-        // Lokalen Cache aktualisieren
-        cachedPlayersByRoom[roomId] = [...sheetPlayers, newPlayer];
-        firestoreOverrideCache[roomId] = { ...overrides, [newId]: newPlayer };
-        found = newPlayer;
+        found = newPlayerData;
       }
 
-      // Firebase Auth
+      // Firebase Auth ZUERST – danach erst Firestore schreiben
       const email = nameToFakeEmail(found.name, roomId);
       const pw = cfg.password + "_tcs_internal";
       try {
@@ -681,6 +685,13 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
         if (signInErr?.code === "auth/user-not-found" || signInErr?.code === "auth/invalid-credential") {
           await createUserWithEmailAndPassword(auth, email, pw);
         } else { throw signInErr; }
+      }
+
+      // Jetzt eingeloggt → Firestore-Write für neue Spieler erlaubt
+      if (newPlayerData) {
+        await saveFirestoreOverride(roomId, newPlayerData.id, newPlayerData);
+        cachedPlayersByRoom[roomId] = [...sheetPlayers, newPlayerData];
+        firestoreOverrideCache[roomId] = { ...overrides, [newPlayerData.id]: newPlayerData };
       }
       // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
       const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
