@@ -65,20 +65,20 @@ async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
   try {
     const snap = await getDoc(doc(db, "rooms", roomId, "config", "main"));
     if (!snap.exists()) {
-      console.warn("[TCS] loadRoomConfig: Dokument nicht gefunden:", `rooms/${roomId}/config/main`);
+      console.warn("[KlabsCom] loadRoomConfig: Dokument nicht gefunden:", `rooms/${roomId}/config/main`);
       return null;
     }
     const d = snap.data() as any;
-    console.log("[TCS] loadRoomConfig: Felder geladen:", Object.keys(d));
+    console.log("[KlabsCom] loadRoomConfig: Felder geladen:", Object.keys(d));
     if (!d.sheetUrl || !d.password) {
-      console.warn("[TCS] loadRoomConfig: sheetUrl oder password fehlt", d);
+      console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt", d);
       return null;
     }
     const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password };
     roomConfigCache[roomId] = cfg;
     return cfg;
   } catch (e) {
-    console.error("[TCS] loadRoomConfig Fehler:", e);
+    console.error("[KlabsCom] loadRoomConfig Fehler:", e);
     return null;
   }
 }
@@ -106,7 +106,7 @@ const DEFAULT_PANEL_LAYOUT: PanelLayout = {
 };
 
 // ─── DRAWING TYPES ───────────────────────────────────────────
-type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text";
+type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text" | "marker_infantry" | "marker_ground" | "marker_air";
 
 type DrawStroke = {
   id: string; type: "path";
@@ -122,7 +122,15 @@ type DrawText = {
   x: number; y: number;
   text: string; color: string; size: number;
 };
-type DrawElement = DrawStroke | DrawText | DrawLine;
+type DrawMarker = {
+  id: string; type: "marker";
+  kind: "infantry" | "ground" | "air";
+  x: number; y: number;
+  color: string;
+  opacity: number;      // 0.0 – 1.0, startet bei 1.0
+  createdAt: number;    // Date.now()
+};
+type DrawElement = DrawStroke | DrawText | DrawLine | DrawMarker;
 type DrawingsMap = Record<string, DrawElement[]>;
 
 const DRAW_COLORS = ["#ffffff","#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#a855f7","#000000"];
@@ -420,7 +428,7 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
-        <h1 className="font-bold text-xl mb-1 text-white">Tactical Command Suite</h1>
+        <h1 className="font-bold text-xl mb-1 text-white">KlabsCom</h1>
         <p className="text-gray-400 text-sm mb-1">Raum: <span className="text-blue-400 font-mono">{roomId}</span></p>
 
         {cfgMissing && (
@@ -1052,11 +1060,16 @@ function DrawingToolbar({
   function onHandleUp() { dragging.current = false; }
 
   const tools: { id: DrawTool; icon: string; title: string }[] = [
-    { id: "pointer", icon: "↖", title: "Zeiger (normal)" },
-    { id: "pen",     icon: "✏", title: "Freihand zeichnen" },
-    { id: "line",    icon: "╱", title: "Linie ziehen" },
-    { id: "eraser",  icon: "⌫", title: "Radiergummi" },
-    { id: "text",    icon: "T",  title: "Text einfügen" },
+    { id: "pointer",          icon: "↖",  title: "Zeiger (normal)" },
+    { id: "pen",              icon: "✏",  title: "Freihand zeichnen" },
+    { id: "line",             icon: "╱",  title: "Linie ziehen" },
+    { id: "eraser",           icon: "⌫",  title: "Radiergummi" },
+    { id: "text",             icon: "T",   title: "Text einfügen" },
+  ];
+  const markerTools: { id: DrawTool; icon: string; title: string; label: string }[] = [
+    { id: "marker_infantry", icon: "✖", title: "Feindmarker: Infantrie", label: "Inf" },
+    { id: "marker_ground",   icon: "▼", title: "Feindmarker: Bodenfahrzeug", label: "Bdn" },
+    { id: "marker_air",      icon: "✈", title: "Feindmarker: Luft", label: "Luft" },
   ];
 
   return (
@@ -1115,6 +1128,26 @@ function DrawingToolbar({
               <div className="rounded-full bg-white" style={{ width: Math.min(w * 1.5, 20), height: Math.min(w * 1.5, 20) }} />
             </button>
           ))}
+        </div>
+
+        {/* Feindmarker */}
+        <div className="border-t border-gray-700 pt-1.5">
+          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (fade)</div>
+          <div className="flex gap-1">
+            {markerTools.map((m) => (
+              <button key={m.id} title={m.title} onClick={() => setTool(m.id)}
+                className={`flex-1 h-8 rounded-lg text-xs font-bold border transition-colors ${
+                  tool === m.id
+                    ? "bg-red-700 border-red-500 text-white"
+                    : "bg-gray-800 border-gray-600 text-red-400 hover:bg-gray-700"
+                }`}>
+                <div className="flex flex-col items-center leading-tight">
+                  <span>{m.icon}</span>
+                  <span className="text-[9px]">{m.label}</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Undo / Clear */}
@@ -1252,6 +1285,59 @@ function DrawingLayer({
         ctx.fillStyle = el.color;
         ctx.textBaseline = "hanging";
         ctx.fillText(el.text, el.x * W, el.y * H);
+      } else if (el.type === "marker") {
+        const cx = el.x * W;
+        const cy = el.y * H;
+        const sz = 18; // Radius des Symbols in px
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity));
+        ctx.strokeStyle = el.color;
+        ctx.fillStyle = el.color;
+        ctx.lineWidth = 2.5;
+        ctx.font = `bold ${sz}px Arial`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        if (el.kind === "infantry") {
+          // Infantrie: Kreuz (✖) in Kreis
+          ctx.beginPath();
+          ctx.arc(cx, cy, sz * 0.85, 0, Math.PI * 2);
+          ctx.stroke();
+          // X innen
+          const d = sz * 0.5;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d); ctx.stroke();
+        } else if (el.kind === "ground") {
+          // Boden: gefülltes Dreieck (▼)
+          ctx.beginPath();
+          ctx.moveTo(cx, cy + sz * 0.9);
+          ctx.lineTo(cx - sz * 0.85, cy - sz * 0.55);
+          ctx.lineTo(cx + sz * 0.85, cy - sz * 0.55);
+          ctx.closePath();
+          ctx.stroke();
+          // Querbalken oben
+          ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy - sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy - sz * 0.55); ctx.stroke();
+        } else if (el.kind === "air") {
+          // Luft: Dreieck (^) mit Flügeln (NATO-Luftzeichen)
+          ctx.beginPath();
+          ctx.moveTo(cx, cy - sz * 0.9);
+          ctx.lineTo(cx - sz * 0.85, cy + sz * 0.55);
+          ctx.lineTo(cx + sz * 0.85, cy + sz * 0.55);
+          ctx.closePath();
+          ctx.stroke();
+          // Querbalken unten
+          ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy + sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy + sz * 0.55); ctx.stroke();
+        }
+
+        // Label unten
+        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity)) * 0.9;
+        ctx.font = `bold 9px Arial`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        const label = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
+        ctx.fillText(label, cx, cy + sz + 2);
+        ctx.restore();
       }
     }
 
@@ -1318,6 +1404,12 @@ function DrawingLayer({
       const rect = getImgRect()!;
       setTextInput({ x: p.x, y: p.y, px: e.clientX - rect.left, py: e.clientY - rect.top });
       setTextVal("");
+      return;
+    }
+
+    if (tool === "marker_infantry" || tool === "marker_ground" || tool === "marker_air") {
+      const kind = tool.replace("marker_", "") as "infantry" | "ground" | "air";
+      onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: Date.now() });
       return;
     }
 
@@ -1410,6 +1502,13 @@ function DrawingLayer({
         const inX = p.x >= el.x - tx && p.x <= el.x + estW + tx;
         const inY = p.y >= el.y - ty && p.y <= el.y + estH + ty;
         if (inX && inY) { onRemoveElement(el.id); return; }
+      } else if (el.type === "marker") {
+        // Marker: Klick-Radius ~24px um Mittelpunkt
+        const mThreshPx = Math.max(24, threshPx);
+        const mtx = mThreshPx / W, mty = mThreshPx / H;
+        if (Math.abs(el.x - p.x) < mtx && Math.abs(el.y - p.y) < mty) {
+          onRemoveElement(el.id); return;
+        }
       }
     }
   }
@@ -1426,7 +1525,8 @@ function DrawingLayer({
   const cursorStyle =
     tool === "pointer" ? "default" :
     tool === "eraser"  ? "cell" :
-    tool === "text"    ? "text" : "crosshair";
+    tool === "text"    ? "text" :
+    tool.startsWith("marker_") ? "crosshair" : "crosshair";
 
   return (
     <div
@@ -2515,6 +2615,32 @@ function BoardApp() {
     }, 300);
   }
 
+  // ── Feindmarker Fade-Timer: alle 30s → opacity -0.2, bei ≤ 0 → löschen ──
+  useEffect(() => {
+    const id = setInterval(() => {
+      setDrawings((prev) => {
+        let changed = false;
+        const next: DrawingsMap = {};
+        for (const [mapId, els] of Object.entries(prev)) {
+          const updated = els
+            .map((el) => {
+              if (el.type !== "marker") return el;
+              const newOpacity = Math.round((el.opacity - 0.2) * 100) / 100;
+              changed = true;
+              return { ...el, opacity: newOpacity };
+            })
+            .filter((el) => el.type !== "marker" || (el as any).opacity > 0);
+          next[mapId] = updated;
+        }
+        if (!changed) return prev;
+        drawingsRef.current = next;
+        pushDrawings(next);
+        return next;
+      });
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [roomId]);
+
   function addDrawElement(el: DrawElement) {
     if (!canWrite) return;
     setDrawings((prev) => {
@@ -2703,7 +2829,7 @@ function BoardApp() {
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
         <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
-            <span className="font-bold text-white">TCS</span>
+            <span className="font-bold text-white">KlabsCom</span>
             <span className="text-xs text-gray-500 font-mono">Room: {roomId}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
