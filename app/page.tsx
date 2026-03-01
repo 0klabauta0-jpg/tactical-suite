@@ -374,9 +374,21 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
       try {
   await signInWithEmailAndPassword(auth, email, pw);
 } catch (err: any) {
-  if (err.code === "auth/user-not-found") {
-    await createUserWithEmailAndPassword(auth, email, pw);
-  } else if (err.code === "auth/wrong-password") {
+  const code = err?.code ?? "";
+
+  // Firebase versteckt user-not-found oft als invalid-credential
+  if (code === "auth/user-not-found" || code === "auth/invalid-credential") {
+    try {
+      await createUserWithEmailAndPassword(auth, email, pw);
+    } catch (e2: any) {
+      // Falls zwischenzeitlich doch erstellt wurde
+      if (e2?.code === "auth/email-already-in-use") {
+        await signInWithEmailAndPassword(auth, email, pw);
+      } else {
+        throw e2;
+      }
+    }
+  } else if (code === "auth/wrong-password") {
     throw new Error("Falsches Passwort.");
   } else {
     throw err;
