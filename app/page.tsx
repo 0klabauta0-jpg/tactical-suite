@@ -497,7 +497,7 @@ function ProfileModal({
 // ROOM SETUP (Admin-Konfiguration via ?setup=1)
 // ─────────────────────────────────────────────────────────────
 
-function RoomSetupView({ roomId }: { roomId: string }) {
+function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player, cfg: RoomConfig) => void }) {
   const [sheetUrl, setSheetUrl] = useState("");
   const [password, setPassword] = useState("");
   const [adminKey, setAdminKey] = useState("");
@@ -542,6 +542,30 @@ function RoomSetupView({ roomId }: { roomId: string }) {
         await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
       }
       invalidateRoomConfig(roomId);
+
+      // Auto-Login: wenn Handle angegeben → direkt einloggen als Admin
+      if (onDone && adminHandle.trim()) {
+        const adminId = stableId(adminHandle.trim());
+        const adminPlayer: Player = {
+          id: adminId, name: adminHandle.trim(),
+          area: "", role: "", squadron: "", status: "",
+          ampel: "", appRole: "admin", homeLocation: "",
+        };
+        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim() };
+        // Firebase Auth für den Admin
+        const email = nameToFakeEmail(adminHandle.trim(), roomId);
+        const pw = password.trim() + "_tcs_internal";
+        try {
+          await signInWithEmailAndPassword(auth, email, pw);
+        } catch (authErr: any) {
+          if (authErr?.code === "auth/user-not-found" || authErr?.code === "auth/invalid-credential") {
+            await createUserWithEmailAndPassword(auth, email, pw);
+          }
+        }
+        onDone(adminPlayer, cfg);
+        return;
+      }
+
       setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
     } catch (e: any) {
       setMsg({ text: `Fehler: ${e?.message ?? "Unbekannt"}`, ok: false });
@@ -2682,9 +2706,6 @@ function BoardApp() {
   const roomId = searchParams.get("room") || "default";
   const isSetup = searchParams.get("setup") === "1";
 
-  // Setup-Mode: Admin-Konfigurationsscreen
-  if (isSetup) return <RoomSetupView roomId={roomId} />;
-
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const [user, setUser] = useState<User | null>(null);
@@ -3415,13 +3436,19 @@ function BoardApp() {
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
   );
-  if (!user || !currentPlayer) return (
+  if (!user || !currentPlayer) return isSetup ? (
+    <RoomSetupView roomId={roomId} onDone={(p, cfg) => {
+      setCurrentPlayer(p);
+      setRoomCfg(cfg);
+      window.history.replaceState({}, "", "?room=" + roomId);
+    }} />
+  ) : (
     <LoginView roomId={roomId} onLogin={(p, cfg) => {
-        const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
-        setIsNewPlayer(!hasProfile);
-        setShowProfile(!hasProfile);
-        setCurrentPlayer(p); setRoomCfg(cfg);
-      }} />
+      const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
+      setIsNewPlayer(!hasProfile);
+      setShowProfile(!hasProfile);
+      setCurrentPlayer(p); setRoomCfg(cfg);
+    }} />
   );
 
   const roleBadge =
