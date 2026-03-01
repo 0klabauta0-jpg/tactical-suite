@@ -371,8 +371,17 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
       if (!found) { setMsg(`"${playerName}" nicht gefunden. Spielerliste ggf. neu laden.`); setLoading(false); return; }
       const email = nameToFakeEmail(found.name);
       const pw = cfg.password + "_tcs_internal";
-      try { await signInWithEmailAndPassword(auth, email, pw); }
-      catch { await createUserWithEmailAndPassword(auth, email, pw); }
+      try {
+  await signInWithEmailAndPassword(auth, email, pw);
+} catch (err: any) {
+  if (err.code === "auth/user-not-found") {
+    await createUserWithEmailAndPassword(auth, email, pw);
+  } else if (err.code === "auth/wrong-password") {
+    throw new Error("Falsches Passwort.");
+  } else {
+    throw err;
+  }
+}
       onLogin(found, cfg);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
