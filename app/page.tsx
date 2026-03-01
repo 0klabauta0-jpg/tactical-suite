@@ -233,13 +233,39 @@ async function saveFirestoreOverride(roomId: string, playerId: string, fields: P
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
-// Spieler aus Sheet mit Firestore-Overrides mergen
-function mergeWithOverrides(players: Player[], overrides: Record<string, Partial<Player>>): Player[] {
+// Spieler aus Sheet mit Firestore-Overrides mergen.
+// Regel für appRole: "zuletzt gesetzte gewinnt"
+// - Firestore speichert "lastSheetAppRole" = der zuletzt vom Sheet gelesene Wert.
+// - Wenn Sheet-AppRolle sich geändert hat (Sheet != lastSheetAppRole) → Sheet gewinnt.
+// - Wenn kein Sheet-Change → Firestore-Override appRole gewinnt (manuell gesetzt).
+function mergeWithOverrides(players: Player[], overrides: Record<string, Partial<Player> & { lastSheetAppRole?: string }>): Player[] {
   return players.map((p) => {
     const ov = overrides[p.id];
     if (!ov) return p;
-    return { ...p, ...ov };
+    // appRole-Speziallogik: Sheet-Change erkennen
+    let resolvedAppRole = ov.appRole ?? p.appRole;
+    const sheetAppRole = p.appRole ?? "viewer";
+    const lastSheetAppRole = ov.lastSheetAppRole;
+    if (lastSheetAppRole !== undefined && sheetAppRole !== lastSheetAppRole) {
+      // Sheet hat sich geändert → Sheet-Wert gewinnt
+      resolvedAppRole = sheetAppRole;
+    }
+    return { ...p, ...ov, appRole: resolvedAppRole };
   });
+}
+
+// Beim Login: Sheet-AppRolle in Firestore als lastSheetAppRole tracken
+async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: string, overrides: Record<string, any>) {
+  const ov = overrides[playerId] ?? {};
+  if (ov.lastSheetAppRole === sheetAppRole) return; // keine Änderung
+  // Sheet-AppRolle hat sich geändert → direkt in Firestore schreiben (kein Partial<Player>-Constraint)
+  const existing = await loadFirestoreOverrides(roomId);
+  const next = {
+    ...existing,
+    [playerId]: { ...(existing[playerId] ?? {}), lastSheetAppRole: sheetAppRole, appRole: sheetAppRole },
+  };
+  firestoreOverrideCache[roomId] = next;
+  await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
 function parsePlayersFromCsv(text: string): Player[] {
@@ -300,6 +326,18 @@ async function loadPlayersForRoom(roomId: string, force = false): Promise<Player
 // ─────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────
+// PROFIL-DROPDOWN-OPTIONEN
+// ─────────────────────────────────────────────────────────────
+const PROFILE_BEREICHE = ["", "Marines", "Air", "Subradar", "Profit", "SAR", "Command", "Ground", "Logistik"];
+const PROFILE_ROLLEN   = ["", "Flight", "Crew", "Drop", "FPS", "FOB"];
+const PROFILE_STAFFELN = ["", "CER", "NEM", "TAL", "TGR", "MBA", "VPR", "HEL", "MIN", "VAN", "PAL", "IRI", "RAG"];
+const PROFILE_ORTE     = [
+  "", "Checkmate (Pyro)", "Orbituary (Pyro)", "RuinStation (Pyro)",
+  "Orison (Crusader)", "Area18 (ArcCorp)", "Lorville (Hurston)",
+  "New Babbage (microTech)", "Levski (Nyx)",
+];
+
+// ─────────────────────────────────────────────────────────────
 // PROFIL-MODAL – Spieler kann eigene Daten bearbeiten (außer AppRolle)
 // ─────────────────────────────────────────────────────────────
 
@@ -339,12 +377,29 @@ function ProfileModal({
     setSaving(false);
   }
 
-  const inputCls = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500";
-  const labelCls = "text-gray-400 text-xs mb-1 block";
+  const selectCls = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none cursor-pointer";
+  const inputCls  = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500";
+  const labelCls  = "text-gray-400 text-xs mb-1 block";
+
+  function Sel({ label, value, onChange, opts, placeholder }: {
+    label: string; value: string; onChange: (v: string) => void;
+    opts: string[]; placeholder?: string;
+  }) {
+    return (
+      <div>
+        <label className={labelCls}>{label}</label>
+        <select className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
+          {opts.map((o) => (
+            <option key={o} value={o}>{o === "" ? (placeholder ?? "----") : o}</option>
+          ))}
+        </select>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black bg-opacity-70 px-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-screen">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-white font-bold text-lg">
@@ -352,7 +407,7 @@ function ProfileModal({
             </h2>
             {isNew && (
               <p className="text-gray-400 text-xs mt-1">
-                Du wurdest automatisch angelegt. Bitte fülle dein Profil aus.
+                Bitte fülle dein Profil aus.
                 <span className="text-yellow-400 ml-1">AppRolle wird vom Admin vergeben.</span>
               </p>
             )}
@@ -363,40 +418,39 @@ function ProfileModal({
         </div>
 
         <div className="flex flex-col gap-3">
+          {/* Name – einziges Freitext-Feld */}
           <div>
             <label className={labelCls}>Handle / Name *</label>
             <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="KRT_Bjoern" />
           </div>
+
+          {/* Bereich + Rolle */}
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Bereich / Org</label>
-              <input className={inputCls} value={area} onChange={(e) => setArea(e.target.value)} placeholder="Logistics" />
-            </div>
-            <div>
-              <label className={labelCls}>Rolle / Job</label>
-              <input className={inputCls} value={role} onChange={(e) => setRole(e.target.value)} placeholder="Pilot" />
-            </div>
+            <Sel label="Bereich" value={area} onChange={setArea}
+              opts={PROFILE_BEREICHE} placeholder="----" />
+            <Sel label="Rolle / Job" value={role} onChange={setRole}
+              opts={PROFILE_ROLLEN} placeholder="----" />
           </div>
+
+          {/* Staffel + Heimatort */}
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Staffel / Squadron</label>
-              <input className={inputCls} value={squadron} onChange={(e) => setSquadron(e.target.value)} placeholder="Alpha" />
-            </div>
-            <div>
-              <label className={labelCls}>Heimatort</label>
-              <input className={inputCls} value={home} onChange={(e) => setHome(e.target.value)} placeholder="Stanton" />
-            </div>
+            <Sel label="Staffel" value={squadron} onChange={setSquadron}
+              opts={PROFILE_STAFFELN} placeholder="----" />
+            <Sel label="Heimatort" value={home} onChange={setHome}
+              opts={PROFILE_ORTE} placeholder="----" />
           </div>
+
+          {/* Ampel */}
           <div>
-            <label className={labelCls}>Verfügbarkeit (Ampel)</label>
+            <label className={labelCls}>Skill in der Hauptpräferenz</label>
             <div className="flex gap-2 mt-1">
               {[
-                { val: "gut",    label: "✓ Gut",    color: "bg-green-700 border-green-500" },
-                { val: "mittel", label: "~ Mittel",  color: "bg-yellow-700 border-yellow-500" },
-                { val: "",       label: "✕ Nicht da",color: "bg-red-800 border-red-600" },
+                { val: "gut",    label: "Gut",     color: "bg-green-700 border-green-500" },
+                { val: "mittel", label: "Mittel",  color: "bg-yellow-700 border-yellow-500" },
+                { val: "",       label: "Gering",  color: "bg-red-800 border-red-600" },
               ].map((opt) => (
                 <button key={opt.val}
-                  className={`flex-1 py-1.5 rounded-lg border text-xs font-medium text-white transition-opacity ${opt.color} ${ampel === opt.val ? "opacity-100 ring-2 ring-white" : "opacity-40 hover:opacity-70"}`}
+                  className={`flex-1 py-2 rounded-lg border text-xs font-medium text-white transition-opacity ${opt.color} ${ampel === opt.val ? "opacity-100 ring-2 ring-white" : "opacity-40 hover:opacity-70"}`}
                   onClick={() => setAmpel(opt.val)}>
                   {opt.label}
                 </button>
@@ -404,7 +458,8 @@ function ProfileModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 mt-1 bg-gray-800 rounded-lg px-3 py-2">
+          {/* AppRolle (readonly) */}
+          <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2">
             <span className="text-gray-500 text-xs">AppRolle:</span>
             <span className="text-gray-300 text-xs font-mono">{player.appRole ?? "viewer"}</span>
             <span className="text-gray-600 text-xs ml-1">(nur Admin kann ändern)</span>
@@ -438,6 +493,7 @@ function RoomSetupView({ roomId }: { roomId: string }) {
   const [sheetUrl, setSheetUrl] = useState("");
   const [password, setPassword] = useState("");
   const [adminKey, setAdminKey] = useState("");
+  const [adminHandle, setAdminHandle] = useState("");
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -464,6 +520,19 @@ function RoomSetupView({ roomId }: { roomId: string }) {
         password: password.trim(),
         updatedAt: serverTimestamp(),
       });
+      // Admin-Handle als admin in playerOverrides anlegen (falls angegeben)
+      if (adminHandle.trim()) {
+        const adminId = stableId(adminHandle.trim());
+        const adminPlayer: Partial<Player> & { lastSheetAppRole?: string } = {
+          name: adminHandle.trim(),
+          appRole: "admin",
+          lastSheetAppRole: "admin",
+        };
+        const existing = await loadFirestoreOverrides(roomId);
+        const next = { ...existing, [adminId]: { ...(existing[adminId] ?? {}), ...adminPlayer } };
+        firestoreOverrideCache[roomId] = next;
+        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+      }
       invalidateRoomConfig(roomId);
       setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
     } catch (e: any) {
@@ -504,6 +573,14 @@ function RoomSetupView({ roomId }: { roomId: string }) {
               placeholder="Passwort für alle Spieler dieses Raums"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+            />
+
+            <label className="text-gray-300 text-xs mb-1 block">Admin-Handle (optional)</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500"
+              placeholder="Dein Handle – wird als Admin angelegt"
+              value={adminHandle}
+              onChange={(e) => setAdminHandle(e.target.value)}
             />
 
             <label className="text-gray-300 text-xs mb-1 block">Setup-Schlüssel</label>
@@ -566,6 +643,15 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
       const players = mergeWithOverrides(sheetPlayers, overrides);
 
       let found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
+
+      // Sheet-AppRolle tracken (für last-set-wins Logik)
+      if (found) {
+        await syncSheetAppRole(roomId, found.id, found.appRole ?? "viewer", overrides);
+        // Overrides neu laden nach eventuellem Update
+        const freshOverrides = await loadFirestoreOverrides(roomId);
+        const freshPlayers = mergeWithOverrides(sheetPlayers, freshOverrides);
+        found = freshPlayers.find((p) => p.id === found!.id) ?? found;
+      }
 
       // ── Self-Registration: Spieler nicht im Sheet → neu anlegen ──────────
       if (!found) {
