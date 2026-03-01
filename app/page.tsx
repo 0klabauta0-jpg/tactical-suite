@@ -159,30 +159,35 @@ function groupColor(g: Group): string {
 // ─────────────────────────────────────────────────────────────
 
 let cachedPlayers: Player[] = [];
-async function loadPlayers(): Promise<Player[]> {
-  if (cachedPlayers.length > 0) return cachedPlayers;
-  if (!SHEET_CSV_URL.startsWith("http")) return [];
-  const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
-  const text = await res.text();
-  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-  const list: Player[] = [];
-  (parsed.data as any[]).forEach((row, idx) => {
-    const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
-    if (!name) return;
-    list.push({
-      id: row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
-      name,
-      area: (row["Bereich"] ?? "").toString(),
-      role: (row["Rolle"] ?? "").toString(),
-      squadron: (row["Staffel"] ?? "").toString(),
-      status: (row["Status"] ?? "").toString(),
-      ampel: (row["Ampel"] ?? "").toString(),
-      appRole: (row["AppRolle"] ?? "viewer").toString().toLowerCase(),
-      homeLocation: (row["Heimatort"] ?? "").toString(),
+async function loadPlayers(force = false): Promise<Player[]> {
+  if (!force && cachedPlayers.length > 0) return cachedPlayers;
+  if (!SHEET_CSV_URL.startsWith("http")) return cachedPlayers;
+  try {
+    const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes("?") ? "&" : "?") + "_t=" + Date.now();
+    const res = await fetch(url, { cache: "no-store" });
+    const text = await res.text();
+    const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+    const list: Player[] = [];
+    (parsed.data as any[]).forEach((row, idx) => {
+      const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
+      if (!name) return;
+      list.push({
+        id: row["PlayerId"]?.toString().trim() || `p_${idx}_${name.replace(/\s+/g, "_")}`,
+        name,
+        area: (row["Bereich"] ?? "").toString(),
+        role: (row["Rolle"] ?? "").toString(),
+        squadron: (row["Staffel"] ?? "").toString(),
+        status: (row["Status"] ?? "").toString(),
+        ampel: (row["Ampel"] ?? "").toString(),
+        appRole: (row["AppRolle"] ?? "viewer").toString().toLowerCase(),
+        homeLocation: (row["Heimatort"] ?? "").toString(),
+      });
     });
-  });
-  cachedPlayers = list;
-  return list;
+    cachedPlayers = list;
+    return list;
+  } catch {
+    return cachedPlayers; // Netzfehler → alten Cache behalten
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -194,6 +199,8 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
 
   async function handleLogin() {
     setMsg(""); setLoading(true);
@@ -201,7 +208,7 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
       if (password !== TEAM_PASSWORD) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
       const players = await loadPlayers();
       const found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
-      if (!found) { setMsg(`"${playerName}" nicht gefunden.`); setLoading(false); return; }
+      if (!found) { setMsg(`"${playerName}" nicht gefunden. Spielerliste ggf. neu laden.`); setLoading(false); return; }
       const email = nameToFakeEmail(found.name);
       const pw = TEAM_PASSWORD + "_tcs_internal";
       try { await signInWithEmailAndPassword(auth, email, pw); }
@@ -209,6 +216,19 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
       onLogin(found);
     } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
     setLoading(false);
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true); setMsg("");
+    try {
+      const list = await loadPlayers(true);
+      const now = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+      setLastRefresh(now);
+      setMsg(`✓ ${list.length} Spieler geladen (${now})`);
+    } catch {
+      setMsg("Fehler beim Laden der Spielerliste.");
+    }
+    setRefreshing(false);
   }
 
   return (
@@ -228,7 +248,14 @@ function LoginView({ onLogin }: { onLogin: (p: Player) => void }) {
           onClick={handleLogin} disabled={loading || !playerName || !password}>
           {loading ? "Einloggen..." : "Einloggen"}
         </button>
-        {msg && <p className="mt-3 text-red-400 text-xs">{msg}</p>}
+        <button className="w-full mt-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-gray-300 rounded-lg py-2 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          onClick={handleRefresh} disabled={refreshing || loading}>
+          <span className={refreshing ? "animate-spin inline-block" : ""}>↻</span>
+          {refreshing ? "Lade Spielerliste…" : "Spielerliste neu laden"}
+        </button>
+        {msg && (
+          <p className={`mt-3 text-xs ${msg.startsWith("✓") ? "text-green-400" : "text-red-400"}`}>{msg}</p>
+        )}
         <p className="mt-4 text-gray-600 text-xs text-center">Spielername exakt wie im Sheet.</p>
       </div>
     </div>
@@ -1688,6 +1715,11 @@ function BoardApp() {
   const drawingsRef = useRef<DrawingsMap>({});
   const [showGrid, setShowGrid] = useState(false);
 
+  // Sheet-Refresh state
+  const [refreshingPlayers, setRefreshingPlayers] = useState(false);
+  const [playerToast, setPlayerToast] = useState<string | null>(null);
+  const playerToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Zoom-Steuerung: Callbacks aus ZoomableMap hochgereicht
   const zoomInRef  = useRef<() => void>(() => {});
   const zoomOutRef = useRef<() => void>(() => {});
@@ -1739,18 +1771,54 @@ function BoardApp() {
     return () => unsub();
   }, []);
 
-  // csv
-  useEffect(() => {
-    loadPlayers().then((list) => {
-      setPlayers(list);
-      setBoard((prev) => {
-        const all = new Set(Object.values(prev.columns).flat());
-        const toAdd = list.map((p) => p.id).filter((id) => !all.has(id));
-        if (!toAdd.length) return prev;
-        return { ...prev, columns: { ...prev.columns, unassigned: [...(prev.columns.unassigned ?? []), ...toAdd] } };
-      });
+  // ── Spieler aus Sheet laden & Board aktualisieren ──────────
+  function applyPlayerList(list: Player[], showToast = false) {
+    setPlayers(list);
+    setBoard((prev) => {
+      const all = new Set(Object.values(prev.columns).flat());
+      const toAdd = list.map((p) => p.id).filter((id) => !all.has(id));
+      if (!toAdd.length) return prev;
+      if (showToast) {
+        const msg = `${toAdd.length} neuer Spieler${toAdd.length > 1 ? "" : ""} → Unzugeteilt`;
+        setPlayerToast(msg);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+      }
+      return { ...prev, columns: { ...prev.columns, unassigned: [...(prev.columns.unassigned ?? []), ...toAdd] } };
     });
+  }
+
+  // Initialer Load
+  useEffect(() => {
+    loadPlayers().then((list) => applyPlayerList(list, false));
   }, []);
+
+  // Auto-Polling alle 5 Minuten
+  useEffect(() => {
+    const id = setInterval(async () => {
+      const list = await loadPlayers(true);
+      applyPlayerList(list, true);
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Manueller Refresh (für den Button im Board-Header)
+  async function refreshPlayers() {
+    if (refreshingPlayers) return;
+    setRefreshingPlayers(true);
+    try {
+      const list = await loadPlayers(true);
+      applyPlayerList(list, true);
+      if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
+        // Kein neuer Spieler – kurz trotzdem Feedback geben
+        setPlayerToast(`✓ ${list.length} Spieler – keine neuen`);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 3000);
+      }
+    } finally {
+      setRefreshingPlayers(false);
+    }
+  }
 
   // role
   useEffect(() => {
@@ -2275,6 +2343,14 @@ function BoardApp() {
                 {t === "board" ? "Board" : "Karte"}
               </button>
             ))}
+            <button
+              title="Spielerliste aus Sheet neu laden"
+              onClick={refreshPlayers}
+              disabled={refreshingPlayers}
+              className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1">
+              <span className={refreshingPlayers ? "animate-spin inline-block" : ""}>↻</span>
+              Spieler
+            </button>
             <button className="text-xs text-gray-500 hover:text-gray-300"
               onClick={() => { setCurrentPlayer(null); setRole("viewer"); signOut(auth); }}>
               Logout
@@ -2282,6 +2358,13 @@ function BoardApp() {
           </div>
         </div>
       </header>
+
+      {/* Toast – neue Spieler gefunden */}
+      {playerToast && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 bg-gray-900 border border-blue-600 text-blue-300 text-sm px-4 py-2 rounded-xl shadow-xl pointer-events-none animate-pulse">
+          👤 {playerToast}
+        </div>
+      )}
 
       {/* BOARD */}
       {tab === "board" && (
