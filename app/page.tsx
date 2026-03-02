@@ -2980,6 +2980,9 @@ function BoardApp() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
@@ -4092,7 +4095,7 @@ function BoardApp() {
       )}
 
       {/* Notizen-Panels via Portal → direkt in document.body, nie durch overflow/transform geclipt */}
-      {typeof window !== "undefined" && notesVisible && createPortal(
+      {isMounted && notesVisible && createPortal(
         <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
           w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
           text={notesText} onChange={handleNotesChange}
@@ -4100,22 +4103,24 @@ function BoardApp() {
           canWrite={canWrite} />,
         document.body
       )}
-      {typeof window !== "undefined" && (() => {
-        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-        return createPortal(
-          <LogNotesPanel
-            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-            entries={logEntries}
-            onAdd={handleAddLogEntry}
-            onMove={movePanelLogNotes}
-            onResize={resizePanelLogNotes}
-            onToggleVisible={toggleLogNotesVisible}
-            canWrite={canWrite}
-            useRelTime={useRelTime}
-          />,
-          document.body
-        );
-      })()}
+      {isMounted && createPortal(
+        (() => {
+          const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+          return (
+            <LogNotesPanel
+              x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
+              entries={logEntries}
+              onAdd={handleAddLogEntry}
+              onMove={movePanelLogNotes}
+              onResize={resizePanelLogNotes}
+              onToggleVisible={toggleLogNotesVisible}
+              canWrite={canWrite}
+              useRelTime={useRelTime}
+            />
+          );
+        })(),
+        document.body
+      )}
     </div>
   );
 }
