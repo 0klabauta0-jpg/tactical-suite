@@ -659,7 +659,78 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   );
 }
 
-function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void }) {
+// ─────────────────────────────────────────────────────────────
+// ROOM PICKER – Einstiegsseite wenn kein Raum in URL
+// ─────────────────────────────────────────────────────────────
+
+function RoomPickerView({ onPick, onSetup }: {
+  onPick: (roomId: string) => void;
+  onSetup: (roomId: string) => void;
+}) {
+  const [roomInput, setRoomInput] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function handleJoin() {
+    const r = roomInput.trim();
+    if (!r) { setMsg("Bitte einen Raum-Namen eingeben."); return; }
+    setChecking(true); setMsg("");
+    const cfg = await loadRoomConfig(r);
+    setChecking(false);
+    if (!cfg) {
+      setMsg(`Raum „${r}" hat noch keine Konfiguration.`);
+      return;
+    }
+    // URL aktualisieren und Raum öffnen
+    window.history.replaceState({}, "", "?room=" + encodeURIComponent(r));
+    onPick(r);
+  }
+
+  function handleCreate() {
+    const r = roomInput.trim() || "neuer-raum";
+    window.history.replaceState({}, "", "?room=" + encodeURIComponent(r) + "&setup=1");
+    onSetup(r);
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
+        <h1 className="font-bold text-2xl mb-1 text-white">KlabsCom</h1>
+        <p className="text-gray-500 text-sm mb-6">Taktisches Koordinationssystem</p>
+
+        <label className="text-gray-300 text-xs mb-1 block">Raum-ID</label>
+        <input
+          className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500 font-mono"
+          placeholder="z.B. Alpha-Ops"
+          value={roomInput}
+          onChange={(e) => setRoomInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+        />
+
+        <button
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50 mb-2"
+          onClick={handleJoin}
+          disabled={checking || !roomInput.trim()}>
+          {checking ? "Prüfe…" : "→ Raum beitreten"}
+        </button>
+
+        <button
+          className="w-full bg-orange-700 hover:bg-orange-600 text-white rounded-lg py-2 text-sm font-medium"
+          onClick={handleCreate}>
+          ⚙ Neuen Raum erstellen
+        </button>
+
+        {msg && <p className="mt-3 text-xs text-red-400">{msg}</p>}
+
+        <p className="mt-5 text-gray-600 text-xs text-center">
+          Direktlink: <span className="font-mono text-gray-500">?room=RaumName</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void; onBack?: () => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password, setPassword] = useState("");
   const [setupKey, setSetupKey] = useState("");
@@ -758,7 +829,14 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
-        <h1 className="font-bold text-xl mb-1 text-white">KlabsCom</h1>
+        <div className="flex items-center justify-between mb-1">
+          <h1 className="font-bold text-xl text-white">KlabsCom</h1>
+          {onBack && (
+            <button className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1" onClick={onBack}>
+              ← Raum wählen
+            </button>
+          )}
+        </div>
         <p className="text-gray-400 text-sm mb-1">Raum: <span className="text-blue-400 font-mono">{roomId}</span></p>
 
         {cfgMissing && (
@@ -1049,8 +1127,8 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
           </div>
         </div>
 
-        {/* Zeile 2: Sterne-Anzeige | Icon | IconPicker | Sterne-Buttons */}
-        <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+        {/* Zeile 2: Sterne-Anzeige | Icon | IconPicker | Heimatort | Sterne-Buttons */}
+        <div className="flex items-center gap-1 min-w-0" onPointerDown={(e) => e.stopPropagation()}>
           {/* Rang-Anzeige (readonly) */}
           {isLeader && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
           {isDeputy && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
@@ -1060,15 +1138,21 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
           {(isSelf || canWrite) && (
             <GroupIconPicker current={player.icon} onChange={(icon) => onSetPlayerField(player.id, "icon", icon)} />
           )}
+          {/* Heimatort */}
+          {player.homeLocation && (
+            <span className="text-gray-500 text-xs truncate flex-1 min-w-0" title={player.homeLocation}>
+              📍{player.homeLocation}
+            </span>
+          )}
           {/* Rang-Buttons (nur für canWrite in echter Gruppe) */}
           {canWrite && groupId !== "unassigned" && (
             <>
-              <button className={`text-xs px-1 rounded ml-auto ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
+              <button className={`text-xs px-1 rounded ml-auto flex-shrink-0 ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
                 title={isLeader ? "Leader entfernen" : "Zum Leader machen"}
                 onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isLeader ? null : "leader"); }}>
                 ★★
               </button>
-              <button className={`text-xs px-1 rounded ${isDeputy ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
+              <button className={`text-xs px-1 rounded flex-shrink-0 ${isDeputy ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
                 title={isDeputy ? "Deputy entfernen" : "Zum Stellvertreter machen"}
                 onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isDeputy ? null : "deputy"); }}>
                 ★
@@ -2413,7 +2497,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               {!isL && !isD && <span className="w-4" />}
               {p.icon && <GroupIconDisplay icon={p.icon} size={12} />}
               {p.name}
-              {p.area && <span className="text-gray-500 ml-0.5">{p.area}</span>}
               {isDead && <span className="text-red-400 ml-1">☠</span>}
             </div>
           );
@@ -2879,8 +2962,10 @@ function AutoMap({ label, mapId }: { label: string; mapId: string }) {
 
 function BoardApp() {
   const searchParams = useSearchParams();
-  const roomId = searchParams.get("room") || "default";
+  const roomIdParam = searchParams.get("room");
   const isSetup = searchParams.get("setup") === "1";
+  const [pickedRoom, setPickedRoom] = useState<string | null>(roomIdParam);
+  const roomId = pickedRoom ?? roomIdParam ?? "default";
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -3682,6 +3767,14 @@ function BoardApp() {
   if (!authReady) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
   );
+  // Kein Raum → Room-Picker zeigen
+  if (!pickedRoom && !roomIdParam) return (
+    <RoomPickerView
+      onPick={(r) => setPickedRoom(r)}
+      onSetup={(r) => { setPickedRoom(r); }}
+    />
+  );
+
   if (!user || !currentPlayer) return isSetup ? (
     <RoomSetupView roomId={roomId} onDone={(p, cfg) => {
       setCurrentPlayer(p);
@@ -3694,6 +3787,9 @@ function BoardApp() {
       setIsNewPlayer(!hasProfile);
       setShowProfile(!hasProfile);
       setCurrentPlayer(p); setRoomCfg(cfg);
+    }} onBack={() => {
+      setPickedRoom(null);
+      window.history.replaceState({}, "", window.location.pathname);
     }} />
   );
 
@@ -3870,7 +3966,7 @@ function BoardApp() {
 
       {/* MAP */}
       {tab === "map" && (
-        <div className="flex-1 relative overflow-hidden">
+        <div className="flex-1 relative">
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
             {breadcrumb.map((b, i) => (
               <React.Fragment key={b.id}>
@@ -3893,7 +3989,7 @@ function BoardApp() {
             </label>
           </div>
 
-          <div className="w-full h-full">
+          <div className="w-full h-full overflow-hidden">
             {!activeImage ? (
               <AutoMap label={activeLabel} mapId={activeMapId} />
             ) : (
