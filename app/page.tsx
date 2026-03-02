@@ -111,6 +111,35 @@ const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   zoom:     { x: 16,  y: 600 },
 };
 
+const PANEL_MIN_Y   = 70;
+const NOTES_MIN_W   = 180;
+const NOTES_MIN_H   = 120;
+const LOG_MIN_W     = 180;
+const LOG_MIN_H     = 80;
+
+function clampPanelPosition(x: number, y: number, w: number, h: number) {
+  if (typeof window === "undefined") return { x: Math.max(0, x), y: Math.max(PANEL_MIN_Y, y) };
+  return {
+    x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth  - w)),
+    y: Math.min(Math.max(PANEL_MIN_Y, y), Math.max(PANEL_MIN_Y, window.innerHeight - h)),
+  };
+}
+
+function clampPanelSize(w: number, h: number, minW: number, minH: number, x: number, y: number) {
+  if (typeof window === "undefined") return { w: Math.max(minW, w), h: Math.max(minH, h) };
+  return {
+    w: Math.min(Math.max(minW, w), Math.max(minW, window.innerWidth  - Math.max(0, x))),
+    h: Math.min(Math.max(minH, h), Math.max(minH, window.innerHeight - Math.max(PANEL_MIN_Y, y))),
+  };
+}
+
+function clampNotes(p: { x?: number; y?: number; w?: number; h?: number; visible?: boolean }, def: { x: number; y: number; w: number; h: number }, minW: number, minH: number) {
+  const w = p.w ?? def.w; const h = p.h ?? def.h;
+  const pos  = clampPanelPosition(p.x ?? def.x, p.y ?? def.y, w, h);
+  const size = clampPanelSize(w, h, minW, minH, pos.x, pos.y);
+  return { ...p, ...pos, ...size };
+}
+
 // ─── DRAWING TYPES ───────────────────────────────────────────
 type DrawTool = "pointer" | "pen" | "line" | "eraser" | "text" | "move" | "marker_infantry" | "marker_ground" | "marker_air";
 
@@ -3187,14 +3216,11 @@ function BoardApp() {
       setPois(data.pois ?? []);
       if (data.panelLayout) {
         const pl = data.panelLayout;
-        // Clamp panels to be below header (min y:70) 
-        const clamp = (p: { x: number; y: number; w?: number; h?: number; visible?: boolean }) =>
-          ({ ...p, y: Math.max(70, p.y ?? 70) });
         setPanelLayout({
           ...DEFAULT_PANEL_LAYOUT,
           ...pl,
-          notes:    pl.notes    ? clamp(pl.notes)    : DEFAULT_PANEL_LAYOUT.notes,
-          logNotes: pl.logNotes ? clamp(pl.logNotes) : DEFAULT_PANEL_LAYOUT.logNotes,
+          notes:    pl.notes    ? clampNotes(pl.notes,    DEFAULT_PANEL_LAYOUT.notes,    NOTES_MIN_W, NOTES_MIN_H) : DEFAULT_PANEL_LAYOUT.notes,
+          logNotes: pl.logNotes ? clampNotes(pl.logNotes, DEFAULT_PANEL_LAYOUT.logNotes, LOG_MIN_W,   LOG_MIN_H)   : DEFAULT_PANEL_LAYOUT.logNotes,
         });
       }
       if (typeof data.notesText === "string") setNotesText(data.notesText);
@@ -3324,25 +3350,42 @@ function BoardApp() {
     setPanelLayout(next);
   }
 
-  const notesMoveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function movePanelLogNotes(x: number, y: number) {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const next = { ...panelLayout, logNotes: { ...ln, x, y } };
-    setPanelLayout(next);
-  }
-  function resizePanelLogNotes(w: number, h: number) {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const next = { ...panelLayout, logNotes: { ...ln, w, h } };
-    setPanelLayout(next);
-  }
-  function toggleLogNotesVisible() {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const next = { ...panelLayout, logNotes: { ...ln, visible: !ln.visible } };
-    setPanelLayout(next);
-  }
+  // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
+  useEffect(() => {
+    function reclamp() {
+      setPanelLayout((prev) => {
+        const n  = prev.notes    ?? DEFAULT_PANEL_LAYOUT.notes;
+        const ln = prev.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+        const nSize  = clampPanelSize(n.w,  n.h,  NOTES_MIN_W, NOTES_MIN_H, n.x,  n.y);
+        const nPos   = clampPanelPosition(n.x,  n.y,  nSize.w,  nSize.h);
+        const lnSize = clampPanelSize(ln.w, ln.h, LOG_MIN_W,   LOG_MIN_H,   ln.x, ln.y);
+        const lnPos  = clampPanelPosition(ln.x, ln.y, lnSize.w, lnSize.h);
+        const next = {
+          ...prev,
+          notes:    { ...n,  ...nSize,  ...nPos  },
+          logNotes: { ...ln, ...lnSize, ...lnPos },
+        };
+        // Nur setState wenn sich wirklich was geändert hat
+        const same =
+          prev.notes?.x === next.notes.x && prev.notes?.y === next.notes.y &&
+          prev.notes?.w === next.notes.w && prev.notes?.h === next.notes.h &&
+          prev.logNotes?.x === next.logNotes.x && prev.logNotes?.y === next.logNotes.y &&
+          prev.logNotes?.w === next.logNotes.w && prev.logNotes?.h === next.logNotes.h;
+        return same ? prev : next;
+      });
+    }
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
+  }, []);
+
+  const notesMoveDebounce   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function movePanelNotes(x: number, y: number) {
-    const next = { ...panelLayout, notes: { ...panelLayout.notes, x, y } };
+    const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
+    const pos = clampPanelPosition(x, y, n.w, n.h);
+    const next = { ...panelLayout, notes: { ...n, ...pos } };
     setPanelLayout(next);
     if (notesMoveDebounce.current) clearTimeout(notesMoveDebounce.current);
     notesMoveDebounce.current = setTimeout(() => {
@@ -3350,14 +3393,37 @@ function BoardApp() {
     }, 600);
   }
 
-  const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   function resizePanelNotes(w: number, h: number) {
-    const next = { ...panelLayout, notes: { ...panelLayout.notes, w, h } };
+    const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
+    const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
+    const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
+    const next = { ...panelLayout, notes: { ...n, ...size, ...pos } };
     setPanelLayout(next);
     if (notesResizeDebounce.current) clearTimeout(notesResizeDebounce.current);
     notesResizeDebounce.current = setTimeout(() => {
       pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
     }, 600);
+  }
+
+  function movePanelLogNotes(x: number, y: number) {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const pos = clampPanelPosition(x, y, ln.w, ln.h);
+    const next = { ...panelLayout, logNotes: { ...ln, ...pos } };
+    setPanelLayout(next);
+  }
+
+  function resizePanelLogNotes(w: number, h: number) {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
+    const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
+    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos } };
+    setPanelLayout(next);
+  }
+
+  function toggleLogNotesVisible() {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const next = { ...panelLayout, logNotes: { ...ln, visible: !ln.visible } };
+    setPanelLayout(next);
   }
 
   const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
