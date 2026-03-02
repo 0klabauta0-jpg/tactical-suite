@@ -104,8 +104,8 @@ const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/p
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   nav:      { x: 16,  y: 16  },
   placer:   { x: 16,  y: 340 },
-  notes:    { x: 300, y: 16, w: 320, h: 200 },
-  logNotes: { x: 640, y: 16, w: 320, h: 200, visible: false },
+  notes:    { x: 20,  y: 70, w: 320, h: 220 },
+  logNotes: { x: 360, y: 70, w: 320, h: 220, visible: false },
   toolbar:  { x: 300, y: 16  },
   zoom:     { x: 16,  y: 600 },
 };
@@ -3181,7 +3181,18 @@ function BoardApp() {
       setSpawnState(data.spawnState ?? {});
       if (data.maps && data.maps.length > 0) setMaps(data.maps);
       setPois(data.pois ?? []);
-      if (data.panelLayout) setPanelLayout(data.panelLayout);
+      if (data.panelLayout) {
+        const pl = data.panelLayout;
+        // Clamp panels to be below header (min y:70) 
+        const clamp = (p: { x: number; y: number; w?: number; h?: number; visible?: boolean }) =>
+          ({ ...p, y: Math.max(70, p.y ?? 70) });
+        setPanelLayout({
+          ...DEFAULT_PANEL_LAYOUT,
+          ...pl,
+          notes:    pl.notes    ? clamp(pl.notes)    : DEFAULT_PANEL_LAYOUT.notes,
+          logNotes: pl.logNotes ? clamp(pl.logNotes) : DEFAULT_PANEL_LAYOUT.logNotes,
+        });
+      }
       if (typeof data.notesText === "string") setNotesText(data.notesText);
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
@@ -3833,6 +3844,19 @@ function BoardApp() {
               className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1">
               <span className={refreshingPlayers ? "animate-spin inline-block" : ""}>↻</span>
             </button>
+            <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
+            <button
+              className={`text-xs px-2 py-1 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
+              onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
+            <button
+              className={`text-xs px-2 py-1 rounded border transition-colors ${(panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes).visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
+              onClick={toggleLogNotesVisible}
+              title="Log-Notizen">📟</button>
+            <label className="flex items-center gap-0.5 text-xs text-gray-600 cursor-pointer select-none" title="Relative Zeit statt Uhrzeit">
+              <input type="checkbox" checked={useRelTime} onChange={(e) => setUseRelTime(e.target.checked)} className="accent-blue-500 w-3 h-3" />
+              <span>+m</span>
+            </label>
+            <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
             <button className="text-xs text-gray-600 hover:text-gray-300 px-1" onClick={handleLogout} title="Ausloggen">
               ⏻
             </button>
@@ -3988,16 +4012,6 @@ function BoardApp() {
               </React.Fragment>
             ))}
             {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
-            <button className={`ml-2 text-xs px-2 py-0.5 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-500 hover:text-gray-300"}`}
-              onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
-            <button
-              className={`ml-1 text-xs px-2 py-0.5 rounded border transition-colors ${(panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes).visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-500 hover:text-gray-300"}`}
-              onClick={toggleLogNotesVisible}
-              title="Log-Notizen (zeitgestempelt)">📟</button>
-            <label className="ml-1 flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none" title="Relative Zeit (+Xm) statt Uhrzeit">
-              <input type="checkbox" checked={useRelTime} onChange={(e) => setUseRelTime(e.target.checked)} className="accent-blue-500" />
-              +m
-            </label>
           </div>
 
           <div className="w-full h-full overflow-hidden" style={{ zIndex: 0 }}>
