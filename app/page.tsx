@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { createPortal } from "react-dom";
 import Papa from "papaparse";
 import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
@@ -3832,6 +3833,9 @@ function BoardApp() {
             <span className="text-gray-500 text-sm font-mono">{displayRoomName}</span>
             <span className="w-px h-5 bg-gray-700 flex-shrink-0" />
             <span className="text-sm text-gray-300 font-medium">{currentPlayer.name}</span>
+            <button className="text-xs text-gray-500 hover:text-red-400 px-1 border border-gray-700 rounded hover:border-red-700 transition-colors" onClick={handleLogout} title="Ausloggen">
+              Logout
+            </button>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
             <button title="Eigenes Profil bearbeiten" onClick={() => setShowProfile(true)}
               className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
@@ -3856,10 +3860,7 @@ function BoardApp() {
               <input type="checkbox" checked={useRelTime} onChange={(e) => setUseRelTime(e.target.checked)} className="accent-blue-500 w-3 h-3" />
               <span>+m</span>
             </label>
-            <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
-            <button className="text-xs text-gray-600 hover:text-gray-300 px-1" onClick={handleLogout} title="Ausloggen">
-              ⏻
-            </button>
+
           </div>
 
           {/* MITTE: Lebt/Tot Button – nimmt verfügbaren Platz */}
@@ -4090,17 +4091,18 @@ function BoardApp() {
         </div>
       )}
 
-      {/* Notizen-Panels: IMMER sichtbar, floating über allem */}
-      {notesVisible && (
-        <NotesPanel x={panelLayout.notes?.x ?? 300} y={panelLayout.notes?.y ?? 16}
-          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 200}
+      {/* Notizen-Panels via Portal → direkt in document.body, nie durch overflow/transform geclipt */}
+      {typeof window !== "undefined" && notesVisible && createPortal(
+        <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
+          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
           text={notesText} onChange={handleNotesChange}
           onMove={movePanelNotes} onResize={resizePanelNotes}
-          canWrite={canWrite} />
+          canWrite={canWrite} />,
+        document.body
       )}
-      {(() => {
+      {typeof window !== "undefined" && (() => {
         const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-        return (
+        return createPortal(
           <LogNotesPanel
             x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
             entries={logEntries}
@@ -4110,7 +4112,8 @@ function BoardApp() {
             onToggleVisible={toggleLogNotesVisible}
             canWrite={canWrite}
             useRelTime={useRelTime}
-          />
+          />,
+          document.body
         );
       })()}
     </div>
