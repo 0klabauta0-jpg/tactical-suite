@@ -31,6 +31,7 @@ type Player = {
   ampel?: string;
   appRole?: string;
   homeLocation?: string;
+  icon?: string;   // emoji oder URL – wie bei Gruppen
 };
 
 // color: optional hex ohne #, z.B. "e63946"
@@ -48,12 +49,15 @@ type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
 type Role = "admin" | "commander" | "viewer";
 type PanelLayout = {
-  nav:     { x: number; y: number };
-  placer:  { x: number; y: number };
-  notes:   { x: number; y: number; w: number; h: number };
-  toolbar: { x: number; y: number };
-  zoom:    { x: number; y: number };
+  nav:      { x: number; y: number };
+  placer:   { x: number; y: number };
+  notes:    { x: number; y: number; w: number; h: number };
+  logNotes: { x: number; y: number; w: number; h: number; visible: boolean };
+  toolbar:  { x: number; y: number };
+  zoom:     { x: number; y: number };
 };
+
+type LogEntry = { ts: number; text: string };
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
@@ -98,11 +102,12 @@ const DEFAULT_GROUPS: Group[] = [
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
-  nav:     { x: 16,  y: 16  },
-  placer:  { x: 16,  y: 340 },
-  notes:   { x: 300, y: 16, w: 320, h: 200 },
-  toolbar: { x: 300, y: 16  },   // wird beim ersten Render auf Bildschirmmitte gesetzt
-  zoom:    { x: 16,  y: 600 },
+  nav:      { x: 16,  y: 16  },
+  placer:   { x: 16,  y: 340 },
+  notes:    { x: 300, y: 16, w: 320, h: 200 },
+  logNotes: { x: 640, y: 16, w: 320, h: 200, visible: false },
+  toolbar:  { x: 300, y: 16  },
+  zoom:     { x: 16,  y: 600 },
 };
 
 // ─── DRAWING TYPES ───────────────────────────────────────────
@@ -998,13 +1003,14 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
 // ─────────────────────────────────────────────────────────────
 
 function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive, spawnGroups, spawnState, onSetSpawn,
-  groupRoles, groupId, onSetRole, onSetAppRole, groupColor: gColor,
+  groupRoles, groupId, onSetRole, onSetAppRole, onSetPlayerField, groupColor: gColor,
 }: {
   player: Player; aliveState: PlayerAliveState; currentPlayerId: string; canWrite: boolean; isAdmin: boolean;
   onToggleAlive: (id: string) => void; spawnGroups: Group[]; spawnState: PlayerSpawnState;
   onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; groupId: string; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
+  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
   groupColor: string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
@@ -1027,7 +1033,13 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
             {/* Sterne-Anzeige */}
             {isLeader  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
             {isDeputy  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
+            {player.icon && <GroupIconDisplay icon={player.icon} size={14} />}
             <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>{player.name}</div>
+            {(isSelf || canWrite) && (
+              <span onPointerDown={(e) => e.stopPropagation()}>
+                <GroupIconPicker current={player.icon} onChange={(icon) => onSetPlayerField(player.id, "icon", icon)} />
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
             {/* Rollen-Buttons (Admin/Commander) */}
@@ -1064,7 +1076,28 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
           {player.area}{player.role ? ` · ${player.role}` : ""}{player.homeLocation ? ` · 📍${player.homeLocation}` : ""}
         </div>
       </div>
-      {/* Kompakte Dropdown-Zeile: Spawn + AppRole nebeneinander */}
+      {/* Kompakte Dropdown-Zeile: Bereich + Staffel (für alle sichtbar) */}
+      {(isSelf || canWrite) && (
+        <div className="px-2 pb-1 grid grid-cols-2 gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          <select
+            className="bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
+            value={player.area ?? ""}
+            disabled={!isSelf && !canWrite}
+            onChange={(e) => onSetPlayerField(player.id, "area", e.target.value)}
+            title="Bereich">
+            {PROFILE_BEREICHE.map((o) => <option key={o} value={o}>{o || "Bereich…"}</option>)}
+          </select>
+          <select
+            className="bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
+            value={player.squadron ?? ""}
+            disabled={!isSelf && !canWrite}
+            onChange={(e) => onSetPlayerField(player.id, "squadron", e.target.value)}
+            title="Staffel">
+            {PROFILE_STAFFELN.map((o) => <option key={o} value={o}>{o || "Staffel…"}</option>)}
+          </select>
+        </div>
+      )}
+      {/* Spawn + AppRole */}
       {(isSelf || canWrite) && (spawnGroups.length > 0 || (canWrite && isAdmin)) && (
         <div className="px-2 pb-2 grid grid-cols-2 gap-1" onPointerDown={(e) => e.stopPropagation()}>
           {spawnGroups.length > 0 && (
@@ -1206,7 +1239,7 @@ function ColorPicker({ current, onChange }: { current?: string; onChange: (hex: 
 const COLUMN_HEIGHT = 760;
 
 function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive,
-  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetAppRole, onSetColor, onSetIcon,
+  onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetAppRole, onSetPlayerField, onSetColor, onSetIcon,
 }: {
   group: Group; ids: string[]; playersById: Record<string, Player>; aliveState: PlayerAliveState;
   currentPlayerId: string; canWrite: boolean;
@@ -1215,6 +1248,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   spawnGroups: Group[]; spawnState: PlayerSpawnState; onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   isAdmin: boolean; onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
+  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
   onSetColor: (id: string, hex: string) => void;
   onSetIcon: (id: string, icon: string) => void;
 }) {
@@ -1299,7 +1333,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                   canWrite={canWrite} onToggleAlive={onToggleAlive} spawnGroups={spawnGroups}
                   spawnState={spawnState} onSetSpawn={onSetSpawn}
                   groupRoles={groupRoles} groupId={group.id} onSetRole={onSetRole}
-                  isAdmin={isAdmin} onSetAppRole={onSetAppRole}
+                  isAdmin={isAdmin} onSetAppRole={onSetAppRole} onSetPlayerField={onSetPlayerField}
                   groupColor={gColor} />
               ) : null
             )}
@@ -1522,32 +1556,14 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
 // ─────────────────────────────────────────────────────────────
 
 function HelpTip({ text }: { text: string }) {
-  const [show, setShow] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function handleEnter() {
-    setShow(true);
-  }
-  function handleLeave() {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setShow(false);
-  }
-
   return (
     <span className="relative inline-flex items-center">
       <button
         className="w-4 h-4 rounded-full bg-gray-700 border border-gray-500 text-gray-400 text-xs flex items-center justify-center hover:bg-gray-600 hover:text-white flex-shrink-0 leading-none"
-        onMouseEnter={handleEnter}
-        onMouseLeave={handleLeave}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
+        title={text}
       >?</button>
-      {show && (
-        <span
-          className="absolute z-[999] left-6 top-0 bg-gray-900 border border-gray-500 text-gray-200 text-xs rounded-lg px-3 py-2 shadow-2xl pointer-events-none"
-          style={{ minWidth: 180, maxWidth: 280, whiteSpace: "pre-wrap", lineHeight: 1.5 }}
-        >{text}</span>
-      )}
     </span>
   );
 }
@@ -2393,7 +2409,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               {isL && <span className="text-yellow-400 text-xs">★★</span>}
               {isD && <span className="text-yellow-400 text-xs">★</span>}
               {!isL && !isD && <span className="w-4" />}
+              {p.icon && <GroupIconDisplay icon={p.icon} size={12} />}
               {p.name}
+              {p.area && <span className="text-gray-500 ml-0.5">{p.area}</span>}
               {isDead && <span className="text-red-400 ml-1">☠</span>}
             </div>
           );
@@ -2712,6 +2730,131 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
+// ─────────────────────────────────────────────────────────────
+
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, onToggleVisible, canWrite, useRelTime }: {
+  x: number; y: number; w: number; h: number; visible: boolean;
+  entries: LogEntry[];
+  onAdd: (text: string) => void;
+  onMove: (x: number, y: number) => void;
+  onResize: (w: number, h: number) => void;
+  onToggleVisible: () => void;
+  canWrite: boolean;
+  useRelTime: boolean;
+}) {
+  const dragging = useRef(false);
+  const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+  const resizing = useRef(false);
+  const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
+  const [input, setInput] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+  const firstTs = entries[0]?.ts ?? 0;
+
+  function onHeaderDown(e: React.PointerEvent) {
+    dragging.current = true; start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); e.preventDefault();
+  }
+  function onHeaderMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
+  }
+  function onHeaderUp() { dragging.current = false; }
+  function onResizeDown(e: React.PointerEvent) {
+    resizing.current = true; resizeStart.current = { mx: e.clientX, my: e.clientY, pw: w, ph: h };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); e.stopPropagation(); e.preventDefault();
+  }
+  function onResizeMove(e: React.PointerEvent) {
+    if (!resizing.current) return;
+    onResize(Math.max(180, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
+             Math.max(80, resizeStart.current.ph + e.clientY - resizeStart.current.my));
+  }
+  function onResizeUp() { resizing.current = false; }
+
+  function formatTs(ts: number): string {
+    if (useRelTime && firstTs) {
+      const mins = Math.round((ts - firstTs) / 60000);
+      return `+${mins}m`;
+    }
+    return new Date(ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function handleAdd() {
+    const t = input.trim();
+    if (!t) return;
+    onAdd(t);
+    setInput("");
+    // Scroll to bottom
+    setTimeout(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    }, 50);
+  }
+
+  return (
+    <div className="absolute z-20 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+      style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}
+      onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
+      onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
+        onPointerDown={onHeaderDown}>
+        <span className="text-gray-500 text-xs">⠿</span>
+        <span className="text-xs font-semibold text-blue-300 flex-1">📟 Log-Notizen</span>
+        <button
+          className="text-gray-500 hover:text-white text-xs px-1"
+          title={visible ? "Minimieren" : "Aufklappen"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onToggleVisible}>
+          {visible ? "▲" : "▼"}
+        </button>
+      </div>
+      {visible && (
+        <>
+          {/* Einträge */}
+          <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 font-mono text-xs">
+            {entries.length === 0 && (
+              <div className="text-gray-600 text-center py-3">Noch keine Einträge</div>
+            )}
+            {entries.map((e, i) => (
+              <div key={i} className="flex gap-1.5 items-start">
+                <span className="text-blue-500 flex-shrink-0 min-w-[32px]">{formatTs(e.ts)}</span>
+                <span className="text-gray-300 break-words flex-1">{e.text}</span>
+              </div>
+            ))}
+          </div>
+          {/* Eingabe */}
+          {canWrite && (
+            <div className="flex gap-1 px-2 pb-2 pt-1 border-t border-gray-800 flex-shrink-0"
+              onPointerDown={(e) => e.stopPropagation()}>
+              <input
+                className="flex-1 bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+                placeholder="Eintrag…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+              />
+              <button
+                className="px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold"
+                onClick={handleAdd}>
+                +
+              </button>
+            </div>
+          )}
+          {/* Resize handle */}
+          <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
+            onPointerDown={onResizeDown} title="Größe ändern">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+              <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
+            </svg>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // AUTO MAP
 // ─────────────────────────────────────────────────────────────
@@ -2766,6 +2909,9 @@ function BoardApp() {
   const [activeMapId, setActiveMapId] = useState("main");
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   const [notesText, setNotesText] = useState("");
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [useRelTime, setUseRelTime] = useState(false);
+  const logEntriesRef = useRef<LogEntry[]>([]);
   const [notesVisible, setNotesVisible] = useState(true);
 
   // Drawing state
@@ -2824,6 +2970,7 @@ function BoardApp() {
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
   useEffect(() => { orderMarkersRef.current = orderMarkers; }, [orderMarkers]);
   useEffect(() => { notesRef.current = notesText; }, [notesText]);
+  useEffect(() => { logEntriesRef.current = logEntries; }, [logEntries]);
   useEffect(() => { groupRolesRef.current = groupRoles; }, [groupRoles]);
   useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
 
@@ -2939,6 +3086,7 @@ function BoardApp() {
       setPois(data.pois ?? []);
       if (data.panelLayout) setPanelLayout(data.panelLayout);
       if (typeof data.notesText === "string") setNotesText(data.notesText);
+      if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
       if (data.drawings) setDrawings(data.drawings);
     });
@@ -2967,6 +3115,7 @@ function BoardApp() {
         aliveState: na, spawnState: ns, maps: nm, pois: np,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
+        logEntries: logEntriesRef.current,
         groupRoles: ngr ?? groupRolesRef.current,
         drawings: drawingsRef.current,
         updatedAt: serverTimestamp(),
@@ -2975,6 +3124,19 @@ function BoardApp() {
   }
 
   // GroupRoles
+  async function setPlayerField(playerId: string, field: keyof Player, value: string) {
+    // Lokal updaten
+    setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, [field]: value } : p));
+    // Firestore-Override speichern
+    const existing = await loadFirestoreOverrides(roomId);
+    const next = {
+      ...existing,
+      [playerId]: { ...(existing[playerId] ?? {}), [field]: value },
+    };
+    firestoreOverrideCache[roomId] = next;
+    await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+  }
+
   async function setPlayerAppRole(playerId: string, newRole: "admin" | "commander" | "viewer") {
     const existing = await loadFirestoreOverrides(roomId);
     const next = {
@@ -3051,6 +3213,22 @@ function BoardApp() {
   }
 
   const notesMoveDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function movePanelLogNotes(x: number, y: number) {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const next = { ...panelLayout, logNotes: { ...ln, x, y } };
+    setPanelLayout(next);
+  }
+  function resizePanelLogNotes(w: number, h: number) {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const next = { ...panelLayout, logNotes: { ...ln, w, h } };
+    setPanelLayout(next);
+  }
+  function toggleLogNotesVisible() {
+    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+    const next = { ...panelLayout, logNotes: { ...ln, visible: !ln.visible } };
+    setPanelLayout(next);
+  }
+
   function movePanelNotes(x: number, y: number) {
     const next = { ...panelLayout, notes: { ...panelLayout.notes, x, y } };
     setPanelLayout(next);
@@ -3071,6 +3249,13 @@ function BoardApp() {
   }
 
   const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleAddLogEntry(text: string) {
+    const entry: LogEntry = { ts: Date.now(), text };
+    const next = [...logEntriesRef.current, entry];
+    setLogEntries(next); logEntriesRef.current = next;
+    setDoc(doc(db, "rooms", roomId, "state", "board"), { logEntries: next, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
+  }
+
   function handleNotesChange(text: string) {
     setNotesText(text); notesRef.current = text;
     if (notesDebounceRef.current) clearTimeout(notesDebounceRef.current);
@@ -3645,6 +3830,7 @@ function BoardApp() {
                             spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                             groupRoles={groupRoles} groupId="unassigned" onSetRole={setGroupRole}
                             isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                            onSetPlayerField={setPlayerField}
                             groupColor="#6b7280" />
                         ) : null
                       )}
@@ -3664,6 +3850,7 @@ function BoardApp() {
                       spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                       groupRoles={groupRoles} onSetRole={setGroupRole}
                       isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                      onSetPlayerField={setPlayerField}
                       onSetColor={setGroupColor} onSetIcon={setGroupIcon} />
                   ))}
                   {canWrite && (
@@ -3694,6 +3881,14 @@ function BoardApp() {
             {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
             <button className={`ml-2 text-xs px-2 py-0.5 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-500 hover:text-gray-300"}`}
               onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
+            <button
+              className={`ml-1 text-xs px-2 py-0.5 rounded border transition-colors ${(panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes).visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-500 hover:text-gray-300"}`}
+              onClick={toggleLogNotesVisible}
+              title="Log-Notizen (zeitgestempelt)">📟</button>
+            <label className="ml-1 flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none" title="Relative Zeit (+Xm) statt Uhrzeit">
+              <input type="checkbox" checked={useRelTime} onChange={(e) => setUseRelTime(e.target.checked)} className="accent-blue-500" />
+              +m
+            </label>
           </div>
 
           <div className="w-full h-full">
@@ -3776,6 +3971,21 @@ function BoardApp() {
               onMove={(nx, ny) => movePanelNotes(nx, ny)} onResize={(nw, nh) => resizePanelNotes(nw, nh)}
               canWrite={canWrite} />
           )}
+          {(() => {
+            const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+            return (
+              <LogNotesPanel
+                x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
+                entries={logEntries}
+                onAdd={handleAddLogEntry}
+                onMove={movePanelLogNotes}
+                onResize={resizePanelLogNotes}
+                onToggleVisible={toggleLogNotesVisible}
+                canWrite={canWrite}
+                useRelTime={useRelTime}
+              />
+            );
+          })()}
         </div>
       )}
     </div>
