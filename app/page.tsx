@@ -693,17 +693,12 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
         found = freshPlayers.find((p) => p.id === found!.id) ?? found;
       }
 
-      // ── Self-Registration: Player-Objekt vorbereiten (noch nicht speichern) ──
+      // ── Kein Sheet-Eintrag → Anmeldung verweigern ────────────────────────
       let newPlayerData: Player | null = null;
       if (!found) {
-        const newId = stableId(playerName.trim());
-        newPlayerData = {
-          id: newId,
-          name: playerName.trim(),
-          area: "", role: "", squadron: "", status: "",
-          ampel: "", appRole: "viewer", homeLocation: "",
-        };
-        found = newPlayerData;
+        setMsg(`"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
+        setLoading(false);
+        return;
       }
 
       // Firebase Auth ZUERST – danach erst Firestore schreiben
@@ -717,12 +712,7 @@ function LoginView({ roomId, onLogin }: { roomId: string; onLogin: (p: Player, c
         } else { throw signInErr; }
       }
 
-      // Jetzt eingeloggt → Firestore-Write für neue Spieler erlaubt
-      if (newPlayerData) {
-        await saveFirestoreOverride(roomId, newPlayerData.id, newPlayerData);
-        cachedPlayersByRoom[roomId] = [...sheetPlayers, newPlayerData];
-        firestoreOverrideCache[roomId] = { ...overrides, [newPlayerData.id]: newPlayerData };
-      }
+      // (kein Self-Registration mehr – newPlayerData ist immer null)
       // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
       const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
       if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
@@ -1082,7 +1072,7 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
               className="bg-gray-700 border border-gray-600 text-gray-300 text-xs rounded px-1 py-0.5 focus:outline-none"
               value={spawnState[player.id] ?? ""}
               onChange={(e) => onSetSpawn(player.id, e.target.value)}>
-              <option value="">⚓ Spawn…</option>
+              <option value="">Spawn…</option>
               {spawnGroups.map((sg) => <option key={sg.id} value={sg.id}>{sg.label}</option>)}
             </select>
           )}
@@ -1536,7 +1526,7 @@ function HelpTip({ text }: { text: string }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function handleEnter() {
-    timerRef.current = setTimeout(() => setShow(true), 600);
+    setShow(true);
   }
   function handleLeave() {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -2040,6 +2030,7 @@ function DrawingLayer({
       }
       pathPoints.current = [];
       redraw();
+      onResetTool?.();
       return;
     }
 
@@ -2049,6 +2040,7 @@ function DrawingLayer({
         color, width: strokeWidth });
       lineStart.current = null;
       redraw();
+      onResetTool?.();
       return;
     }
 
@@ -2059,6 +2051,7 @@ function DrawingLayer({
       movingPreviewRef.current = null;
       setMovingEl(null);
       onUpdateElement(committed);
+      onResetTool?.();
       return;
     }
   }
