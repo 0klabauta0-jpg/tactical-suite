@@ -1028,40 +1028,16 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
       className={`rounded-xl border shadow-sm transition-all ${isDead ? "bg-gray-900 border-red-900 opacity-70" : "bg-gray-800 border-gray-700"}`}>
       <div {...attributes} {...listeners} className="px-2 pt-2 pb-1 cursor-grab active:cursor-grabbing"
         style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
-        <div className="flex items-center justify-between gap-1">
-          <div className="flex items-center gap-1 min-w-0 flex-1">
-            {/* Sterne-Anzeige */}
-            {isLeader  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
-            {isDeputy  && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
-            {player.icon && <GroupIconDisplay icon={player.icon} size={14} />}
-            <div className={`font-semibold text-sm truncate ${isDead ? "line-through text-gray-500" : "text-white"}`}>{player.name}</div>
-            {(isSelf || canWrite) && (
-              <span onPointerDown={(e) => e.stopPropagation()}>
-                <GroupIconPicker current={player.icon} onChange={(icon) => onSetPlayerField(player.id, "icon", icon)} />
-              </span>
-            )}
+
+        {/* Zeile 1: Name + Alive-Button */}
+        <div className="flex items-center justify-between gap-1 mb-0.5">
+          <div className={`font-semibold text-sm leading-tight flex-1 break-words ${isDead ? "line-through text-gray-500" : "text-white"}`}>
+            {player.name}
           </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Rollen-Buttons (Admin/Commander) */}
-            {canWrite && groupId !== "unassigned" && (
-              <>
-                <button className={`text-xs px-1 rounded ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
-                  title={isLeader ? "Leader entfernen" : "Zum Leader machen"}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isLeader ? null : "leader"); }}>
-                  ★★
-                </button>
-                <button className={`text-xs px-1 rounded ${isDeputy ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
-                  title={isDeputy ? "Deputy entfernen" : "Zum Stellvertreter machen"}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isDeputy ? null : "deputy"); }}>
-                  ★
-                </button>
-              </>
-            )}
+          <div className="flex items-center gap-0.5 flex-shrink-0 ml-1">
             {canToggle && (
               <button
-                className={`text-sm px-2 py-1 rounded border font-bold transition-colors ${
+                className={`text-xs px-1.5 py-0.5 rounded border font-bold transition-colors ${
                   isDead ? "bg-red-950 border-red-700 text-red-300 hover:bg-red-900" : "bg-green-950 border-green-700 text-green-300 hover:bg-green-900"
                 }`}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -1069,12 +1045,38 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
                 {isDead ? "☠" : "✓"}
               </button>
             )}
-            {!canToggle && isDead && <span className="text-red-500 flex-shrink-0">☠</span>}
+            {!canToggle && isDead && <span className="text-red-500 text-xs flex-shrink-0">☠</span>}
           </div>
         </div>
-        <div className="text-xs text-gray-400 truncate mt-0.5">
-          {player.area}{player.role ? ` · ${player.role}` : ""}{player.homeLocation ? ` · 📍${player.homeLocation}` : ""}
+
+        {/* Zeile 2: Sterne-Anzeige | Icon | IconPicker | Sterne-Buttons */}
+        <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          {/* Rang-Anzeige (readonly) */}
+          {isLeader && <span className="text-yellow-400 text-xs flex-shrink-0" title="Gruppenleader">★★</span>}
+          {isDeputy && <span className="text-yellow-400 text-xs flex-shrink-0" title="Stellvertreter">★</span>}
+          {/* Icon anzeigen */}
+          {player.icon && <GroupIconDisplay icon={player.icon} size={13} />}
+          {/* Icon-Picker */}
+          {(isSelf || canWrite) && (
+            <GroupIconPicker current={player.icon} onChange={(icon) => onSetPlayerField(player.id, "icon", icon)} />
+          )}
+          {/* Rang-Buttons (nur für canWrite in echter Gruppe) */}
+          {canWrite && groupId !== "unassigned" && (
+            <>
+              <button className={`text-xs px-1 rounded ml-auto ${isLeader ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
+                title={isLeader ? "Leader entfernen" : "Zum Leader machen"}
+                onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isLeader ? null : "leader"); }}>
+                ★★
+              </button>
+              <button className={`text-xs px-1 rounded ${isDeputy ? "text-yellow-400" : "text-gray-600 hover:text-yellow-500"}`}
+                title={isDeputy ? "Deputy entfernen" : "Zum Stellvertreter machen"}
+                onClick={(e) => { e.stopPropagation(); onSetRole(groupId, player.id, isDeputy ? null : "deputy"); }}>
+                ★
+              </button>
+            </>
+          )}
         </div>
+
       </div>
       {/* Kompakte Dropdown-Zeile: Bereich + Staffel (für alle sichtbar) */}
       {(isSelf || canWrite) && (
@@ -1275,7 +1277,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   return (
     <div
       style={{
-        width: 200, flexShrink: 0,
+        width: 230, flexShrink: 0,
         transform: CSS.Transform.toString(colTransform),
         transition: colTransition,
         opacity: colIsDragging ? 0.5 : 1,
