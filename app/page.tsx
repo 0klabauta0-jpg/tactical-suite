@@ -61,7 +61,7 @@ type LogEntry = { ts: number; text: string };
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
-type RoomConfig = { sheetUrl: string; password: string };
+type RoomConfig = { sheetUrl: string; password: string; roomName?: string };
 const roomConfigCache: Record<string, RoomConfig> = {};
 
 async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
@@ -505,6 +505,7 @@ function ProfileModal({
 function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player, cfg: RoomConfig) => void }) {
   const [sheetUrl, setSheetUrl] = useState("");
   const [password, setPassword] = useState("");
+  const [roomName, setRoomName] = useState("");
   const [adminKey, setAdminKey] = useState("");
   const [adminHandle, setAdminHandle] = useState("");
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -514,7 +515,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   // Bestehende Config laden
   useEffect(() => {
     loadRoomConfig(roomId).then((cfg) => {
-      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); }
+      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); setRoomName(cfg.roomName ?? ""); }
       setLoading(false);
     });
   }, [roomId]);
@@ -547,6 +548,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       await setDoc(doc(db, "rooms", roomId, "config", "main"), {
         sheetUrl: sheetUrl.trim(),
         password: password.trim(),
+        roomName: roomName.trim() || roomId,
         updatedAt: serverTimestamp(),
       });
 
@@ -572,7 +574,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
           area: "", role: "", squadron: "", status: "",
           ampel: "", appRole: "admin", homeLocation: "",
         };
-        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim() };
+        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim(), roomName: roomName.trim() || roomId };
         onDone(adminPlayer, cfg);
         return;
       }
@@ -599,6 +601,14 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
           <div className="text-gray-500 text-sm text-center py-4">Lade…</div>
         ) : (
           <>
+            <label className="text-gray-300 text-xs mb-1 block">Raumname (Anzeigename)</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-4 text-sm focus:outline-none focus:border-blue-500"
+              placeholder={`z.B. Alpha-Ops (Standard: ${roomId})`}
+              value={roomName}
+              onChange={(e) => setRoomName(e.target.value)}
+            />
+
             <label className="text-gray-300 text-xs mb-1 block">Google Sheet CSV-URL</label>
             <input
               className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500 font-mono"
@@ -2791,7 +2801,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
   function onResizeUp() { resizing.current = false; }
 
   return (
-    <div className="absolute z-20 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+    <div className="fixed z-50 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
       style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
@@ -2878,7 +2888,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   }
 
   return (
-    <div className="absolute z-20 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+    <div className="fixed z-50 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
       style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
@@ -3798,63 +3808,64 @@ function BoardApp() {
     role === "commander" ? "bg-blue-900 text-blue-300 border border-blue-700" :
     "bg-gray-800 text-gray-400 border border-gray-600";
 
+  const displayRoomName = roomCfg?.roomName || roomId;
+
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
       <header className="flex-shrink-0 border-b border-gray-800 bg-gray-900 z-30">
-        {/* Zeile 1: Tabs links (groß), Rest rechts */}
-        <div className="px-4 pt-2 pb-0 flex items-end justify-between gap-4">
-          {/* Tabs – groß, links, als Tab-Reiter */}
-          <div className="flex items-end gap-0.5">
-            {(["board", "map"] as ("board" | "map")[]).map((tVal) => {
-              return (
-                <button key={tVal}
-                  className={`px-8 py-2.5 text-base font-bold border-t border-l border-r rounded-t-xl transition-colors ${
-                    tab === tVal
-                      ? "bg-gray-950 border-gray-600 text-white"
-                      : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-850"
-                  }`}
-                  onClick={() => setTab(tVal)}>
-                  {tVal === "board" ? "Board" : "Karte"}
-                </button>
-              );
-            })}
-            <span className="text-xs text-gray-600 font-mono ml-3 mb-1">KlabsCom · {roomId}</span>
-            <HelpTip text={"Board-Übersicht:\\nSpieler per Drag & Drop verschieben\\n★★ = Leader, ★ = Stellvertreter\\n✓/☠ = Lebend/Tot (jeder kann sich selbst)\\nFarbe + Icon pro Gruppe einstellbar\\n↻ Spieler = Spielerliste neu laden"} />
-          </div>
+        <div className="px-4 py-2 flex items-center gap-3 min-h-[52px]">
 
-          {/* Rechts: Alive-Button (breit, mittig), Name, Rolle, Profil, Reload, Logout */}
-          <div className="flex items-center gap-3 flex-wrap pb-1.5">
-            {/* Lebt/Tot – breiter Button, zentriert */}
-            <span className="flex items-center gap-1">
-              <button
-                className={`px-10 py-2 rounded-lg border-2 font-bold text-base transition-colors min-w-[140px] text-center ${
-                  selfAlive === "dead"
-                    ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
-                    : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
-                }`}
-                onClick={() => toggleAlive(currentPlayer.id)}>
-                {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
-              </button>
-              <HelpTip text="Eigenen Status umschalten. Tote Spieler erscheinen durchgestrichen und ausgegraut auf dem Board." />
-            </span>
-            <span className="text-sm text-gray-300">{currentPlayer.name}</span>
+          {/* LINKS: KlabsCom + Raumname + Spieler-Info */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className="text-white font-black text-xl tracking-tight">KlabsCom</span>
+            <span className="text-gray-500 text-sm font-mono">{displayRoomName}</span>
+            <span className="w-px h-5 bg-gray-700 flex-shrink-0" />
+            <span className="text-sm text-gray-300 font-medium">{currentPlayer.name}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge}`}>{role}</span>
             <button title="Eigenes Profil bearbeiten" onClick={() => setShowProfile(true)}
-              className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
+              className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
               ✎ Profil
             </button>
             <button
               title="Spielerliste aus Sheet neu laden"
               onClick={refreshPlayers}
               disabled={refreshingPlayers}
-              className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1">
+              className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1">
               <span className={refreshingPlayers ? "animate-spin inline-block" : ""}>↻</span>
-              Spieler
             </button>
-            <button className="text-xs text-gray-500 hover:text-gray-300" onClick={handleLogout}>
-              Logout
+            <button className="text-xs text-gray-600 hover:text-gray-300 px-1" onClick={handleLogout} title="Ausloggen">
+              ⏻
             </button>
           </div>
+
+          {/* MITTE: Lebt/Tot Button – nimmt verfügbaren Platz */}
+          <div className="flex-1 flex justify-center">
+            <button
+              className={`px-12 py-1.5 rounded-lg border-2 font-black text-lg transition-colors w-full max-w-xs ${
+                selfAlive === "dead"
+                  ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
+                  : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
+              }`}
+              onClick={() => toggleAlive(currentPlayer.id)}>
+              {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
+            </button>
+          </div>
+
+          {/* RECHTS: Board / Karte Tabs */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {(["board", "map"] as ("board" | "map")[]).map((tVal) => (
+              <button key={tVal}
+                className={`px-6 py-1.5 text-base font-black rounded-lg border transition-colors ${
+                  tab === tVal
+                    ? "bg-gray-700 border-gray-500 text-white"
+                    : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"
+                }`}
+                onClick={() => setTab(tVal)}>
+                {tVal === "board" ? "Board" : "Karte"}
+              </button>
+            ))}
+          </div>
+
         </div>
       </header>
 
@@ -3989,7 +4000,7 @@ function BoardApp() {
             </label>
           </div>
 
-          <div className="w-full h-full overflow-hidden">
+          <div className="w-full h-full overflow-hidden" style={{ zIndex: 0 }}>
             {!activeImage ? (
               <AutoMap label={activeLabel} mapId={activeMapId} />
             ) : (
@@ -4062,30 +4073,32 @@ function BoardApp() {
             </DraggablePanel>
           )}
 
-          {notesVisible && (
-            <NotesPanel x={panelLayout.notes?.x ?? 300} y={panelLayout.notes?.y ?? 16}
-              w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 200}
-              text={notesText} onChange={handleNotesChange}
-              onMove={(nx, ny) => movePanelNotes(nx, ny)} onResize={(nw, nh) => resizePanelNotes(nw, nh)}
-              canWrite={canWrite} />
-          )}
-          {(() => {
-            const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-            return (
-              <LogNotesPanel
-                x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-                entries={logEntries}
-                onAdd={handleAddLogEntry}
-                onMove={movePanelLogNotes}
-                onResize={resizePanelLogNotes}
-                onToggleVisible={toggleLogNotesVisible}
-                canWrite={canWrite}
-                useRelTime={useRelTime}
-              />
-            );
-          })()}
         </div>
       )}
+
+      {/* Notizen-Panels: IMMER sichtbar, floating über allem */}
+      {notesVisible && (
+        <NotesPanel x={panelLayout.notes?.x ?? 300} y={panelLayout.notes?.y ?? 16}
+          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 200}
+          text={notesText} onChange={handleNotesChange}
+          onMove={movePanelNotes} onResize={resizePanelNotes}
+          canWrite={canWrite} />
+      )}
+      {(() => {
+        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+        return (
+          <LogNotesPanel
+            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
+            entries={logEntries}
+            onAdd={handleAddLogEntry}
+            onMove={movePanelLogNotes}
+            onResize={resizePanelLogNotes}
+            onToggleVisible={toggleLogNotesVisible}
+            canWrite={canWrite}
+            useRelTime={useRelTime}
+          />
+        );
+      })()}
     </div>
   );
 }
