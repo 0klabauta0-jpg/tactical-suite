@@ -2802,8 +2802,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
   function onResizeUp() { resizing.current = false; }
 
   return (
-    <div className="fixed z-50 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}
+    <div style={{ position: "fixed", zIndex: 9999, left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120, borderRadius: 12, border: "1px solid #4b5563", background: "#111827", boxShadow: "0 20px 40px rgba(0,0,0,0.8)", display: "flex", flexDirection: "column", overflow: "hidden" }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
@@ -2889,8 +2888,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   }
 
   return (
-    <div className="fixed z-50 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}
+    <div style={{ position: "fixed", zIndex: 9999, left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180, borderRadius: 12, border: "1px solid #1e40af", background: "#111827", boxShadow: "0 20px 40px rgba(0,0,0,0.8)", display: "flex", flexDirection: "column", overflow: "hidden" }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
       {/* Header */}
@@ -4095,32 +4093,28 @@ function BoardApp() {
       )}
 
       {/* Notizen-Panels via Portal → direkt in document.body, nie durch overflow/transform geclipt */}
-      {isMounted && notesVisible && createPortal(
+      {notesVisible && (
         <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
           w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
           text={notesText} onChange={handleNotesChange}
           onMove={movePanelNotes} onResize={resizePanelNotes}
-          canWrite={canWrite} />,
-        document.body
+          canWrite={canWrite} />
       )}
-      {isMounted && createPortal(
-        (() => {
-          const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-          return (
-            <LogNotesPanel
-              x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-              entries={logEntries}
-              onAdd={handleAddLogEntry}
-              onMove={movePanelLogNotes}
-              onResize={resizePanelLogNotes}
-              onToggleVisible={toggleLogNotesVisible}
-              canWrite={canWrite}
-              useRelTime={useRelTime}
-            />
-          );
-        })(),
-        document.body
-      )}
+      {(() => {
+        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+        return (
+          <LogNotesPanel
+            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
+            entries={logEntries}
+            onAdd={handleAddLogEntry}
+            onMove={movePanelLogNotes}
+            onResize={resizePanelLogNotes}
+            onToggleVisible={toggleLogNotesVisible}
+            canWrite={canWrite}
+            useRelTime={useRelTime}
+          />
+        );
+      })()}
     </div>
   );
 }
