@@ -4183,29 +4183,6 @@ function BoardApp() {
         </div>
       )}
 
-
-      {notesVisible && (
-        <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
-          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
-          text={notesText} onChange={handleNotesChange}
-          onMove={movePanelNotes} onResize={resizePanelNotes}
-          canWrite={canWrite} />
-      )}
-      {(() => {
-        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-        return (
-          <LogNotesPanel
-            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-            entries={logEntries}
-            onAdd={handleAddLogEntry}
-            onMove={movePanelLogNotes}
-            onResize={resizePanelLogNotes}
-            onToggleVisible={toggleLogNotesVisible}
-            canWrite={canWrite}
-            useRelTime={useRelTime}
-          />
-        );
-      })()}
     </div>
   );
 }
