@@ -8,7 +8,7 @@ import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@d
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
-import { doc, getDoc, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -542,6 +542,16 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [templateRoomId, setTemplateRoomId] = useState("");
+  const [availableRooms, setAvailableRooms] = useState<string[]>([]);
+
+  // Alle vorhandenen Räume laden für Template-Auswahl
+  useEffect(() => {
+    getDocs(collection(db, "rooms")).then((snap) => {
+      const ids = snap.docs.map((d) => d.id).filter((id) => id !== roomId).sort();
+      setAvailableRooms(ids);
+    }).catch(() => {});
+  }, [roomId]);
 
   // Bestehende Config laden
   useEffect(() => {
@@ -583,6 +593,25 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         roomName: roomName.trim() || roomId,
         updatedAt: serverTimestamp(),
       });
+
+      // ── Schritt 2b: Template-Raum übernehmen (falls ausgewählt) ────────
+      if (templateRoomId && templateRoomId !== roomId) {
+        try {
+          const templateSnap = await getDoc(doc(db, "rooms", templateRoomId, "state", "board"));
+          if (templateSnap.exists()) {
+            const td = templateSnap.data() as any;
+            const templateData: Record<string, any> = {};
+            if (Array.isArray(td.groups)  && td.groups.length  > 0) templateData.groups  = td.groups;
+            if (td.columns && Object.keys(td.columns).length   > 0) templateData.columns = td.columns;
+            if (Array.isArray(td.maps)    && td.maps.length    > 0) templateData.maps    = td.maps;
+            if (Array.isArray(td.pois)    && td.pois.length    > 0) templateData.pois    = td.pois;
+            if (Object.keys(templateData).length > 0) {
+              await setDoc(doc(db, "rooms", roomId, "state", "board"),
+                { ...templateData, updatedAt: serverTimestamp() }, { merge: true });
+            }
+          }
+        } catch (_) { /* Template nicht erreichbar – kein Problem */ }
+      }
 
       // Admin-Handle in playerOverrides als admin eintragen
       if (adminHandle.trim()) {
@@ -661,6 +690,22 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
             />
             <p className="text-gray-600 text-xs mb-4">
               Sheet → Teilen → Link kopieren (die normale /edit-URL)
+            </p>
+
+            <label className="text-gray-300 text-xs mb-1 block">
+              Template laden <span className="text-gray-500">(optional – Gruppen &amp; Karten aus bestehendem Raum übernehmen)</span>
+            </label>
+            <select
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500"
+              value={templateRoomId}
+              onChange={(e) => setTemplateRoomId(e.target.value)}>
+              <option value="">– Kein Template –</option>
+              {availableRooms.map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
+            <p className="text-gray-600 text-xs mb-4">
+              Wähle einen bestehenden Raum als Vorlage. Gruppen und Karten werden kopiert – Spieler, Notizen und Tokens nicht.
             </p>
 
             <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
