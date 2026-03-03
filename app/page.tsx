@@ -2878,10 +2878,11 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
 // LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
 // ─────────────────────────────────────────────────────────────
 
-function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, onToggleVisible, canWrite, useRelTime }: {
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: LogEntry[];
   onAdd: (text: string) => void;
+  onClear: () => void;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
   onToggleVisible: () => void;
@@ -2893,6 +2894,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   const resizing = useRef(false);
   const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
   const [input, setInput] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const firstTs = entries[0]?.ts ?? 0;
   const [useRelTimeLocal, setUseRelTimeLocal] = useState(useRelTime);
@@ -2953,6 +2955,29 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
           onClick={() => setUseRelTimeLocal(v => !v)}>
           +m
         </button>
+        {canWrite && !confirmClear && (
+          <button
+            className="text-xs px-1.5 py-0.5 rounded border border-gray-600 text-gray-500 hover:text-red-400 hover:border-red-700 transition-colors"
+            title="Log leeren"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setConfirmClear(true)}>
+            🗑
+          </button>
+        )}
+        {canWrite && confirmClear && (
+          <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+            <button
+              className="text-xs px-1.5 py-0.5 rounded border border-red-700 bg-red-900 text-red-300 hover:bg-red-700 font-bold transition-colors"
+              onClick={() => { onClear(); setConfirmClear(false); }}>
+              ✓ Ja, leeren
+            </button>
+            <button
+              className="text-xs px-1.5 py-0.5 rounded border border-gray-600 text-gray-400 hover:bg-gray-700 transition-colors"
+              onClick={() => setConfirmClear(false)}>
+              ✕
+            </button>
+          </div>
+        )}
         <button
           className="text-gray-500 hover:text-white text-xs px-1"
           title={visible ? "Minimieren" : "Aufklappen"}
@@ -3461,6 +3486,12 @@ function BoardApp() {
     const next = [...logEntriesRef.current, entry];
     setLogEntries(next); logEntriesRef.current = next;
     setDoc(doc(db, "rooms", roomId, "state", "board"), { logEntries: next, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
+  }
+
+  function handleClearLogEntries() {
+    if (!canWrite) return;
+    setLogEntries([]); logEntriesRef.current = [];
+    setDoc(doc(db, "rooms", roomId, "state", "board"), { logEntries: [], updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
   }
 
   function handleNotesChange(text: string) {
@@ -4123,6 +4154,7 @@ function BoardApp() {
             x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
             entries={logEntries}
             onAdd={handleAddLogEntry}
+            onClear={handleClearLogEntries}
             onMove={movePanelLogNotes}
             onResize={resizePanelLogNotes}
             onToggleVisible={toggleLogNotesVisible}
