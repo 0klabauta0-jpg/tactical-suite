@@ -62,7 +62,7 @@ type LogEntry = { ts: number; text: string };
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
-type RoomConfig = { sheetUrl: string; password: string; roomName?: string };
+type RoomConfig = { sheetUrl: string; password: string; roomName?: string; sheetShareUrl?: string };
 const roomConfigCache: Record<string, RoomConfig> = {};
 
 async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
@@ -79,7 +79,7 @@ async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
       console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt", d);
       return null;
     }
-    const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password };
+    const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password, roomName: d.roomName, sheetShareUrl: d.sheetShareUrl };
     roomConfigCache[roomId] = cfg;
     return cfg;
   } catch (e) {
@@ -534,6 +534,7 @@ function ProfileModal({
 
 function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player, cfg: RoomConfig) => void }) {
   const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetShareUrl, setSheetShareUrl] = useState("");
   const [password, setPassword] = useState("");
   const [roomName, setRoomName] = useState("");
   const [adminKey, setAdminKey] = useState("");
@@ -545,7 +546,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   // Bestehende Config laden
   useEffect(() => {
     loadRoomConfig(roomId).then((cfg) => {
-      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); setRoomName(cfg.roomName ?? ""); }
+      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); setRoomName(cfg.roomName ?? ""); setSheetShareUrl(cfg.sheetShareUrl ?? ""); }
       setLoading(false);
     });
   }, [roomId]);
@@ -577,6 +578,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       // ── Schritt 2: Firestore schreiben (jetzt authentifiziert) ───────────
       await setDoc(doc(db, "rooms", roomId, "config", "main"), {
         sheetUrl: sheetUrl.trim(),
+        sheetShareUrl: sheetShareUrl.trim(),
         password: password.trim(),
         roomName: roomName.trim() || roomId,
         updatedAt: serverTimestamp(),
@@ -604,7 +606,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
           area: "", role: "", squadron: "", status: "",
           ampel: "", appRole: "admin", homeLocation: "",
         };
-        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim(), roomName: roomName.trim() || roomId };
+        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim(), roomName: roomName.trim() || roomId, sheetShareUrl: sheetShareUrl.trim() };
         onDone(adminPlayer, cfg);
         return;
       }
@@ -646,8 +648,19 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
               value={sheetUrl}
               onChange={(e) => setSheetUrl(e.target.value)}
             />
-            <p className="text-gray-600 text-xs mb-4">
+            <p className="text-gray-600 text-xs mb-3">
               Sheet → Datei → Im Web veröffentlichen → CSV → URL kopieren
+            </p>
+
+            <label className="text-gray-300 text-xs mb-1 block">Google Sheet Freigabe-Link <span className="text-gray-500">(optional – für schnelles Teilen im Team)</span></label>
+            <input
+              className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500 font-mono"
+              placeholder="https://docs.google.com/spreadsheets/d/…/edit?usp=sharing"
+              value={sheetShareUrl}
+              onChange={(e) => setSheetShareUrl(e.target.value)}
+            />
+            <p className="text-gray-600 text-xs mb-4">
+              Sheet → Teilen → Link kopieren (die normale /edit-URL)
             </p>
 
             <label className="text-gray-300 text-xs mb-1 block">Team-Passwort</label>
@@ -2836,7 +2849,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
   function onResizeUp() { resizing.current = false; }
 
   return (
-    <div className="absolute z-20 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+    <div className="fixed z-40 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
       style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
@@ -2882,6 +2895,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   const [input, setInput] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const firstTs = entries[0]?.ts ?? 0;
+  const [useRelTimeLocal, setUseRelTimeLocal] = useState(useRelTime);
 
   function onHeaderDown(e: React.PointerEvent) {
     dragging.current = true; start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
@@ -2904,7 +2918,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   function onResizeUp() { resizing.current = false; }
 
   function formatTs(ts: number): string {
-    if (useRelTime && firstTs) {
+    if (useRelTimeLocal && firstTs) {
       const mins = Math.round((ts - firstTs) / 60000);
       return `+${mins}m`;
     }
@@ -2923,7 +2937,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
   }
 
   return (
-    <div className="absolute z-20 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+    <div className="fixed z-40 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
       style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}
       onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
       onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
@@ -2932,6 +2946,13 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onMove, onResize, 
         onPointerDown={onHeaderDown}>
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-blue-300 flex-1">📟 Log-Notizen</span>
+        <button
+          className={`text-xs px-1.5 py-0.5 rounded border transition-colors ${useRelTimeLocal ? "bg-blue-800 border-blue-600 text-blue-200" : "border-gray-600 text-gray-500 hover:text-gray-300"}`}
+          title="Relative Zeit (+m) / Uhrzeit umschalten"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setUseRelTimeLocal(v => !v)}>
+          +m
+        </button>
         <button
           className="text-gray-500 hover:text-white text-xs px-1"
           title={visible ? "Minimieren" : "Aufklappen"}
@@ -3925,6 +3946,20 @@ function BoardApp() {
               className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-1">
               <span className={refreshingPlayers ? "animate-spin inline-block" : ""}>↻</span>
             </button>
+            {roomCfg?.sheetShareUrl && (
+              <button
+                title={`Sheet-Link kopieren: ${roomCfg.sheetShareUrl}`}
+                onClick={() => {
+                  navigator.clipboard.writeText(roomCfg!.sheetShareUrl!).then(() => {
+                    const el = document.getElementById("sheet-copy-btn");
+                    if (el) { el.textContent = "✓"; setTimeout(() => { if (el) el.textContent = "📊"; }, 1500); }
+                  });
+                }}
+                id="sheet-copy-btn"
+                className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-green-400 hover:bg-gray-700">
+                📊
+              </button>
+            )}
             <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
             <button
               className={`text-xs px-2 py-1 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
@@ -3933,10 +3968,6 @@ function BoardApp() {
               className={`text-xs px-2 py-1 rounded border transition-colors ${(panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes).visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
               onClick={toggleLogNotesVisible}
               title="Log-Notizen">📟</button>
-            <label className="flex items-center gap-0.5 text-xs text-gray-600 cursor-pointer select-none" title="Relative Zeit statt Uhrzeit">
-              <input type="checkbox" checked={useRelTime} onChange={(e) => setUseRelTime(e.target.checked)} className="accent-blue-500 w-3 h-3" />
-              <span>+m</span>
-            </label>
 
           </div>
 
@@ -4077,6 +4108,30 @@ function BoardApp() {
         </div>
       )}
 
+      {/* Floating Panels – sichtbar auf Board UND Karte */}
+      {notesVisible && (
+        <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
+          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
+          text={notesText} onChange={handleNotesChange}
+          onMove={movePanelNotes} onResize={resizePanelNotes}
+          canWrite={canWrite} />
+      )}
+      {(() => {
+        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
+        return (
+          <LogNotesPanel
+            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
+            entries={logEntries}
+            onAdd={handleAddLogEntry}
+            onMove={movePanelLogNotes}
+            onResize={resizePanelLogNotes}
+            onToggleVisible={toggleLogNotesVisible}
+            canWrite={canWrite}
+            useRelTime={useRelTime}
+          />
+        );
+      })()}
+
       {/* MAP */}
       {tab === "map" && (
         <div className="flex-1 relative">
@@ -4165,29 +4220,6 @@ function BoardApp() {
             </DraggablePanel>
           )}
 
-          {notesVisible && (
-            <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
-              w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
-              text={notesText} onChange={handleNotesChange}
-              onMove={movePanelNotes} onResize={resizePanelNotes}
-              canWrite={canWrite} />
-          )}
-          {(() => {
-            const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-            return (
-              <LogNotesPanel
-                x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-                entries={logEntries}
-                onAdd={handleAddLogEntry}
-                onMove={movePanelLogNotes}
-                onResize={resizePanelLogNotes}
-                onToggleVisible={toggleLogNotesVisible}
-                canWrite={canWrite}
-                useRelTime={useRelTime}
-              />
-            );
-          })()}
-
         </div>
       )}
 
@@ -4220,4 +4252,3 @@ export default function Page() {
     </Suspense>
   );
 }
-
