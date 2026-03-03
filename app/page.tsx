@@ -1619,22 +1619,27 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
   const [armed, setArmed] = useState<{ gId: string; mode: "token" | "order" } | null>(null);
   const tactical = groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
 
+  const armedRef = useRef(armed);
+  useEffect(() => { armedRef.current = armed; }, [armed]);
+  const skipNextClick = useRef(false);
+
   useEffect(() => {
     function handler(ev: MouseEvent) {
+      if (skipNextClick.current) { skipNextClick.current = false; return; }
       const el = document.getElementById("map-img");
-      if (!el || !armed) return;
+      if (!el || !armedRef.current) return;
       const rect = el.getBoundingClientRect();
       const x = (ev.clientX - rect.left) / rect.width;
       const y = (ev.clientY - rect.top) / rect.height;
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-        if (armed.mode === "token") onPlace(armed.gId, x, y, activeMapId);
-        else onPlaceOrder(armed.gId, x, y, activeMapId);
+        if (armedRef.current.mode === "token") onPlace(armedRef.current.gId, x, y, activeMapId);
+        else onPlaceOrder(armedRef.current.gId, x, y, activeMapId);
         setArmed(null);
       }
     }
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
-  }, [armed, onPlace, onPlaceOrder, activeMapId]);
+  }, [onPlace, onPlaceOrder, activeMapId]);
 
   const isArmed = (gId: string, mode: "token" | "order") =>
     armed?.gId === gId && armed?.mode === mode;
@@ -1650,7 +1655,7 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
             className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
               isArmed(g.id, "token") ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
             }`}
-            onClick={(e) => { e.stopPropagation(); setArmed(isArmed(g.id, "token") ? null : { gId: g.id, mode: "token" }); }}>
+            onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmed(isArmed(g.id, "token") ? null : { gId: g.id, mode: "token" }); }}>
             <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: groupColor(g) }} />
             {isArmed(g.id, "token") ? "▶ Klicke…" : g.label}
           </button>
@@ -1660,7 +1665,7 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
             className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${
               isArmed(g.id, "order") ? "bg-orange-600 border-orange-500 text-white" : "bg-gray-800 border-gray-600 text-orange-400 hover:bg-gray-700 hover:border-orange-600"
             }`}
-            onClick={(e) => { e.stopPropagation(); setArmed(isArmed(g.id, "order") ? null : { gId: g.id, mode: "order" }); }}>
+            onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmed(isArmed(g.id, "order") ? null : { gId: g.id, mode: "order" }); }}>
             {isArmed(g.id, "order") ? "▶ Klicke…" : "⚑"}
           </button>
         </div>
@@ -3203,8 +3208,11 @@ function BoardApp() {
       if (!data) return;
       const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
       setBoard(safeBoard(data, loadedGroups));
-      const incomingTokens: Token[] = Array.isArray(data.tokens) ? data.tokens.map(normalizeToken) : [];
-      setTokens(incomingTokens);
+      if (Array.isArray(data.tokens)) {
+        const incomingTokens: Token[] = data.tokens.map(normalizeToken);
+        setTokens(incomingTokens);
+        tokensRef.current = incomingTokens;
+      }
       const incomingOrderMarkers: OrderMarker[] = Array.isArray(data.orderMarkers)
         ? data.orderMarkers.map((m: any) => ({ groupId: m.groupId, x: m.x, y: m.y, mapId: m.mapId ?? "main" }))
         : [];
