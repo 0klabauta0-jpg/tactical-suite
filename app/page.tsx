@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.003";
+const APP_VERSION = "1.004";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -1211,6 +1211,32 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
 }
 
 // ─────────────────────────────────────────────────────────────
+// DRAG HANDLE (9-dot SVG)
+// ─────────────────────────────────────────────────────────────
+function DragHandle({ listeners, attributes }: { listeners?: object; attributes?: object }) {
+  return (
+    <div
+      {...(listeners ?? {})}
+      {...(attributes ?? {})}
+      className="cursor-grab active:cursor-grabbing flex-shrink-0 flex items-center justify-center p-1 rounded hover:bg-gray-700 transition-colors touch-none select-none"
+      title="Ziehen zum Verschieben"
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" className="text-gray-500">
+        <circle cx="3"  cy="3"  r="1.5"/>
+        <circle cx="7"  cy="3"  r="1.5"/>
+        <circle cx="11" cy="3"  r="1.5"/>
+        <circle cx="3"  cy="7"  r="1.5"/>
+        <circle cx="7"  cy="7"  r="1.5"/>
+        <circle cx="11" cy="7"  r="1.5"/>
+        <circle cx="3"  cy="11" r="1.5"/>
+        <circle cx="7"  cy="11" r="1.5"/>
+        <circle cx="11" cy="11" r="1.5"/>
+      </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // PLAYER CARD
 // ─────────────────────────────────────────────────────────────
 
@@ -1238,11 +1264,12 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
     <div ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
       className={`rounded-xl border shadow-sm transition-all ${isDead ? "bg-gray-900 border-red-900 opacity-70" : "bg-gray-800 border-gray-700"}`}>
-      <div {...attributes} {...listeners} className="px-2 pt-2 pb-1 cursor-grab active:cursor-grabbing"
+      <div className="px-2 pt-2 pb-1 select-none"
         style={{ borderLeft: `3px solid ${ampelColor(player.ampel)}`, paddingLeft: 8 }}>
 
-        {/* Zeile 1: Name + Alive-Button */}
+        {/* Zeile 1: Handle + Name + Alive-Button */}
         <div className="flex items-center justify-between gap-1 mb-0.5">
+          <DragHandle listeners={listeners} attributes={attributes} />
           <div className={`font-semibold text-sm leading-tight flex-1 break-words ${isDead ? "line-through text-gray-500" : "text-white"}`}>
             {player.name}
           </div>
@@ -1412,11 +1439,11 @@ function SpawnPlayerCard({ player, aliveState }: { player: Player; aliveState: P
   return (
     <div ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
-      {...attributes} {...listeners}
-      className={`text-xs px-2 py-1 rounded border cursor-grab active:cursor-grabbing select-none ${
+      className={`text-xs px-1 py-1 rounded border flex items-center gap-1 select-none ${
         isDead ? "border-red-800 text-red-400 line-through" : "border-yellow-800 text-gray-300 hover:border-yellow-600"
       }`}>
-      {player.name}
+      <DragHandle listeners={listeners} attributes={attributes} />
+      <span>{player.name}</span>
     </div>
   );
 }
