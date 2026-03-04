@@ -3135,6 +3135,13 @@ function BoardApp() {
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
+  // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
+  const [localPanelPos, setLocalPanelPos] = useState({
+    nav:     { x: DEFAULT_PANEL_LAYOUT.nav.x,     y: DEFAULT_PANEL_LAYOUT.nav.y     },
+    placer:  { x: DEFAULT_PANEL_LAYOUT.placer.x,  y: DEFAULT_PANEL_LAYOUT.placer.y  },
+    toolbar: { x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 },
+    zoom:    { x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  },
+  });
   const [notesText, setNotesText] = useState("");
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [useRelTime, setUseRelTime] = useState(false);
@@ -3427,27 +3434,19 @@ function BoardApp() {
   }
 
   function movePanelNav(x: number, y: number) {
-    if (!canWrite) return;
-    const next = { ...panelLayout, nav: { x, y } };
-    setPanelLayout(next);
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+    setLocalPanelPos(p => ({ ...p, nav: { x, y } }));
   }
 
   function movePanelPlacer(x: number, y: number) {
-    if (!canWrite) return;
-    const next = { ...panelLayout, placer: { x, y } };
-    setPanelLayout(next);
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
+    setLocalPanelPos(p => ({ ...p, placer: { x, y } }));
   }
 
   function movePanelToolbar(x: number, y: number) {
-    const next = { ...panelLayout, toolbar: { x, y } };
-    setPanelLayout(next);
+    setLocalPanelPos(p => ({ ...p, toolbar: { x, y } }));
   }
 
   function movePanelZoom(x: number, y: number) {
-    const next = { ...panelLayout, zoom: { x, y } };
-    setPanelLayout(next);
+    setLocalPanelPos(p => ({ ...p, zoom: { x, y } }));
   }
 
   // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
@@ -3485,40 +3484,40 @@ function BoardApp() {
   const movePanelNotes = useCallback((x: number, y: number) => {
     const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
     const pos = clampPanelPosition(x, y, n.w, n.h);
-    const next = { ...panelLayout, notes: { ...n, ...pos }, []); };
+    const next = { ...panelLayout, notes: { ...n, ...pos } };
     setPanelLayout(next);
     if (notesMoveDebounce.current) clearTimeout(notesMoveDebounce.current);
     notesMoveDebounce.current = setTimeout(() => {
       pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
     }, 600);
-  }
+  }, [panelLayout]);
 
   const resizePanelNotes = useCallback((w: number, h: number) => {
     const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
     const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
     const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
-    const next = { ...panelLayout, notes: { ...n, ...size, ...pos }, []); };
+    const next = { ...panelLayout, notes: { ...n, ...size, ...pos } };
     setPanelLayout(next);
     if (notesResizeDebounce.current) clearTimeout(notesResizeDebounce.current);
     notesResizeDebounce.current = setTimeout(() => {
       pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
     }, 600);
-  }
+  }, [panelLayout]);
 
   const movePanelLogNotes = useCallback((x: number, y: number) => {
     const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
     const pos = clampPanelPosition(x, y, ln.w, ln.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...pos }, []); };
+    const next = { ...panelLayout, logNotes: { ...ln, ...pos } };
     setPanelLayout(next);
-  }
+  }, [panelLayout]);
 
   const resizePanelLogNotes = useCallback((w: number, h: number) => {
     const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
     const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
     const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos }, []); };
+    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos } };
     setPanelLayout(next);
-  }
+  }, [panelLayout]);
 
   function toggleLogNotesVisible() {
     const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
@@ -4263,8 +4262,8 @@ function BoardApp() {
               canDraw={canWrite}
               onUndo={undoDrawElement}
               onClear={clearDrawings}
-              x={panelLayout.toolbar?.x ?? 300}
-              y={panelLayout.toolbar?.y ?? 16}
+              x={localPanelPos.toolbar.x}
+              y={localPanelPos.toolbar.y}
               onMove={movePanelToolbar}
               showGrid={showGrid}
               onToggleGrid={() => setShowGrid(v => !v)}
@@ -4274,8 +4273,8 @@ function BoardApp() {
           {/* Zoom Panel – verschiebbares Fenster */}
           {activeImage && (
             <ZoomPanel
-              x={panelLayout.zoom?.x ?? 16}
-              y={panelLayout.zoom?.y ?? 600}
+              x={localPanelPos.zoom.x}
+              y={localPanelPos.zoom.y}
               onMove={movePanelZoom}
               scale={mapScale}
               onZoomIn={() => zoomInRef.current()}
@@ -4284,14 +4283,14 @@ function BoardApp() {
             />
           )}
 
-          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={canWrite} x={panelLayout.nav.x} y={panelLayout.nav.y} onMove={movePanelNav}>
+          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage} />
           </DraggablePanel>
 
           {canWrite && (
-            <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={canWrite} x={panelLayout.placer.x} y={panelLayout.placer.y} onMove={movePanelPlacer}>
+            <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
               <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
