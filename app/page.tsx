@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.005";
+const APP_VERSION = "1.006";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -1147,15 +1147,15 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
 // DRAGGABLE PANEL
 // ─────────────────────────────────────────────────────────────
 
-function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 180 }: {
+function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 180, defaultHeight = 0 }: {
   title: string; tooltip?: string; x: number; y: number; onMove: (x: number, y: number) => void;
-  canDrag: boolean; children: React.ReactNode; minWidth?: number;
+  canDrag: boolean; children: React.ReactNode; minWidth?: number; defaultHeight?: number;
 }) {
   const dragging = useRef(false);
   const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
   const resizing = useRef(false);
   const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
-  const [size, setSize] = useState({ w: minWidth, h: 0 }); // h=0 = auto
+  const [size, setSize] = useState({ w: minWidth, h: defaultHeight }); // h=0 = auto
   const MIN_W = minWidth;
   const MIN_H = 80;
 
@@ -1700,11 +1700,11 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
   );
 }
 
-function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRename, onDelete, onSetImage, indent, isPOI }: {
+function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRename, onDelete, onSetImage, indent, isPOI, dragListeners, dragAttributes }: {
   map: { id: string; label: string; image: string }; activeMapId: string;
   setActiveMapId: (id: string) => void; isAdmin: boolean; canDelete: boolean;
   onRename: (v: string) => void; onDelete: () => void; onSetImage: (img: string) => void;
-  indent: number; isPOI?: boolean;
+  indent: number; isPOI?: boolean; dragListeners?: object; dragAttributes?: object;
 }) {
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
@@ -1749,6 +1749,16 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
           title={indent > 0 ? "Doppelklick zum Wechseln" : undefined}
         >
           <span className="flex items-center gap-1">
+            {dragListeners && (
+              <span {...(dragListeners as any)} {...(dragAttributes as any)}
+                className="cursor-grab active:cursor-grabbing flex-shrink-0 touch-none select-none"
+                onPointerDown={(e) => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); (dragListeners as any).onPointerDown?.(e); }}>
+                <svg width="10" height="7" viewBox="0 0 10 7" fill="currentColor" className="text-gray-500 opacity-60">
+                  <circle cx="2" cy="1.5" r="1.2"/><circle cx="5" cy="1.5" r="1.2"/><circle cx="8" cy="1.5" r="1.2"/>
+                  <circle cx="2" cy="5.5" r="1.2"/><circle cx="5" cy="5.5" r="1.2"/><circle cx="8" cy="5.5" r="1.2"/>
+                </svg>
+              </span>
+            )}
             {icon}
             {isAdmin && indent > 0 ? <InlineEdit value={map.label} onSave={onRename} /> : <span className="truncate">{map.label}</span>}
             <span className={`text-xs flex-shrink-0 ${map.image ? "text-green-600" : "text-gray-700"}`}>{map.image ? "●" : "○"}</span>
@@ -1812,23 +1822,11 @@ function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, 
     <div ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
       className="mt-0.5">
-      <div className="flex items-center gap-1">
-        <div {...attributes} {...listeners}
-          className="cursor-grab active:cursor-grabbing flex-shrink-0 p-0.5 rounded hover:bg-gray-700 touch-none select-none"
-          onPointerDown={(e) => e.stopPropagation()}>
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor" className="text-gray-600">
-            <circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/>
-            <circle cx="3" cy="7" r="1.5"/><circle cx="7" cy="7" r="1.5"/><circle cx="11" cy="7" r="1.5"/>
-            <circle cx="3" cy="11" r="1.5"/><circle cx="7" cy="11" r="1.5"/><circle cx="11" cy="11" r="1.5"/>
-          </svg>
-        </div>
-        <div className="flex-1 min-w-0">
-          <MapNavRow map={map} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
-            isAdmin={isAdmin} canDelete={canDelete}
-            onRename={onRename} onDelete={onDelete}
-            onSetImage={onSetImage} indent={indent} isPOI={isPOI} />
-        </div>
-      </div>
+      <MapNavRow map={map} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+        isAdmin={isAdmin} canDelete={canDelete}
+        onRename={onRename} onDelete={onDelete}
+        onSetImage={onSetImage} indent={indent} isPOI={isPOI}
+        dragListeners={listeners} dragAttributes={attributes} />
       {children}
     </div>
   );
@@ -4474,7 +4472,7 @@ function BoardApp() {
             />
           )}
 
-          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav}>
+          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
