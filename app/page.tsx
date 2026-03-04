@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.001";
+const APP_VERSION = "1.002";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -2900,11 +2900,9 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
 
   return (
     <div className="fixed z-40 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}
-      onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
-      onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
+      style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}>
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
-        onPointerDown={onHeaderDown}>
+        onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-gray-300 flex-1">📋 Notizen</span>
         <span className="text-gray-600 text-xs">{canWrite ? "schreibbar" : "lesend"}</span>
@@ -2914,7 +2912,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
         value={text} readOnly={!canWrite} onChange={(e) => canWrite && onChange(e.target.value)}
         onPointerDown={(e) => e.stopPropagation()} style={{ cursor: canWrite ? "text" : "default" }} spellCheck={false} />
       <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
-        onPointerDown={onResizeDown} title="Größe ändern">
+        onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
           <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
         </svg>
@@ -2990,12 +2988,10 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
 
   return (
     <div className="fixed z-40 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}
-      onPointerMove={(e) => { onHeaderMove(e); onResizeMove(e); }}
-      onPointerUp={() => { onHeaderUp(); onResizeUp(); }}>
+      style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
-        onPointerDown={onHeaderDown}>
+        onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-blue-300 flex-1">📟 Log-Notizen</span>
         <button
@@ -3070,7 +3066,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
           )}
           {/* Resize handle */}
           <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
-            onPointerDown={onResizeDown} title="Größe ändern">
+            onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
               <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
             </svg>
@@ -3486,10 +3482,10 @@ function BoardApp() {
   const notesMoveDebounce   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function movePanelNotes(x: number, y: number) {
+  const movePanelNotes = useCallback((x: number, y: number) => {
     const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
     const pos = clampPanelPosition(x, y, n.w, n.h);
-    const next = { ...panelLayout, notes: { ...n, ...pos } };
+    const next = { ...panelLayout, notes: { ...n, ...pos }, []); };
     setPanelLayout(next);
     if (notesMoveDebounce.current) clearTimeout(notesMoveDebounce.current);
     notesMoveDebounce.current = setTimeout(() => {
@@ -3497,11 +3493,11 @@ function BoardApp() {
     }, 600);
   }
 
-  function resizePanelNotes(w: number, h: number) {
+  const resizePanelNotes = useCallback((w: number, h: number) => {
     const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
     const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
     const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
-    const next = { ...panelLayout, notes: { ...n, ...size, ...pos } };
+    const next = { ...panelLayout, notes: { ...n, ...size, ...pos }, []); };
     setPanelLayout(next);
     if (notesResizeDebounce.current) clearTimeout(notesResizeDebounce.current);
     notesResizeDebounce.current = setTimeout(() => {
@@ -3509,18 +3505,18 @@ function BoardApp() {
     }, 600);
   }
 
-  function movePanelLogNotes(x: number, y: number) {
+  const movePanelLogNotes = useCallback((x: number, y: number) => {
     const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
     const pos = clampPanelPosition(x, y, ln.w, ln.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...pos } };
+    const next = { ...panelLayout, logNotes: { ...ln, ...pos }, []); };
     setPanelLayout(next);
   }
 
-  function resizePanelLogNotes(w: number, h: number) {
+  const resizePanelLogNotes = useCallback((w: number, h: number) => {
     const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
     const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
     const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos } };
+    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos }, []); };
     setPanelLayout(next);
   }
 
