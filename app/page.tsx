@@ -1626,7 +1626,7 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
       <MapNavRow map={maps.find((m) => m.id === "main")!} activeMapId={activeMapId}
         setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={false}
         onRename={(v) => onRenameMap("main", v)} onDelete={() => {}}
-        onSetImage={(img) => onSetMapImage("main", img)} indent={0} canDrag={false} />
+        onSetImage={(img) => onSetMapImage("main", img)} indent={0} />
 
       {/* Unterkarten – collapsible + draggable */}
       {submaps.length > 0 && (
