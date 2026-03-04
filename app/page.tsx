@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.002";
+const APP_VERSION = "1.003";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -1608,27 +1608,29 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
                   isAdmin={isAdmin} canDelete={isAdmin}
                   onRename={(v) => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
                   onSetImage={(img) => onSetMapImage(sm.id, img)} indent={1} />
-                {/* POIs – collapsible per submap */}
-                {smPois.length > 0 && (
-                  <div className="ml-4">
-                    <button
-                      className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-400 px-1 py-0.5 select-none"
-                      onClick={() => togglePois(sm.id)}>
-                      <span>{pOpen ? "▾" : "▸"}</span>
-                      <span>POIs ({smPois.length})</span>
-                    </button>
-                    {pOpen && smPois.map((poi) => (
-                      <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
-                        setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
-                        onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
-                        onSetImage={(img) => onSetMapImage(poi.id, img)} indent={2} isPOI />
-                    ))}
+                {/* POIs – collapsible per submap, + POI inline im Header */}
+                <div className="ml-4">
+                  <div className="flex items-center gap-1">
+                    {smPois.length > 0 && (
+                      <button
+                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-400 px-1 py-0.5 select-none flex-1"
+                        onClick={() => togglePois(sm.id)}>
+                        <span>{pOpen ? "▾" : "▸"}</span>
+                        <span>POIs ({smPois.length})</span>
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button className="text-xs px-1.5 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-green-400 hover:border-green-800 ml-auto"
+                        onClick={() => onAddPOI(sm.id)} title="POI hinzufügen">+ POI</button>
+                    )}
                   </div>
-                )}
-                {isAdmin && (
-                  <button className="ml-8 text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-gray-300 hover:bg-gray-800 mt-0.5"
-                    onClick={() => onAddPOI(sm.id)}>+ POI</button>
-                )}
+                  {pOpen && smPois.map((poi) => (
+                    <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
+                      setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
+                      onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
+                      onSetImage={(img) => onSetMapImage(poi.id, img)} indent={2} isPOI />
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -1650,6 +1652,7 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
 }) {
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => setUrlDraft(map.image), [map.image]);
 
   const isActive = activeMapId === map.id;
@@ -1700,8 +1703,17 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
           <button className={`text-xs px-1 flex-shrink-0 ${showUrl ? "text-blue-400" : "text-gray-600 hover:text-blue-400"}`}
             onClick={() => setShowUrl((v) => !v)} title="Bild-URL">🖼</button>
         )}
-        {canDelete && (
-          <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0" onClick={onDelete}>✕</button>
+        {canDelete && !confirmDelete && (
+          <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0"
+            onClick={() => setConfirmDelete(true)} title="Löschen">✕</button>
+        )}
+        {canDelete && confirmDelete && (
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <button className="text-xs px-1 py-0.5 rounded bg-red-900 border border-red-700 text-red-300 hover:bg-red-700 font-bold"
+              onClick={() => { onDelete(); setConfirmDelete(false); }} title="Bestätigen">✓</button>
+            <button className="text-xs px-1 py-0.5 rounded border border-gray-600 text-gray-400 hover:bg-gray-700"
+              onClick={() => setConfirmDelete(false)} title="Abbrechen">✕</button>
+          </div>
         )}
       </div>
       {showUrl && isAdmin && (
@@ -1841,6 +1853,7 @@ function DrawingToolbar({
   showGrid: boolean; onToggleGrid: () => void;
 }) {
   if (!canDraw) return null;
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const dragging = useRef(false);
   const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
@@ -1959,10 +1972,20 @@ function DrawingToolbar({
             className="flex-1 h-7 rounded-lg text-xs border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">
             ↩ Undo
           </button>
-          <button title="Alles löschen (diese Ebene)" onClick={onClear}
-            className="flex-1 h-7 rounded-lg text-xs border border-red-900 bg-red-950 text-red-400 hover:bg-red-900">
-            🗑 Alles
-          </button>
+          {!confirmClear && (
+            <button title="Alles löschen (diese Ebene)" onClick={() => setConfirmClear(true)}
+              className="flex-1 h-7 rounded-lg text-xs border border-red-900 bg-red-950 text-red-400 hover:bg-red-900">
+              🗑 Alles
+            </button>
+          )}
+          {confirmClear && (
+            <div className="flex gap-1 flex-1">
+              <button className="flex-1 h-7 rounded-lg text-xs border border-red-700 bg-red-900 text-red-300 hover:bg-red-700 font-bold"
+                onClick={() => { onClear(); setConfirmClear(false); }}>✓ Ja</button>
+              <button className="flex-1 h-7 rounded-lg text-xs border border-gray-600 text-gray-400 hover:bg-gray-700"
+                onClick={() => setConfirmClear(false)}>✕</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
