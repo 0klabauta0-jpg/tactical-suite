@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.004";
+const APP_VERSION = "1.005";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -1596,18 +1596,29 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
 // ─────────────────────────────────────────────────────────────
 
 function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenameMap, onDeleteMap,
-  onAddSubmap, onRenamePOI, onDeletePOI, onAddPOI, onSetMapImage,
+  onAddSubmap, onRenamePOI, onDeletePOI, onAddPOI, onSetMapImage, onReorderMaps, onReorderPOIs,
 }: {
   maps: MapEntry[]; pois: POI[]; activeMapId: string; setActiveMapId: (id: string) => void;
   isAdmin: boolean; onRenameMap: (id: string, label: string) => void; onDeleteMap: (id: string) => void;
   onAddSubmap: () => void; onRenamePOI: (id: string, label: string) => void;
   onDeletePOI: (id: string) => void; onAddPOI: (parentMapId: string) => void;
   onSetMapImage: (id: string, image: string) => void;
+  onReorderMaps: (newOrder: string[]) => void;
+  onReorderPOIs: (parentMapId: string, newOrder: string[]) => void;
 }) {
   const submaps = maps.filter((m) => m.id !== "main");
   const [submapsOpen, setSubmapsOpen] = useState(true);
   const [poisOpen, setPoisOpen] = useState<Record<string, boolean>>({});
   const togglePois = (id: string) => setPoisOpen(p => ({ ...p, [id]: !(p[id] ?? true) }));
+
+  function handleSubmapDragEnd(e: any) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = submaps.map((m) => m.id);
+    const oldIdx = ids.indexOf(active.id);
+    const newIdx = ids.indexOf(over.id);
+    onReorderMaps(arrayMove(ids, oldIdx, newIdx));
+  }
 
   return (
     <div className="space-y-1">
@@ -1615,9 +1626,9 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
       <MapNavRow map={maps.find((m) => m.id === "main")!} activeMapId={activeMapId}
         setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={false}
         onRename={(v) => onRenameMap("main", v)} onDelete={() => {}}
-        onSetImage={(img) => onSetMapImage("main", img)} indent={0} />
+        onSetImage={(img) => onSetMapImage("main", img)} indent={0} canDrag={false} />
 
-      {/* Unterkarten – collapsible */}
+      {/* Unterkarten – collapsible + draggable */}
       {submaps.length > 0 && (
         <div>
           <button
@@ -1626,41 +1637,59 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
             <span className="text-gray-600">{submapsOpen ? "▾" : "▸"}</span>
             <span>Unterkarten ({submaps.length})</span>
           </button>
-          {submapsOpen && submaps.map((sm) => {
-            const smPois = pois.filter((p) => p.parentMapId === sm.id);
-            const pOpen = poisOpen[sm.id] ?? true;
-            return (
-              <div key={sm.id} className="mt-0.5">
-                <MapNavRow map={sm} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
-                  isAdmin={isAdmin} canDelete={isAdmin}
-                  onRename={(v) => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
-                  onSetImage={(img) => onSetMapImage(sm.id, img)} indent={1} />
-                {/* POIs – collapsible per submap, + POI inline im Header */}
-                <div className="ml-4">
-                  <div className="flex items-center gap-1">
-                    {smPois.length > 0 && (
-                      <button
-                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-400 px-1 py-0.5 select-none flex-1"
-                        onClick={() => togglePois(sm.id)}>
-                        <span>{pOpen ? "▾" : "▸"}</span>
-                        <span>POIs ({smPois.length})</span>
-                      </button>
-                    )}
-                    {isAdmin && (
-                      <button className="text-xs px-1.5 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-green-400 hover:border-green-800 ml-auto"
-                        onClick={() => onAddPOI(sm.id)} title="POI hinzufügen">+ POI</button>
-                    )}
-                  </div>
-                  {pOpen && smPois.map((poi) => (
-                    <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
-                      setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
-                      onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
-                      onSetImage={(img) => onSetMapImage(poi.id, img)} indent={2} isPOI />
-                  ))}
-                </div>
-              </div>
+          {submapsOpen && (
+            <DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))} onDragEnd={handleSubmapDragEnd}>
+              <SortableContext items={submaps.map((m) => m.id)} strategy={rectSortingStrategy}>
+                {submaps.map((sm) => {
+                  const smPois = pois.filter((p) => p.parentMapId === sm.id);
+                  const pOpen = poisOpen[sm.id] ?? true;
+                  return (
+                    <SortableMapRow key={sm.id} map={sm} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+                      isAdmin={isAdmin} canDelete={isAdmin}
+                      onRename={(v) => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
+                      onSetImage={(img) => onSetMapImage(sm.id, img)}>
+                      {/* POIs – collapsible per submap, + POI inline im Header */}
+                      <div className="ml-4">
+                        <div className="flex items-center gap-1">
+                          {smPois.length > 0 && (
+                            <button
+                              className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-400 px-1 py-0.5 select-none flex-1"
+                              onClick={() => togglePois(sm.id)}>
+                              <span>{pOpen ? "▾" : "▸"}</span>
+                              <span>POIs ({smPois.length})</span>
+                            </button>
+                          )}
+                          {isAdmin && (
+                            <button className="text-xs px-1.5 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-green-400 hover:border-green-800 ml-auto"
+                              onClick={() => onAddPOI(sm.id)} title="POI hinzufügen">+ POI</button>
+                          )}
+                        </div>
+                        {pOpen && smPois.length > 0 && (
+                          <DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))}
+                            onDragEnd={(e: any) => {
+                              const { active, over } = e;
+                              if (!over || active.id === over.id) return;
+                              const ids = smPois.map((p) => p.id);
+                              onReorderPOIs(sm.id, arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id)));
+                            }}>
+                            <SortableContext items={smPois.map((p) => p.id)} strategy={rectSortingStrategy}>
+                              {smPois.map((poi) => (
+                                <SortableMapRow key={poi.id} map={{ ...poi }} activeMapId={activeMapId}
+                                  setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
+                                  onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
+                                  onSetImage={(img) => onSetMapImage(poi.id, img)} isPOI indent={2}>
+                                </SortableMapRow>
+                              ))}
+                            </SortableContext>
+                          </DndContext>
+                        )}
+                      </div>
+              </SortableMapRow>
             );
           })}
+              </SortableContext>
+            </DndContext>
+          )}
         </div>
       )}
       {isAdmin && (
@@ -1766,6 +1795,41 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Sortierbare Wrapper-Komponente für Unterkarten und POIs im MapNavPanel
+function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRename, onDelete,
+  onSetImage, isPOI, indent = 1, children }: {
+  map: { id: string; label: string; image: string }; activeMapId: string;
+  setActiveMapId: (id: string) => void; isAdmin: boolean; canDelete: boolean;
+  onRename: (v: string) => void; onDelete: () => void; onSetImage: (img: string) => void;
+  isPOI?: boolean; indent?: number; children?: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: map.id });
+  return (
+    <div ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+      className="mt-0.5">
+      <div className="flex items-center gap-1">
+        <div {...attributes} {...listeners}
+          className="cursor-grab active:cursor-grabbing flex-shrink-0 p-0.5 rounded hover:bg-gray-700 touch-none select-none"
+          onPointerDown={(e) => e.stopPropagation()}>
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor" className="text-gray-600">
+            <circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/>
+            <circle cx="3" cy="7" r="1.5"/><circle cx="7" cy="7" r="1.5"/><circle cx="11" cy="7" r="1.5"/>
+            <circle cx="3" cy="11" r="1.5"/><circle cx="7" cy="11" r="1.5"/><circle cx="11" cy="11" r="1.5"/>
+          </svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <MapNavRow map={map} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+            isAdmin={isAdmin} canDelete={canDelete}
+            onRename={onRename} onDelete={onDelete}
+            onSetImage={onSetImage} indent={indent} isPOI={isPOI} />
+        </div>
+      </div>
+      {children}
     </div>
   );
 }
@@ -3739,6 +3803,20 @@ function BoardApp() {
     });
   }
 
+  function reorderMaps(newOrder: string[]) {
+    const main = mapsRef.current.find((m) => m.id === "main")!;
+    const reordered = [main, ...newOrder.map((id) => mapsRef.current.find((m) => m.id === id)!).filter(Boolean)];
+    setMaps(reordered); mapsRef.current = reordered;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, reordered, poisRef.current);
+  }
+
+  function reorderPOIs(parentMapId: string, newOrder: string[]) {
+    const others = poisRef.current.filter((p) => p.parentMapId !== parentMapId);
+    const reordered = [...others, ...newOrder.map((id) => poisRef.current.find((p) => p.id === id)!).filter(Boolean)];
+    setPois(reordered); poisRef.current = reordered;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, reordered);
+  }
+
   function addSubmap() {
     if (!isAdmin) return;
     const m: MapEntry = { id: uid(), label: "Neue Karte", image: "", x: 0.5, y: 0.5 };
@@ -4399,7 +4477,8 @@ function BoardApp() {
           <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
-              onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage} />
+              onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
+              onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
           </DraggablePanel>
 
           {canWrite && (
