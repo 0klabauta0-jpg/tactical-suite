@@ -19,6 +19,11 @@ import {
 } from "firebase/auth";
 
 // ─────────────────────────────────────────────────────────────
+// VERSION
+// ─────────────────────────────────────────────────────────────
+const APP_VERSION = "1.001";
+
+// ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
 
@@ -548,7 +553,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   // Alle vorhandenen Räume laden für Template-Auswahl
   useEffect(() => {
     getDocs(collection(db, "rooms")).then((snap) => {
-      const ids = snap.docs.map((d) => d.id).filter((id) => id !== roomId).sort();
+      const ids = snap.docs.map((d) => d.id).filter((id) => id !== roomId && id.toLowerCase().includes("template")).sort();
       setAvailableRooms(ids);
     }).catch(() => {});
   }, [roomId]);
@@ -794,7 +799,7 @@ function RoomPickerView({ onPick, onSetup }: {
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-xl">
         <h1 className="font-bold text-2xl mb-1 text-white">KlabsCom</h1>
-        <p className="text-gray-500 text-sm mb-6">Taktisches Koordinationssystem</p>
+        <p className="text-gray-500 text-sm mb-6">KlabsCom <span className="text-gray-700">v{APP_VERSION}</span></p>
 
         <label className="text-gray-300 text-xs mb-1 block">Raum-ID</label>
         <input
@@ -4004,6 +4009,7 @@ function BoardApp() {
           {/* LINKS: KlabsCom + Raumname + Spieler-Info */}
           <div className="flex items-center gap-3 flex-shrink-0">
             <span className="text-white font-black text-xl tracking-tight">KlabsCom</span>
+            <span className="text-gray-700 text-xs">v{APP_VERSION}</span>
             <span className="text-gray-500 text-sm font-mono">{displayRoomName}</span>
             <span className="w-px h-5 bg-gray-700 flex-shrink-0" />
             <span className="text-sm text-gray-300 font-medium">{currentPlayer.name}</span>
