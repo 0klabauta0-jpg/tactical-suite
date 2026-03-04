@@ -1147,34 +1147,65 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
 // DRAGGABLE PANEL
 // ─────────────────────────────────────────────────────────────
 
-function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 220 }: {
+function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 180 }: {
   title: string; tooltip?: string; x: number; y: number; onMove: (x: number, y: number) => void;
   canDrag: boolean; children: React.ReactNode; minWidth?: number;
 }) {
   const dragging = useRef(false);
   const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-  function onPointerDown(e: React.PointerEvent) {
-    if (!canDrag) return;
+  const resizing = useRef(false);
+  const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
+  const [size, setSize] = useState({ w: minWidth, h: 0 }); // h=0 = auto
+  const MIN_W = minWidth;
+  const MIN_H = 80;
+
+  function onHeaderDown(e: React.PointerEvent) {
     dragging.current = true;
     start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
-  function onPointerMove(e: React.PointerEvent) {
+  function onHeaderMove(e: React.PointerEvent) {
     if (!dragging.current) return;
     onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
   }
-  function onPointerUp() { dragging.current = false; }
+  function onHeaderUp() { dragging.current = false; }
+
+  function onResizeDown(e: React.PointerEvent) {
+    resizing.current = true;
+    resizeStart.current = { mx: e.clientX, my: e.clientY, pw: size.w, ph: size.h || 200 };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.stopPropagation(); e.preventDefault();
+  }
+  function onResizeMove(e: React.PointerEvent) {
+    if (!resizing.current) return;
+    setSize({
+      w: Math.max(MIN_W, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
+      h: Math.max(MIN_H, resizeStart.current.ph + e.clientY - resizeStart.current.my),
+    });
+  }
+  function onResizeUp() { resizing.current = false; }
+
   return (
-    <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl overflow-hidden"
-      style={{ left: x, top: y, minWidth, maxWidth: 320 }}>
-      <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none ${canDrag ? "cursor-move" : "cursor-default"}`}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+    <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
+      style={{ left: x, top: y, width: size.w, height: size.h > 0 ? size.h : undefined, minWidth: MIN_W }}>
+      <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none flex-shrink-0 ${canDrag ? "cursor-move" : "cursor-default"}`}
+        onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
         {canDrag && <span className="text-gray-500 text-xs">⠿</span>}
         <span className="text-xs font-semibold text-gray-300">{title}</span>
         {tooltip && <HelpTip text={tooltip} />}
       </div>
-      <div className="p-3">{children}</div>
+      <div className="p-2 overflow-y-auto overflow-x-hidden flex-1"
+        style={{ scrollbarWidth: "thin", scrollbarColor: "#4B5563 transparent" }}>
+        {children}
+      </div>
+      {/* Resize handle */}
+      <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none flex-shrink-0"
+        onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
+        </svg>
+      </div>
     </div>
   );
 }
@@ -1547,30 +1578,62 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
   onSetMapImage: (id: string, image: string) => void;
 }) {
   const submaps = maps.filter((m) => m.id !== "main");
+  const [submapsOpen, setSubmapsOpen] = useState(true);
+  const [poisOpen, setPoisOpen] = useState<Record<string, boolean>>({});
+  const togglePois = (id: string) => setPoisOpen(p => ({ ...p, [id]: !(p[id] ?? true) }));
+
   return (
     <div className="space-y-1">
+      {/* Hauptkarte */}
       <MapNavRow map={maps.find((m) => m.id === "main")!} activeMapId={activeMapId}
         setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={false}
         onRename={(v) => onRenameMap("main", v)} onDelete={() => {}}
         onSetImage={(img) => onSetMapImage("main", img)} indent={0} />
-      {submaps.map((sm) => (
-        <React.Fragment key={sm.id}>
-          <MapNavRow map={sm} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
-            isAdmin={isAdmin} canDelete={isAdmin}
-            onRename={(v) => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
-            onSetImage={(img) => onSetMapImage(sm.id, img)} indent={1} />
-          {pois.filter((p) => p.parentMapId === sm.id).map((poi) => (
-            <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
-              setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
-              onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
-              onSetImage={(img) => onSetMapImage(poi.id, img)} indent={2} isPOI />
-          ))}
-          {isAdmin && (
-            <button className="ml-10 text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-gray-300 hover:bg-gray-800"
-              onClick={() => onAddPOI(sm.id)}>+ POI</button>
-          )}
-        </React.Fragment>
-      ))}
+
+      {/* Unterkarten – collapsible */}
+      {submaps.length > 0 && (
+        <div>
+          <button
+            className="flex items-center gap-1 w-full text-xs text-gray-500 hover:text-gray-300 px-1 py-0.5 rounded select-none"
+            onClick={() => setSubmapsOpen(v => !v)}>
+            <span className="text-gray-600">{submapsOpen ? "▾" : "▸"}</span>
+            <span>Unterkarten ({submaps.length})</span>
+          </button>
+          {submapsOpen && submaps.map((sm) => {
+            const smPois = pois.filter((p) => p.parentMapId === sm.id);
+            const pOpen = poisOpen[sm.id] ?? true;
+            return (
+              <div key={sm.id} className="mt-0.5">
+                <MapNavRow map={sm} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+                  isAdmin={isAdmin} canDelete={isAdmin}
+                  onRename={(v) => onRenameMap(sm.id, v)} onDelete={() => onDeleteMap(sm.id)}
+                  onSetImage={(img) => onSetMapImage(sm.id, img)} indent={1} />
+                {/* POIs – collapsible per submap */}
+                {smPois.length > 0 && (
+                  <div className="ml-4">
+                    <button
+                      className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-400 px-1 py-0.5 select-none"
+                      onClick={() => togglePois(sm.id)}>
+                      <span>{pOpen ? "▾" : "▸"}</span>
+                      <span>POIs ({smPois.length})</span>
+                    </button>
+                    {pOpen && smPois.map((poi) => (
+                      <MapNavRow key={poi.id} map={{ ...poi, id: poi.id }} activeMapId={activeMapId}
+                        setActiveMapId={setActiveMapId} isAdmin={isAdmin} canDelete={isAdmin}
+                        onRename={(v) => onRenamePOI(poi.id, v)} onDelete={() => onDeletePOI(poi.id)}
+                        onSetImage={(img) => onSetMapImage(poi.id, img)} indent={2} isPOI />
+                    ))}
+                  </div>
+                )}
+                {isAdmin && (
+                  <button className="ml-8 text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-600 hover:text-gray-300 hover:bg-gray-800 mt-0.5"
+                    onClick={() => onAddPOI(sm.id)}>+ POI</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {isAdmin && (
         <button className="w-full mt-1 text-xs px-2 py-1 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
           onClick={onAddSubmap}>+ Unterkarte</button>
