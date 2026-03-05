@@ -118,6 +118,14 @@ const DEFAULT_GROUPS: Group[] = [
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+const DEFAULT_MAPS_BY_SYSTEM: Record<string, MapEntry[]> = {
+  stanton: [{ id: "main", label: "Stanton System", image: "" }],
+  pyro:    [{ id: "main", label: "Pyro System",    image: "/pyro-map.png" }],
+  nyx:     [{ id: "main", label: "Nyx System",     image: "" }],
+};
+function getDefaultMaps(systemId: string): MapEntry[] {
+  return DEFAULT_MAPS_BY_SYSTEM[systemId] ?? [{ id: "main", label: systemId, image: "" }];
+}
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -3790,7 +3798,7 @@ useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId
 useEffect(() => {
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+  const m = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
   const p = poisBySystemRef.current[activeSystemId] ?? [];
   const d = drawingsBySystemRef.current[activeSystemId] ?? {};
   const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
@@ -3935,7 +3943,7 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : DEFAULT_MAPS]))
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k)]))
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
@@ -3976,7 +3984,7 @@ orderMarkersRef.current = activeOM;
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemIdRef.current] ?? DEFAULT_MAPS;
+const activeMaps = mapsBySystemRef.current[activeSystemIdRef.current] ?? getDefaultMaps(activeSystemIdRef.current);
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
@@ -4011,7 +4019,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
-      // drawings handled per-system via drawingsBySystem (no global overwrite)
+      // drawings are handled per-system via drawingsBySystem
       // Systeme, Sprungtore, Transit (rückwärtskompatibel – fehlen in alten Räumen)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
         setSystems(data.systems); systemsRef.current = data.systems;
