@@ -3794,7 +3794,7 @@ useEffect(() => { activeMapIdRef.current    = activeMapId;    }, [activeMapId]);
 useEffect(() => {
   const prev = prevSystemIdRef.current;
   if (prev !== activeSystemId) {
-    // Save current visible state into the system we're LEAVING
+// Save current visible state into the system we're LEAVING
     tokensBySystemRef.current[prev]       = tokensRef.current;
     orderMarkersBySystemRef.current[prev] = orderMarkersRef.current;
     mapsBySystemRef.current[prev]         = mapsRef.current;
@@ -3804,7 +3804,7 @@ useEffect(() => {
   }
   prevSystemIdRef.current = activeSystemId;
 
-  // Load the system we're ENTERING
+// Load the system we're ENTERING
   const t  = tokensBySystemRef.current[activeSystemId]       ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemIdRef.current] ?? [];
   const m  = mapsBySystemRef.current[activeSystemId]         ?? getDefaultMaps(activeSystemId);
@@ -4455,13 +4455,13 @@ aliveState: na, spawnState: ns,
     if (!canWrite) return;
     const transit = transitRef.current[gId];
     if (!transit) return;
-    // Gruppe in neues System verschieben
+        // Gruppe in neues System verschieben
     const nextBoard: BoardState = {
       ...boardRef.current,
       groups: boardRef.current.groups.map((g) => g.id === gId ? { ...g, systemId: transit.toSystem } : g),
     };
     setBoard(nextBoard); boardRef.current = nextBoard;
-    // Transit-State entfernen
+        // Transit-State entfernen
     const { [gId]: _, ...rest } = transitRef.current;
     setTransitStates(rest); transitRef.current = rest;
     pushAll(nextBoard, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
