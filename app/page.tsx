@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.008";
+const APP_VERSION = "1.009";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -41,7 +41,7 @@ type Player = {
 };
 
 // color: optional hex ohne #, z.B. "e63946"
-type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string };
+type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string; systemId?: string };
 type BoardState = { groups: Group[]; columns: Record<string, string[]> };
 
 // GroupRoles: leader/deputy pro Gruppe
@@ -51,6 +51,18 @@ type Token = { groupId: string; x: number; y: number; mapId?: string };
 type OrderMarker = { groupId: string; x: number; y: number; mapId: string };
 type MapEntry = { id: string; label: string; image: string; x?: number; y?: number };
 type POI = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
+
+// ── Star Citizen Systeme & Sprungtore ─────────────────────────────────────
+type StarSystem = { id: string; label: string; x: number; y: number }; // Position auf Galaxie-Karte
+type Jumpgate = {
+  id: string;
+  fromSystem: string;  // z.B. "stanton"
+  toSystem: string;    // z.B. "pyro"
+  x: number; y: number; // Position auf fromSystem-Karte (und Galaxie falls fromSystem==="galaxy")
+  label: string;       // z.B. "→ Pyro"
+};
+// TransitState: Gruppe ist unterwegs von einem System zum anderen
+type TransitState = Record<string, { fromSystem: string; toSystem: string; gateId: string }>;
 type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
 type Role = "admin" | "commander" | "viewer";
@@ -106,6 +118,29 @@ const DEFAULT_GROUPS: Group[] = [
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+
+const DEFAULT_SYSTEMS: StarSystem[] = [
+  { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
+  { id: "pyro",    label: "Pyro",    x: 0.60, y: 0.40 },
+  { id: "nyx",     label: "Nyx",     x: 0.50, y: 0.65 },
+];
+
+// 6 Tore: jedes System hat 1 Tor pro Ziel-System
+const DEFAULT_JUMPGATES: Jumpgate[] = [
+  { id: "st-py", fromSystem: "stanton", toSystem: "pyro", x: 0.70, y: 0.30, label: "→ Pyro" },
+  { id: "st-ny", fromSystem: "stanton", toSystem: "nyx",  x: 0.60, y: 0.75, label: "→ Nyx"  },
+  { id: "py-st", fromSystem: "pyro",    toSystem: "stanton", x: 0.25, y: 0.35, label: "→ Stanton" },
+  { id: "py-ny", fromSystem: "pyro",    toSystem: "nyx",  x: 0.55, y: 0.70, label: "→ Nyx"  },
+  { id: "ny-st", fromSystem: "nyx",     toSystem: "stanton", x: 0.30, y: 0.30, label: "→ Stanton" },
+  { id: "ny-py", fromSystem: "nyx",     toSystem: "pyro", x: 0.65, y: 0.25, label: "→ Pyro" },
+];
+
+// Galaxie-Sprungtore (Positionen auf der Galaxie-Übersichtskarte)
+const DEFAULT_GALAXY_GATES: Jumpgate[] = [
+  { id: "gal-st-py", fromSystem: "galaxy", toSystem: "pyro",    x: 0.50, y: 0.38, label: "Stanton↔Pyro" },
+  { id: "gal-st-ny", fromSystem: "galaxy", toSystem: "nyx",     x: 0.42, y: 0.55, label: "Stanton↔Nyx"  },
+  { id: "gal-py-ny", fromSystem: "galaxy", toSystem: "nyx",     x: 0.58, y: 0.55, label: "Pyro↔Nyx"     },
+];
 
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   nav:      { x: 16,  y: 16  },
@@ -1271,6 +1306,51 @@ function DragHandle({ listeners, attributes }: { listeners?: object; attributes?
 }
 
 // ─────────────────────────────────────────────────────────────
+// SYSTEM CHIP – kompakter 2-Buchstaben Chip für Gruppe
+// ─────────────────────────────────────────────────────────────
+const SYSTEM_ABBR: Record<string, { short: string; color: string; bg: string }> = {
+  stanton: { short: "ST", color: "#93c5fd", bg: "#1e3a5f" },
+  pyro:    { short: "PY", color: "#fca5a5", bg: "#5f1e1e" },
+  nyx:     { short: "NY", color: "#86efac", bg: "#1e3d2f" },
+};
+
+function SystemChip({ systemId, systems, canChange, onChange }: {
+  systemId: string; systems: StarSystem[]; canChange: boolean;
+  onChange?: (sysId: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const info = SYSTEM_ABBR[systemId] ?? { short: systemId.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+  return (
+    <div className="relative flex-shrink-0">
+      <button
+        className="text-xs font-bold px-1.5 py-0.5 rounded border select-none"
+        style={{ color: info.color, backgroundColor: info.bg, borderColor: info.color + "55" }}
+        onClick={(e) => { e.stopPropagation(); if (canChange) setOpen(v => !v); }}
+        title={systems.find(s => s.id === systemId)?.label ?? systemId}
+        onPointerDown={(e) => e.stopPropagation()}>
+        {info.short}
+      </button>
+      {open && canChange && (
+        <div className="absolute top-full left-0 mt-1 bg-gray-900 border border-gray-600 rounded-xl shadow-xl p-1 z-50 min-w-max"
+          onPointerDown={(e) => e.stopPropagation()}>
+          {systems.map((s) => {
+            const si = SYSTEM_ABBR[s.id] ?? { short: s.id.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+            return (
+              <button key={s.id}
+                className="flex items-center gap-2 w-full px-3 py-1.5 rounded-lg hover:bg-gray-800 text-xs"
+                onClick={(e) => { e.stopPropagation(); onChange?.(s.id); setOpen(false); }}>
+                <span className="font-bold px-1.5 py-0.5 rounded" style={{ color: si.color, backgroundColor: si.bg }}>{si.short}</span>
+                <span className="text-gray-300">{s.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // PLAYER CARD
 // ─────────────────────────────────────────────────────────────
 
@@ -1521,6 +1601,7 @@ const COLUMN_HEIGHT = 760;
 
 function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive,
   onRename, onDelete, onClear, spawnGroups, spawnState, onSetSpawn, groupRoles, onSetRole, onSetAppRole, onSetPlayerField, onSetColor, onSetIcon,
+  systems, transitState, onSetSystem, onResolveTransit, onCancelTransit,
 }: {
   group: Group; ids: string[]; playersById: Record<string, Player>; aliveState: PlayerAliveState;
   currentPlayerId: string; canWrite: boolean;
@@ -1532,6 +1613,9 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
   onSetColor: (id: string, hex: string) => void;
   onSetIcon: (id: string, icon: string) => void;
+  systems?: StarSystem[]; transitState?: { fromSystem: string; toSystem: string; gateId: string };
+  onSetSystem?: (sysId: string) => void;
+  onResolveTransit?: () => void; onCancelTransit?: () => void;
 }) {
   // useSortable für Spalten-Drag (Gruppe verschieben) + useDroppable für Spieler-Drop
   const {
@@ -1576,6 +1660,10 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                 title="Spalte verschieben"
               >⠿</span>
             )}
+            {/* System-Chip */}
+            {!isSystem && systems && (
+              <SystemChip systemId={group.systemId ?? "stanton"} systems={systems} canChange={canWrite} onChange={onSetSystem} />
+            )}
             {/* Farbwähler */}
             {canWrite && !isSystem && (
               <ColorPicker current={group.color} onChange={(hex) => onSetColor(group.id, hex)} />
@@ -1605,7 +1693,34 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1" style={{ maxHeight: COLUMN_HEIGHT - 44 }}>
           <SortableContext items={safeIds} strategy={rectSortingStrategy}>
-            {safeIds.length === 0 && (
+            {/* Transit-Banner */}
+            {transitState && (
+              <div className="mx-1 mb-1 rounded-lg border border-yellow-700 bg-yellow-950 px-2 py-1.5">
+                <div className="flex items-center gap-1 mb-1">
+                  {(() => {
+                    const fromInfo = SYSTEM_ABBR[transitState.fromSystem] ?? { short: transitState.fromSystem.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+                    const toInfo = SYSTEM_ABBR[transitState.toSystem] ?? { short: transitState.toSystem.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+                    return (
+                      <>
+                        <span className="text-xs font-bold px-1 py-0.5 rounded" style={{ color: fromInfo.color, backgroundColor: fromInfo.bg }}>{fromInfo.short}</span>
+                        <span className="text-yellow-400 text-xs">→</span>
+                        <span className="text-xs font-bold px-1 py-0.5 rounded animate-pulse" style={{ color: toInfo.color, backgroundColor: toInfo.bg }}>{toInfo.short}</span>
+                        <span className="text-yellow-400 text-xs ml-1">Im Transit</span>
+                      </>
+                    );
+                  })()}
+                </div>
+                {canWrite && (
+                  <div className="flex gap-1">
+                    <button className="flex-1 text-xs py-0.5 rounded bg-green-900 border border-green-700 text-green-300 hover:bg-green-800"
+                      onClick={onResolveTransit} title="Angekommen – System wechseln">✓ Angekommen</button>
+                    <button className="text-xs px-2 py-0.5 rounded border border-gray-600 text-gray-400 hover:bg-gray-700"
+                      onClick={onCancelTransit} title="Abbrechen">✕</button>
+                  </div>
+                )}
+              </div>
+            )}
+            {safeIds.length === 0 && !transitState && (
               <div className="text-xs text-gray-600 border border-dashed border-gray-700 rounded-lg p-4 text-center">hierher ziehen</div>
             )}
             {safeIds.map((pid) =>
@@ -2675,8 +2790,10 @@ function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
-  onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
+  onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin: isAdminProp, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken, getActiveGroupsForMarker,
+  jumpgates = [], currentSystemId,
+  transitGroups = [], onTokenDroppedOnGate, onMoveJumpgate,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
@@ -2691,6 +2808,10 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string; onRemoveToken: (gId: string, mapId: string) => void;
   getActiveGroupsForMarker?: (markerId: string) => { groupId: string; color: string; label: string }[];
+  jumpgates?: Jumpgate[]; currentSystemId?: string;
+  transitGroups?: { groupId: string; color: string; label: string; gateId: string }[];
+  onTokenDroppedOnGate?: (groupId: string, gate: Jumpgate) => void;
+  onMoveJumpgate?: (id: string, x: number, y: number) => void;
   orderMarkers: OrderMarker[];
   onMoveOrderMarkerLocal: (gId: string, x: number, y: number, mapId: string) => void;
   onCommitOrderMarker: (gId: string, x: number, y: number, mapId: string) => void;
@@ -2720,6 +2841,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
+  const gateDrag = useRef<string | null>(null);
+  const lastGatePos = useRef<{ x: number; y: number } | null>(null);
   const [hoveredToken, setHoveredToken] = useState<string | null>(null);
   // Double-click tracking for markers (stored outside render map)
   const markerClickCount = useRef<Record<string, number>>({});
@@ -2769,15 +2892,28 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   function onBgUp() {
     if (tokenDrag && lastTokenPos.current && canWriteTokens) {
       const [gId] = tokenDrag.split(":");
-      onCommitToken(gId, lastTokenPos.current.x, lastTokenPos.current.y, activeMapId);
+      // Prüfen ob Token auf ein Sprungtor gedroppt wurde
+      const pos = lastTokenPos.current;
+      const relevantGates = (jumpgates ?? []).filter(g => g.fromSystem === currentSystemId || g.fromSystem === "galaxy");
+      const hitGate = relevantGates.find(g => Math.hypot(g.x - pos.x, g.y - pos.y) < 0.05);
+      if (hitGate && onTokenDroppedOnGate) {
+        onTokenDroppedOnGate(gId, hitGate);
+      } else {
+        onCommitToken(gId, pos.x, pos.y, activeMapId);
+      }
     }
     if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
     if (orderMarkerDrag && lastOrderMarkerPos.current && canWriteTokens) {
       onCommitOrderMarker(orderMarkerDrag, lastOrderMarkerPos.current.x, lastOrderMarkerPos.current.y, activeMapId);
     }
+    // Sprungtor-Drag (Admin)
+    if (gateDrag.current && lastGatePos.current && onMoveJumpgate) {
+      onMoveJumpgate(gateDrag.current, lastGatePos.current.x, lastGatePos.current.y);
+    }
     setPanning(false); setTokenDrag(null); lastTokenPos.current = null;
     setMarkerDrag(null); lastMarkerPos.current = null;
     setOrderMarkerDrag(null); lastOrderMarkerPos.current = null;
+    gateDrag.current = null; lastGatePos.current = null;
   }
 
   const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
@@ -2913,11 +3049,11 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           const showGroupMenu = openGroupMenu === m.id;
           return (
             <div key={m.id}
-              className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
+              className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdminProp ? "cursor-move" : "cursor-pointer"}`}
               style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-100%)" }}
               onPointerDown={(e) => {
                 e.stopPropagation();
-                if (isAdmin) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
+                if (isAdminProp) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -2971,7 +3107,69 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
               } ${activeGroups.length > 0 ? "ring-2 ring-green-400 ring-offset-1 ring-offset-transparent" : ""}`}>
                 {m.isPOI ? "🔵" : "📍"} {m.label}
-                {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
+                {isAdminProp && <span className="ml-1 opacity-50">↵↵</span>}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Sprungtore – auf der aktuellen Systemkarte oder Galaxie */}
+        {(jumpgates ?? []).filter(g =>
+          g.fromSystem === currentSystemId || g.fromSystem === activeMapId
+        ).map((gate) => {
+          const toInfo = SYSTEM_ABBR[gate.toSystem] ?? { short: gate.toSystem.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+          const transitOnGate = transitGroups.filter(tg => tg.gateId === gate.id);
+          return (
+            <div key={gate.id}
+              className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdminProp ? "cursor-move" : "cursor-default"}`}
+              style={{ left: `${gate.x * 100}%`, top: `${gate.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              onPointerDown={(e) => {
+                if (!isAdminProp) return;
+                e.stopPropagation();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                gateDrag.current = gate.id; lastGatePos.current = null;
+              }}
+              onPointerMove={(e) => {
+                if (!gateDrag.current || gateDrag.current !== gate.id) return;
+                const c = getMapCoords(e);
+                if (c) lastGatePos.current = c;
+              }}>
+              <div className="flex items-center gap-1 px-2 py-1 rounded-full border-2 shadow-lg select-none"
+                style={{ backgroundColor: toInfo.bg + "cc", borderColor: toInfo.color + "88" }}>
+                <span className="text-white text-xs">⬡</span>
+                <span className="text-xs font-bold" style={{ color: toInfo.color }}>{gate.label}</span>
+              </div>
+              {/* Transit-Gruppen-Badges am Tor */}
+              {transitOnGate.length > 0 && (
+                <div className="flex gap-0.5 mt-0.5">
+                  {transitOnGate.map(tg => (
+                    <span key={tg.groupId} className="w-3 h-3 rounded-full border border-gray-800 animate-pulse"
+                      style={{ backgroundColor: tg.color }} title={`${tg.label} im Transit`} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Schatten-Token für Gruppen im Transit (im Zielsystem) */}
+        {transitGroups.filter(tg => {
+          // Finde das Eingangstor im Ziel-System
+          const gate = (jumpgates ?? []).find(g => g.id === tg.gateId);
+          return gate && gate.toSystem === currentSystemId;
+        }).map(tg => {
+          const gate = (jumpgates ?? []).find(g => g.id === tg.gateId)!;
+          // Gegenüberliegendes Eingangstor im Ziel-System
+          const entryGate = (jumpgates ?? []).find(g => g.fromSystem === currentSystemId && g.toSystem === gate.fromSystem);
+          const ex = entryGate?.x ?? 0.5;
+          const ey = entryGate?.y ?? 0.5;
+          return (
+            <div key={`shadow-${tg.groupId}`}
+              className="absolute z-10 flex flex-col items-center pointer-events-none"
+              style={{ left: `${ex * 100}%`, top: `${ey * 100}%`, transform: "translate(-50%,-100%)" }}>
+              <div className="px-2 py-0.5 rounded-full border-2 border-dashed select-none opacity-50"
+                style={{ backgroundColor: tg.color + "33", borderColor: tg.color }}>
+                <span className="text-xs font-bold" style={{ color: tg.color }}>⟳ {tg.label}</span>
               </div>
             </div>
           );
@@ -3387,6 +3585,13 @@ function BoardApp() {
   const [showProfile, setShowProfile] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
+  const [activeSystemId, setActiveSystemId] = useState("stanton"); // aktives System für Board-Filter
+  const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
+  const [jumpgates, setJumpgates] = useState<Jumpgate[]>([...DEFAULT_JUMPGATES, ...DEFAULT_GALAXY_GATES]);
+  const [transitStates, setTransitStates] = useState<TransitState>({});
+  const transitRef = React.useRef<TransitState>({});
+  const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
+  const jumpgatesRef = React.useRef<Jumpgate[]>([...DEFAULT_JUMPGATES, ...DEFAULT_GALAXY_GATES]);
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
   const [localPanelPos, setLocalPanelPos] = useState({
@@ -3560,7 +3765,9 @@ function BoardApp() {
     const unsub = onSnapshot(ref, (snap) => {
       const data = snap.data() as any;
       if (!data) return;
-      const loadedGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+      const rawGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+      // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "stanton" als Default
+      const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "stanton" });
       setBoard(safeBoard(data, loadedGroups));
       if (Array.isArray(data.tokens)) {
         const incomingTokens: Token[] = data.tokens.map(normalizeToken);
@@ -3589,6 +3796,16 @@ function BoardApp() {
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
       if (data.drawings) setDrawings(data.drawings);
+      // Systeme, Sprungtore, Transit (rückwärtskompatibel – fehlen in alten Räumen)
+      if (Array.isArray(data.systems) && data.systems.length > 0) {
+        setSystems(data.systems); systemsRef.current = data.systems;
+      }
+      if (Array.isArray(data.jumpgates) && data.jumpgates.length > 0) {
+        setJumpgates(data.jumpgates); jumpgatesRef.current = data.jumpgates;
+      }
+      if (data.transitStates) {
+        setTransitStates(data.transitStates); transitRef.current = data.transitStates;
+      }
     });
     return () => unsub();
   }, [user, roomId]);
@@ -3618,6 +3835,9 @@ function BoardApp() {
         logEntries: logEntriesRef.current,
         groupRoles: ngr ?? groupRolesRef.current,
         drawings: drawingsRef.current,
+        systems: systemsRef.current,
+        jumpgates: jumpgatesRef.current,
+        transitStates: transitRef.current,
         updatedAt: serverTimestamp(),
       }, { merge: true });
     } catch (err) { console.error("Firestore:", err); }
@@ -3825,9 +4045,9 @@ function BoardApp() {
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, next, mapsRef.current, poisRef.current);
   }
 
-  function addGroup(isSpawn = false) {
+  function addGroup(isSpawn = false, systemId = "stanton") {
     if (!canWrite) return;
-    const g: Group = { id: uid(), label: isSpawn ? "Spawn" : "Neue Gruppe", isSpawn };
+    const g: Group = { id: uid(), label: isSpawn ? "Spawn" : "Neue Gruppe", isSpawn, systemId };
     setBoard((prev) => {
       const next = { groups: [...prev.groups, g], columns: { ...prev.columns, [g.id]: [] } };
       boardRef.current = next;
@@ -3976,6 +4196,61 @@ function BoardApp() {
     if (!canWrite) return;
     const next = tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === mapId));
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+  }
+
+  // ── Transit-System ───────────────────────────────────────────────────────
+  function startTransit(gId: string, gate: Jumpgate) {
+    if (!canWrite) return;
+    const next = { ...transitRef.current, [gId]: { fromSystem: gate.fromSystem, toSystem: gate.toSystem, gateId: gate.id } };
+    setTransitStates(next); transitRef.current = next;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  function resolveTransit(gId: string) {
+    if (!canWrite) return;
+    const transit = transitRef.current[gId];
+    if (!transit) return;
+    // Gruppe in neues System verschieben
+    const nextBoard: BoardState = {
+      ...boardRef.current,
+      groups: boardRef.current.groups.map((g) => g.id === gId ? { ...g, systemId: transit.toSystem } : g),
+    };
+    setBoard(nextBoard); boardRef.current = nextBoard;
+    // Transit-State entfernen
+    const { [gId]: _, ...rest } = transitRef.current;
+    setTransitStates(rest); transitRef.current = rest;
+    pushAll(nextBoard, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  function cancelTransit(gId: string) {
+    if (!canWrite) return;
+    const { [gId]: _, ...rest } = transitRef.current;
+    setTransitStates(rest); transitRef.current = rest;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  function setGroupSystem(gId: string, sysId: string) {
+    if (!canWrite) return;
+    const next: BoardState = {
+      ...boardRef.current,
+      groups: boardRef.current.groups.map((g) => g.id === gId ? { ...g, systemId: sysId } : g),
+    };
+    setBoard(next); boardRef.current = next;
+    pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  function moveJumpgate(id: string, x: number, y: number) {
+    if (!isAdmin) return;
+    const next = jumpgatesRef.current.map((g) => g.id === id ? { ...g, x, y } : g);
+    setJumpgates(next); jumpgatesRef.current = next;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+  }
+
+  function moveSystem(id: string, x: number, y: number) {
+    if (!isAdmin) return;
+    const next = systemsRef.current.map((s) => s.id === id ? { ...s, x, y } : s);
+    setSystems(next); systemsRef.current = next;
+    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
   }
 
   function upsertOrderMarker(gId: string, x: number, y: number, mapId: string) {
@@ -4248,8 +4523,9 @@ function BoardApp() {
   }, [activeMapId, maps, pois]);
 
   const selfAlive = currentPlayer ? aliveState[currentPlayer.id] ?? "alive" : "alive";
-  const spawnGroups = board.groups.filter((g) => g.isSpawn);
-  const tacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
+  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "stanton") === activeSystemId);
+  const allTacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
+  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
   if (!authReady) return (
@@ -4399,6 +4675,29 @@ function BoardApp() {
       {/* BOARD */}
       {tab === "board" && (
         <div className="flex-1 overflow-auto p-4">
+          {/* System-Tabs */}
+          <div className="flex items-center gap-2 mb-3">
+            {systems.map((sys) => {
+              const info = SYSTEM_ABBR[sys.id] ?? { short: sys.id.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+              const isActive = activeSystemId === sys.id;
+              const transitCount = Object.values(transitStates).filter(t => t.toSystem === sys.id).length;
+              return (
+                <button key={sys.id}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${isActive ? "border-opacity-100 shadow-lg" : "border-gray-700 bg-gray-900 text-gray-400 hover:text-gray-200"}`}
+                  style={isActive ? { color: info.color, backgroundColor: info.bg, borderColor: info.color + "88" } : {}}
+                  onClick={() => setActiveSystemId(sys.id)}>
+                  <span className="font-bold">{info.short}</span>
+                  <span>{sys.label}</span>
+                  {transitCount > 0 && (
+                    <span className="text-yellow-400 animate-pulse" title={`${transitCount} Gruppe(n) im Transit`}>⟳{transitCount}</span>
+                  )}
+                </button>
+              );
+            })}
+            <span className="text-gray-700 text-xs ml-2">
+              {allTacticalGroups.filter(g => (g.systemId ?? "stanton") === activeSystemId).length} Gruppen
+            </span>
+          </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <SpawnBar spawnGroups={spawnGroups} board={board} playersById={playersById}
               aliveState={aliveState} canWrite={canWrite} onRename={renameGroup}
@@ -4462,12 +4761,17 @@ function BoardApp() {
                       groupRoles={groupRoles} onSetRole={setGroupRole}
                       isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
                       onSetPlayerField={setPlayerField}
-                      onSetColor={setGroupColor} onSetIcon={setGroupIcon} />
+                      onSetColor={setGroupColor} onSetIcon={setGroupIcon}
+                      systems={systems}
+                      transitState={transitStates[g.id]}
+                      onSetSystem={(sysId) => setGroupSystem(g.id, sysId)}
+                      onResolveTransit={() => resolveTransit(g.id)}
+                      onCancelTransit={() => cancelTransit(g.id)} />
                   ))}
                   {canWrite && (
                     <div className="flex flex-col gap-2">
-                      <button className="text-xs px-3 py-2 rounded-xl border border-gray-600 text-gray-300 hover:bg-gray-800 whitespace-nowrap" onClick={() => addGroup(false)}>+ Gruppe</button>
-                      <button className="text-xs px-3 py-2 rounded-xl border border-yellow-800 text-yellow-400 hover:bg-yellow-950 whitespace-nowrap" onClick={() => addGroup(true)}>⚓ Spawn</button>
+                      <button className="text-xs px-3 py-2 rounded-xl border border-gray-600 text-gray-300 hover:bg-gray-800 whitespace-nowrap" onClick={() => addGroup(false, activeSystemId)}>+ Gruppe</button>
+                      <button className="text-xs px-3 py-2 rounded-xl border border-yellow-800 text-yellow-400 hover:bg-yellow-950 whitespace-nowrap" onClick={() => addGroup(true, activeSystemId)}>⚓ Spawn</button>
                     </div>
                   )}
                 </div>
@@ -4522,10 +4826,19 @@ function BoardApp() {
                 playersById={playersById} aliveState={aliveState} groupRoles={groupRoles}
                 onMoveTokenLocal={moveTokenLocal} onCommitToken={commitToken}
                 canWriteTokens={canWrite && drawTool === "pointer"}
-                isAdmin={isAdmin} markers={markersOnActive}
+                markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
                 activeMapId={activeMapId} onRemoveToken={removeToken}
-              getActiveGroupsForMarker={getActiveGroupsForMarker}
+                getActiveGroupsForMarker={getActiveGroupsForMarker}
+                jumpgates={jumpgates}
+                currentSystemId={activeSystemId}
+                isAdmin={role === "admin"}
+                transitGroups={Object.entries(transitStates).map(([gId, t]) => {
+                  const g = board.groups.find(gr => gr.id === gId);
+                  return g ? { groupId: gId, color: groupColor(g), label: g.label, gateId: t.gateId } : null;
+                }).filter(Boolean) as { groupId: string; color: string; label: string; gateId: string }[]}
+                onTokenDroppedOnGate={(gId, gate) => startTransit(gId, gate)}
+                onMoveJumpgate={moveJumpgate}
                 orderMarkers={orderMarkers}
                 onMoveOrderMarkerLocal={moveOrderMarkerLocal}
                 onCommitOrderMarker={upsertOrderMarker}
