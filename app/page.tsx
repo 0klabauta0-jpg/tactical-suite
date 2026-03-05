@@ -889,8 +889,8 @@ function RoomPickerView({ onPick, onSetup }: {
                 ✕
               </button>
             </div>
-	        </div>
-	      )}
+          </div>
+        )}
 
         {msg && <p className="mt-3 text-xs text-red-400">{msg}</p>}
 
@@ -3407,7 +3407,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite,
 // LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
 // ─────────────────────────────────────────────────────────────
 
-function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime, minimized = false, onToggleMinimize }: {
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime, minimized, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: LogEntry[];
   onAdd: (text: string) => void;
@@ -3638,6 +3638,67 @@ function BoardApp() {
     notes:    { x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    },
     logNotes: { x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false },
   });
+
+  // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
+  // Dieser Clamp hält sie immer sichtbar.
+  useEffect(() => {
+    if (!isMounted) return;
+
+    const pad = 8;
+    const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+
+    const applyClamp = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      setLocalPanelPos((p) => {
+        const navW = 340, navH = 300;
+        const placerW = 280, placerH = 220;
+        const toolbarW = 260, toolbarH = 160;
+        const zoomW = 160, zoomH = 110;
+
+        const notesW = p.notes.w ?? 420;
+        const notesH = p.notes.h ?? 260;
+        const logW = p.logNotes.w ?? 520;
+        const logH = p.logNotes.h ?? 360;
+
+        return {
+          ...p,
+          nav: {
+            x: clamp(Number(p.nav.x) || 0, pad, Math.max(pad, vw - navW - pad)),
+            y: clamp(Number(p.nav.y) || 0, pad, Math.max(pad, vh - navH - pad)),
+          },
+          placer: {
+            x: clamp(Number(p.placer.x) || 0, pad, Math.max(pad, vw - placerW - pad)),
+            y: clamp(Number(p.placer.y) || 0, pad, Math.max(pad, vh - placerH - pad)),
+          },
+          toolbar: {
+            x: clamp(Number(p.toolbar.x) || 0, pad, Math.max(pad, vw - toolbarW - pad)),
+            y: clamp(Number(p.toolbar.y) || 0, pad, Math.max(pad, vh - toolbarH - pad)),
+          },
+          zoom: {
+            x: clamp(Number(p.zoom.x) || 0, pad, Math.max(pad, vw - zoomW - pad)),
+            y: clamp(Number(p.zoom.y) || 0, pad, Math.max(pad, vh - zoomH - pad)),
+          },
+          notes: {
+            ...p.notes,
+            x: clamp(Number(p.notes.x) || 0, pad, Math.max(pad, vw - notesW - pad)),
+            y: clamp(Number(p.notes.y) || 0, pad, Math.max(pad, vh - notesH - pad)),
+          },
+          logNotes: {
+            ...p.logNotes,
+            x: clamp(Number(p.logNotes.x) || 0, pad, Math.max(pad, vw - logW - pad)),
+            y: clamp(Number(p.logNotes.y) || 0, pad, Math.max(pad, vh - logH - pad)),
+          },
+        };
+      });
+    };
+
+    applyClamp();
+    window.addEventListener("resize", applyClamp);
+    return () => window.removeEventListener("resize", applyClamp);
+  }, [isMounted, tab]);
+
   const [notesText, setNotesText] = useState("");
   const [systemNotesTexts, setSystemNotesTexts] = useState<Record<string,string>>({});
   const systemNotesRef = React.useRef<Record<string,string>>({});
@@ -3691,6 +3752,19 @@ function BoardApp() {
   const mapsRef = useRef(maps);
   const poisRef = useRef(pois);
   const tokensRef = useRef(tokens);
+
+// ─────────────────────────────────────────────────────────────
+// Map data: per-system separation (Pyro/Stanton/Nyx)
+// Legacy rooms stored everything global. We treat legacy as "pyro".
+// ─────────────────────────────────────────────────────────────
+const LEGACY_DEFAULT_SYSTEM = "pyro";
+
+const tokensBySystemRef = useRef<Record<string, Token[]>>({});
+const orderMarkersBySystemRef = useRef<Record<string, OrderMarker[]>>({});
+const mapsBySystemRef = useRef<Record<string, MapEntry[]>>({});
+const poisBySystemRef = useRef<Record<string, POI[]>>({});
+const drawingsBySystemRef = useRef<Record<string, DrawingsMap>>({});
+const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   const notesRef = useRef(notesText);
   const groupRolesRef = useRef(groupRoles);
 
@@ -3700,6 +3774,31 @@ function BoardApp() {
   useEffect(() => { mapsRef.current = maps; }, [maps]);
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
+
+// Keep per-system caches in sync with current visible state
+useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
+useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
+useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
+useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
+useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
+useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
+
+// When switching system tab, swap the map state to that system's dataset
+useEffect(() => {
+  const t = tokensBySystemRef.current[activeSystemId] ?? [];
+  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+  const p = poisBySystemRef.current[activeSystemId] ?? [];
+  const d = drawingsBySystemRef.current[activeSystemId] ?? {};
+  const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
+
+  setTokens(t); tokensRef.current = t;
+  setOrderMarkers(om); orderMarkersRef.current = om;
+  setMaps(m); mapsRef.current = m;
+  setPois(p); poisRef.current = p;
+  setDrawings(d); drawingsRef.current = d;
+  setActiveMapId(am);
+}, [activeSystemId]);
   useEffect(() => { orderMarkersRef.current = orderMarkers; }, [orderMarkers]);
   useEffect(() => { notesRef.current = notesText; }, [notesText]);
   useEffect(() => { logEntriesRef.current = logEntries; }, [logEntries]);
@@ -3807,20 +3906,95 @@ function BoardApp() {
       // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "pyro" als Default
       const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
       setBoard(safeBoard(data, loadedGroups));
-      if (Array.isArray(data.tokens)) {
-        const incomingTokens: Token[] = data.tokens.map(normalizeToken);
-        setTokens(incomingTokens);
-        tokensRef.current = incomingTokens;
-      }
-      const incomingOrderMarkers: OrderMarker[] = Array.isArray(data.orderMarkers)
-        ? data.orderMarkers.map((m: any) => ({ groupId: m.groupId, x: m.x, y: m.y, mapId: m.mapId ?? "main" }))
-        : [];
-      setOrderMarkers(incomingOrderMarkers);
-      orderMarkersRef.current = incomingOrderMarkers;
-      setAliveState(data.aliveState ?? {});
-      setSpawnState(data.spawnState ?? {});
-      if (data.maps && data.maps.length > 0) setMaps(data.maps);
-      setPois(data.pois ?? []);
+      
+// ── Map data: prefer per-system fields, fallback legacy → LEGACY_DEFAULT_SYSTEM
+let didMigrate = false;
+
+const normalizeTokensArr = (arr: any[]): Token[] => arr.map(normalizeToken);
+const normalizeOrderMarkersArr = (arr: any[]): OrderMarker[] =>
+  arr.map((m: any) => ({ groupId: m.groupId, x: m.x, y: m.y, mapId: m.mapId ?? "main" }));
+
+const tokensBySystem: Record<string, Token[]> =
+  data.tokensBySystem && typeof data.tokensBySystem === "object"
+    ? Object.fromEntries(Object.entries(data.tokensBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeTokensArr(v as any[]) : []]))
+    : (() => {
+        didMigrate = Array.isArray(data.tokens);
+        return Array.isArray(data.tokens) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeTokensArr(data.tokens) } as Record<string, Token[]> : {} as Record<string, Token[]>;
+      })();
+
+const orderMarkersBySystem: Record<string, OrderMarker[]> =
+  data.orderMarkersBySystem && typeof data.orderMarkersBySystem === "object"
+    ? Object.fromEntries(Object.entries(data.orderMarkersBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeOrderMarkersArr(v as any[]) : []]))
+    : (() => {
+        didMigrate = didMigrate || Array.isArray(data.orderMarkers);
+        return Array.isArray(data.orderMarkers) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeOrderMarkersArr(data.orderMarkers) } as Record<string, OrderMarker[]> : {} as Record<string, OrderMarker[]>;
+      })();
+
+const mapsBySystem: Record<string, MapEntry[]> =
+  data.mapsBySystem && typeof data.mapsBySystem === "object"
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : DEFAULT_MAPS]))
+    : (() => {
+        const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
+        didMigrate = didMigrate || legacyHas;
+        return legacyHas ? { [LEGACY_DEFAULT_SYSTEM]: data.maps } as Record<string, MapEntry[]> : {} as Record<string, MapEntry[]>;
+      })();
+
+const poisBySystem: Record<string, POI[]> =
+  data.poisBySystem && typeof data.poisBySystem === "object"
+    ? Object.fromEntries(Object.entries(data.poisBySystem).map(([k, v]) => [k, Array.isArray(v) ? (v as any[]) : []]))
+    : (() => {
+        const legacyPois = Array.isArray(data.pois) ? data.pois : (data.pois ?? []);
+        didMigrate = didMigrate || !!data.pois;
+        return { [LEGACY_DEFAULT_SYSTEM]: legacyPois } as Record<string, POI[]>;
+      })();
+
+const drawingsBySystem: Record<string, DrawingsMap> =
+  data.drawingsBySystem && typeof data.drawingsBySystem === "object"
+    ? (data.drawingsBySystem as Record<string, DrawingsMap>)
+    : (() => {
+        didMigrate = didMigrate || !!data.drawings;
+        return data.drawings ? { [LEGACY_DEFAULT_SYSTEM]: data.drawings } as Record<string, DrawingsMap> : {} as Record<string, DrawingsMap>;
+      })();
+
+tokensBySystemRef.current = tokensBySystem;
+orderMarkersBySystemRef.current = orderMarkersBySystem;
+mapsBySystemRef.current = mapsBySystem;
+poisBySystemRef.current = poisBySystem;
+drawingsBySystemRef.current = drawingsBySystem;
+
+const activeTokens = tokensBySystemRef.current[activeSystemId] ?? [];
+setTokens(activeTokens);
+tokensRef.current = activeTokens;
+
+const activeOM = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+setOrderMarkers(activeOM);
+orderMarkersRef.current = activeOM;
+
+setAliveState(data.aliveState ?? {});
+setSpawnState(data.spawnState ?? {});
+
+const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+setMaps(activeMaps);
+mapsRef.current = activeMaps;
+
+const activePois = poisBySystemRef.current[activeSystemId] ?? [];
+setPois(activePois);
+poisRef.current = activePois;
+
+const activeDrawings = drawingsBySystemRef.current[activeSystemId] ?? {};
+setDrawings(activeDrawings);
+drawingsRef.current = activeDrawings;
+
+if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySystem && !data.orderMarkersBySystem && !data.drawingsBySystem) {
+  setDoc(ref, {
+    tokensBySystem,
+    orderMarkersBySystem,
+    mapsBySystem,
+    poisBySystem,
+    drawingsBySystem,
+    updatedAt: serverTimestamp(),
+  }, { merge: true }).catch(console.error);
+}
       if (data.panelLayout) {
         const pl = data.panelLayout;
         setPanelLayout({
@@ -3850,31 +4024,36 @@ function BoardApp() {
   }, [user, roomId]);
 
   // writes
-  async function pushTokensOnly(nt: Token[]) {
-    const ref = doc(db, "rooms", roomId, "state", "board");
-    try { await updateDoc(ref, { tokens: nt, updatedAt: serverTimestamp() }); }
-    catch { await setDoc(ref, { tokens: nt, updatedAt: serverTimestamp() }, { merge: true }); }
-  }
+async function pushTokensOnly(nt: Token[]) {
+  const ref = doc(db, "rooms", roomId, "state", "board");
+  tokensBySystemRef.current[activeSystemId] = nt;
+  try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
+  catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
+}
 
-  async function pushOrderMarkersOnly(nm: OrderMarker[]) {
-    const ref = doc(db, "rooms", roomId, "state", "board");
-    try { await updateDoc(ref, { orderMarkers: nm, updatedAt: serverTimestamp() }); }
-    catch { await setDoc(ref, { orderMarkers: nm, updatedAt: serverTimestamp() }, { merge: true }); }
-  }
+async function pushOrderMarkersOnly(nm: OrderMarker[]) {
+  const ref = doc(db, "rooms", roomId, "state", "board");
+  orderMarkersBySystemRef.current[activeSystemId] = nm;
+  try { await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }); }
+  catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
+}
 
   async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
     nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), {
-        groups: nb.groups, columns: nb.columns, tokens: nt,
-        orderMarkers: orderMarkersRef.current,
-        aliveState: na, spawnState: ns, maps: nm, pois: np,
+        groups: nb.groups, columns: nb.columns,
+tokensBySystem: { ...tokensBySystemRef.current, [activeSystemId]: nt },
+mapsBySystem: { ...mapsBySystemRef.current, [activeSystemId]: nm },
+poisBySystem: { ...poisBySystemRef.current, [activeSystemId]: np },
+orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemId]: orderMarkersRef.current },
+drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemId]: drawingsRef.current },
+aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
         systemNotesTexts: systemNotesRef.current,
         logEntries: logEntriesRef.current,
         groupRoles: ngr ?? groupRolesRef.current,
-        drawings: drawingsRef.current,
         systems: systemsRef.current,
         jumpgates: jumpgatesRef.current,
         transitStates: transitRef.current,
@@ -4574,57 +4753,34 @@ function BoardApp() {
   const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
-  if (!authReady) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400">Laden…</div>
-      </div>
-    );
-  }
-
+  if (!authReady) return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
+  );
   // Kein Raum → Room-Picker zeigen
-  if (!pickedRoom && !roomIdParam) {
-    return (
-      <RoomPickerView
-        onPick={(r) => setPickedRoom(r)}
-        onSetup={(r) => {
-          setPickedRoom(r);
-        }}
-      />
-    );
-  }
+  if (!pickedRoom && !roomIdParam) return (
+    <RoomPickerView
+      onPick={(r) => setPickedRoom(r)}
+      onSetup={(r) => { setPickedRoom(r); }}
+    />
+  );
 
-  if (!user || !currentPlayer) {
-    if (isSetup) {
-      return (
-        <RoomSetupView
-          roomId={roomId}
-          onDone={(p, cfg) => {
-            setCurrentPlayer(p);
-            setRoomCfg(cfg);
-            window.history.replaceState({}, "", "?room=" + roomId);
-          }}
-        />
-      );
-    }
-
-    return (
-      <LoginView
-        roomId={roomId}
-        onLogin={(p, cfg) => {
-          const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
-          setIsNewPlayer(!hasProfile);
-          setShowProfile(!hasProfile);
-          setCurrentPlayer(p);
-          setRoomCfg(cfg);
-        }}
-        onBack={() => {
-          setPickedRoom(null);
-          window.history.replaceState({}, "", window.location.pathname);
-        }}
-      />
-    );
-  }
+  if (!user || !currentPlayer) return isSetup ? (
+    <RoomSetupView roomId={roomId} onDone={(p, cfg) => {
+      setCurrentPlayer(p);
+      setRoomCfg(cfg);
+      window.history.replaceState({}, "", "?room=" + roomId);
+    }} />
+  ) : (
+    <LoginView roomId={roomId} onLogin={(p, cfg) => {
+      const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
+      setIsNewPlayer(!hasProfile);
+      setShowProfile(!hasProfile);
+      setCurrentPlayer(p); setRoomCfg(cfg);
+    }} onBack={() => {
+      setPickedRoom(null);
+      window.history.replaceState({}, "", window.location.pathname);
+    }} />
+  );
 
   const roleBadge =
     role === "admin" ? "bg-red-900 text-red-300 border border-red-700" :
@@ -4847,8 +5003,8 @@ function BoardApp() {
               </SortableContext>
             </div>
           </DndContext>
-        </div>
-      )}
+          </div>
+        )}
 
       {/* Floating Panels – sichtbar auf Board UND Karte */}
       {notesVisible && (
@@ -4998,8 +5154,8 @@ function BoardApp() {
             </DraggablePanel>
           )}
 
+          </div>
         </div>
-      </div>
       )}
 
     </div>
