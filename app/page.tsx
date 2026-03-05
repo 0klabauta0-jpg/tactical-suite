@@ -3628,6 +3628,7 @@ function BoardApp() {
   const [showProfile, setShowProfile] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
+const activeMapIdRef = React.useRef("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
   const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
   function toggleMinPanel(key: string) { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }
@@ -3785,31 +3786,47 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with current visible state
-useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
-useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
-useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
-useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
-useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
-useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
-useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
+// Per-system refs are updated ONLY by:
+// 1. The Firestore snapshot (on load)
+// 2. Explicit write functions (upsertToken, setMapImage, etc.)
+// 3. The system-switch effect below (saving current state before switching)
+// We do NOT mirror state→ref here because that causes race conditions
+// when activeSystemId changes (old state fires into new system's slot).
 
-// When switching system tab, swap the map state to that system's dataset
+// When switching system tab:
+// 1. Save current visible state into the PREVIOUS system's slot
+// 2. Load the new system's data from its slot
+const prevSystemIdRef = React.useRef(activeSystemId);
 useEffect(() => {
-  const t = tokensBySystemRef.current[activeSystemId] ?? [];
+  const prevSys = prevSystemIdRef.current;
+  // Save current state to the system we're leaving
+  if (prevSys !== activeSystemId) {
+    tokensBySystemRef.current[prevSys] = tokensRef.current;
+    orderMarkersBySystemRef.current[prevSys] = orderMarkersRef.current;
+    mapsBySystemRef.current[prevSys] = mapsRef.current;
+    poisBySystemRef.current[prevSys] = poisRef.current;
+    drawingsBySystemRef.current[prevSys] = drawingsRef.current;
+    activeMapIdBySystemRef.current[prevSys] = activeMapIdRef.current;
+  }
+  prevSystemIdRef.current = activeSystemId;
+
+  // Load the new system's data
+  const t  = tokensBySystemRef.current[activeSystemId]  ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
-  const p = poisBySystemRef.current[activeSystemId] ?? [];
-  const d = drawingsBySystemRef.current[activeSystemId] ?? {};
+  const m  = mapsBySystemRef.current[activeSystemId]    ?? getDefaultMaps(activeSystemId);
+  const p  = poisBySystemRef.current[activeSystemId]    ?? [];
+  const d  = drawingsBySystemRef.current[activeSystemId] ?? {};
   const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
 
-  setTokens(t); tokensRef.current = t;
+  setTokens(t);      tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
-  setMaps(m); mapsRef.current = m;
-  setPois(p); poisRef.current = p;
-  setDrawings(d); drawingsRef.current = d;
+  setMaps(m);        mapsRef.current = m;
+  setPois(p);        poisRef.current = p;
+  setDrawings(d);    drawingsRef.current = d;
   setActiveMapId(am);
 }, [activeSystemId]);
+  useEffect(() => { activeMapIdRef.current = activeMapId; }, [activeMapId]);
+  useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
   useEffect(() => { orderMarkersRef.current = orderMarkers; }, [orderMarkers]);
   useEffect(() => { notesRef.current = notesText; }, [notesText]);
   useEffect(() => { logEntriesRef.current = logEntries; }, [logEntries]);
@@ -4019,7 +4036,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
-      // drawings are handled per-system via drawingsBySystem
+      // drawings per-system via drawingsBySystem
       // Systeme, Sprungtore, Transit (rückwärtskompatibel – fehlen in alten Räumen)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
         setSystems(data.systems); systemsRef.current = data.systems;
