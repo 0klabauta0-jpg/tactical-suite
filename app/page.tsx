@@ -1662,7 +1662,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
             )}
             {/* System-Chip */}
             {!isSystem && systems && (
-              <SystemChip systemId={group.systemId ?? "stanton"} systems={systems} canChange={canWrite} onChange={onSetSystem} />
+              <SystemChip systemId={group.systemId ?? "pyro"} systems={systems} canChange={canWrite} onChange={onSetSystem} />
             )}
             {/* Farbwähler */}
             {canWrite && !isSystem && (
@@ -4748,9 +4748,9 @@ aliveState: na, spawnState: ns,
   }, [activeMapId, maps, pois]);
 
   const selfAlive = currentPlayer ? aliveState[currentPlayer.id] ?? "alive" : "alive";
-  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "stanton") === activeSystemId);
+  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "pyro") === activeSystemId);
   const allTacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
-  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
+  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "pyro") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
   if (!authReady) return (
@@ -4920,7 +4920,7 @@ aliveState: na, spawnState: ns,
               );
             })}
             <span className="text-gray-700 text-xs ml-2">
-              {allTacticalGroups.filter(g => (g.systemId ?? "stanton") === activeSystemId).length} Gruppen
+              {allTacticalGroups.filter(g => (g.systemId ?? "pyro") === activeSystemId).length} Gruppen
             </span>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
