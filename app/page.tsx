@@ -3783,15 +3783,18 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Track previous system to save state before switching
-const prevSystemIdRef = React.useRef(activeSystemId);
-const activeMapIdRef = React.useRef(activeMapId);
-useEffect(() => { activeMapIdRef.current = activeMapId; }, [activeMapId]);
+// Refs for stale-closure-free access in write functions + switch
+const activeSystemIdRef = React.useRef(activeSystemId);
+const activeMapIdRef    = React.useRef(activeMapId);
+const prevSystemIdRef   = React.useRef(activeSystemId);
+useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
+useEffect(() => { activeMapIdRef.current    = activeMapId;    }, [activeMapId]);
 
-// When switching system tab: save current state to old system, load new system
+// When switching system: save old state, load new state
 useEffect(() => {
   const prev = prevSystemIdRef.current;
   if (prev !== activeSystemId) {
+    // Save current visible state into the system we're LEAVING
     tokensBySystemRef.current[prev]       = tokensRef.current;
     orderMarkersBySystemRef.current[prev] = orderMarkersRef.current;
     mapsBySystemRef.current[prev]         = mapsRef.current;
@@ -3801,8 +3804,9 @@ useEffect(() => {
   }
   prevSystemIdRef.current = activeSystemId;
 
+  // Load the system we're ENTERING
   const t  = tokensBySystemRef.current[activeSystemId]       ?? [];
-  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+  const om = orderMarkersBySystemRef.current[activeSystemIdRef.current] ?? [];
   const m  = mapsBySystemRef.current[activeSystemId]         ?? getDefaultMaps(activeSystemId);
   const p  = poisBySystemRef.current[activeSystemId]         ?? [];
   const d  = drawingsBySystemRef.current[activeSystemId]     ?? {};
@@ -3978,26 +3982,26 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const activeTokens = tokensBySystemRef.current[activeSystemId] ?? [];
+const activeTokens = tokensBySystemRef.current[activeSystemIdRef.current] ?? [];
 setTokens(activeTokens);
 tokensRef.current = activeTokens;
 
-const activeOM = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+const activeOM = orderMarkersBySystemRef.current[activeSystemIdRef.current] ?? [];
 setOrderMarkers(activeOM);
 orderMarkersRef.current = activeOM;
 
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+const activeMaps = mapsBySystemRef.current[activeSystemIdRef.current] ?? getDefaultMaps(activeSystemIdRef.current);
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
-const activePois = poisBySystemRef.current[activeSystemId] ?? [];
+const activePois = poisBySystemRef.current[activeSystemIdRef.current] ?? [];
 setPois(activePois);
 poisRef.current = activePois;
 
-const activeDrawings = drawingsBySystemRef.current[activeSystemId] ?? {};
+const activeDrawings = drawingsBySystemRef.current[activeSystemIdRef.current] ?? {};
 setDrawings(activeDrawings);
 drawingsRef.current = activeDrawings;
 
@@ -4042,14 +4046,14 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   // writes
 async function pushTokensOnly(nt: Token[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  tokensBySystemRef.current[activeSystemId] = nt;
+  tokensBySystemRef.current[activeSystemIdRef.current] = nt;
   try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
 
 async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  orderMarkersBySystemRef.current[activeSystemId] = nm;
+  orderMarkersBySystemRef.current[activeSystemIdRef.current] = nm;
   try { await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
@@ -4059,11 +4063,11 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), {
         groups: nb.groups, columns: nb.columns,
-tokensBySystem: { ...tokensBySystemRef.current, [activeSystemId]: nt },
-mapsBySystem: { ...mapsBySystemRef.current, [activeSystemId]: nm },
-poisBySystem: { ...poisBySystemRef.current, [activeSystemId]: np },
-orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemId]: orderMarkersRef.current },
-drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemId]: drawingsRef.current },
+tokensBySystem: { ...tokensBySystemRef.current, [activeSystemIdRef.current]: nt },
+mapsBySystem: { ...mapsBySystemRef.current, [activeSystemIdRef.current]: nm },
+poisBySystem: { ...poisBySystemRef.current, [activeSystemIdRef.current]: np },
+orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemIdRef.current]: orderMarkersRef.current },
+drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemIdRef.current]: drawingsRef.current },
 aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
