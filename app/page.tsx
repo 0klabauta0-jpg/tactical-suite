@@ -4200,7 +4200,7 @@ function BoardApp() {
       if (!result[mid]) result[mid] = [];
       const g = board.groups.find((g) => g.id === t.groupId);
       if (g && !result[mid].find((e) => e.groupId === t.groupId)) {
-        result[mid].push({ groupId: g.id, color: groupColor(g), label: g.name });
+        result[mid].push({ groupId: g.id, color: groupColor(g), label: g.label });
       }
     }
     return result;
