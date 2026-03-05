@@ -2922,8 +2922,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     gateDrag.current = null; lastGatePos.current = null;
   }
 
-  const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
-  const visibleOrderMarkers = orderMarkers.filter((m) => m.mapId === activeMapId);
+  const groupIds = new Set(groups.map(g => g.id));
+  const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId && groupIds.has(t.groupId));
+  const visibleOrderMarkers = orderMarkers.filter((m) => m.mapId === activeMapId && groupIds.has(m.groupId));
   const [orderMarkerDrag, setOrderMarkerDrag] = useState<string | null>(null);
   const lastOrderMarkerPos = useRef<{ x: number; y: number } | null>(null);
   const [hoveredOrderMarker, setHoveredOrderMarker] = useState<string | null>(null);
@@ -4010,7 +4011,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
-      // NOTE: drawings handled per-system above (drawingsBySystem)
+      // drawings handled per-system via drawingsBySystem (no global overwrite)
       // Systeme, Sprungtore, Transit (rückwärtskompatibel – fehlen in alten Räumen)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
         setSystems(data.systems); systemsRef.current = data.systems;
@@ -5075,7 +5076,7 @@ aliveState: na, spawnState: ns,
             {!activeImage ? (
               <AutoMap label={activeLabel} mapId={activeMapId} />
             ) : (
-              <ZoomableMap imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
+              <ZoomableMap imageSrc={activeImage} tokens={tokens} groups={board.groups.filter(g => (g.systemId ?? "pyro") === activeSystemId)} board={board}
                 playersById={playersById} aliveState={aliveState} groupRoles={groupRoles}
                 onMoveTokenLocal={moveTokenLocal} onCommitToken={commitToken}
                 canWriteTokens={canWrite && drawTool === "pointer"}
