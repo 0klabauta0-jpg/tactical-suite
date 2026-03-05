@@ -111,10 +111,10 @@ function invalidateRoomConfig(roomId: string) {
 
 const DEFAULT_GROUPS: Group[] = [
   { id: "unassigned", label: "Unzugeteilt" },
-  { id: "g1", label: "Marines" },
-  { id: "g2", label: "Air" },
-  { id: "g3", label: "Subradar" },
-  { id: "spawn1", label: "Spawn", isSpawn: true },
+  { id: "g1", label: "Marines", systemId: "pyro" },
+  { id: "g2", label: "Air", systemId: "pyro" },
+  { id: "g3", label: "Subradar", systemId: "pyro" },
+  { id: "spawn1", label: "Spawn", isSpawn: true, systemId: "pyro" },
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
@@ -3585,7 +3585,7 @@ function BoardApp() {
   const [showProfile, setShowProfile] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
-  const [activeSystemId, setActiveSystemId] = useState("stanton"); // aktives System für Board-Filter
+  const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const [jumpgates, setJumpgates] = useState<Jumpgate[]>([...DEFAULT_JUMPGATES, ...DEFAULT_GALAXY_GATES]);
   const [transitStates, setTransitStates] = useState<TransitState>({});
@@ -3766,8 +3766,8 @@ function BoardApp() {
       const data = snap.data() as any;
       if (!data) return;
       const rawGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
-      // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "stanton" als Default
-      const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "stanton" });
+      // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "pyro" als Default
+      const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
       setBoard(safeBoard(data, loadedGroups));
       if (Array.isArray(data.tokens)) {
         const incomingTokens: Token[] = data.tokens.map(normalizeToken);
@@ -4045,7 +4045,7 @@ function BoardApp() {
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, next, mapsRef.current, poisRef.current);
   }
 
-  function addGroup(isSpawn = false, systemId = "stanton") {
+  function addGroup(isSpawn = false, systemId = "pyro") {
     if (!canWrite) return;
     const g: Group = { id: uid(), label: isSpawn ? "Spawn" : "Neue Gruppe", isSpawn, systemId };
     setBoard((prev) => {
