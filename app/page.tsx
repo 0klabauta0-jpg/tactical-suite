@@ -1662,7 +1662,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
             )}
             {/* System-Chip */}
             {!isSystem && systems && (
-              <SystemChip systemId={group.systemId ?? "pyro"} systems={systems} canChange={canWrite} onChange={onSetSystem} />
+              <SystemChip systemId={group.systemId ?? "stanton"} systems={systems} canChange={canWrite} onChange={onSetSystem} />
             )}
             {/* Farbwähler */}
             {canWrite && !isSystem && (
@@ -3758,6 +3758,7 @@ function BoardApp() {
 // Legacy rooms stored everything global. We treat legacy as "pyro".
 // ─────────────────────────────────────────────────────────────
 const LEGACY_DEFAULT_SYSTEM = "pyro";
+const activeSystemIdRef = React.useRef("pyro");
 
 const tokensBySystemRef = useRef<Record<string, Token[]>>({});
 const orderMarkersBySystemRef = useRef<Record<string, OrderMarker[]>>({});
@@ -3782,6 +3783,7 @@ useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, acti
 useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
 useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
 useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
+useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
 
 // When switching system tab, swap the map state to that system's dataset
 useEffect(() => {
@@ -3962,26 +3964,26 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const activeTokens = tokensBySystemRef.current[activeSystemId] ?? [];
+const activeTokens = tokensBySystemRef.current[activeSystemIdRef.current] ?? [];
 setTokens(activeTokens);
 tokensRef.current = activeTokens;
 
-const activeOM = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+const activeOM = orderMarkersBySystemRef.current[activeSystemIdRef.current] ?? [];
 setOrderMarkers(activeOM);
 orderMarkersRef.current = activeOM;
 
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+const activeMaps = mapsBySystemRef.current[activeSystemIdRef.current] ?? DEFAULT_MAPS;
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
-const activePois = poisBySystemRef.current[activeSystemId] ?? [];
+const activePois = poisBySystemRef.current[activeSystemIdRef.current] ?? [];
 setPois(activePois);
 poisRef.current = activePois;
 
-const activeDrawings = drawingsBySystemRef.current[activeSystemId] ?? {};
+const activeDrawings = drawingsBySystemRef.current[activeSystemIdRef.current] ?? {};
 setDrawings(activeDrawings);
 drawingsRef.current = activeDrawings;
 
@@ -4008,7 +4010,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
-      if (data.drawings) setDrawings(data.drawings);
+      // NOTE: drawings handled per-system above (drawingsBySystem)
       // Systeme, Sprungtore, Transit (rückwärtskompatibel – fehlen in alten Räumen)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
         setSystems(data.systems); systemsRef.current = data.systems;
@@ -4026,14 +4028,14 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   // writes
 async function pushTokensOnly(nt: Token[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  tokensBySystemRef.current[activeSystemId] = nt;
+  tokensBySystemRef.current[activeSystemIdRef.current] = nt;
   try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
 
 async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  orderMarkersBySystemRef.current[activeSystemId] = nm;
+  orderMarkersBySystemRef.current[activeSystemIdRef.current] = nm;
   try { await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
@@ -4043,11 +4045,11 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), {
         groups: nb.groups, columns: nb.columns,
-tokensBySystem: { ...tokensBySystemRef.current, [activeSystemId]: nt },
-mapsBySystem: { ...mapsBySystemRef.current, [activeSystemId]: nm },
-poisBySystem: { ...poisBySystemRef.current, [activeSystemId]: np },
-orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemId]: orderMarkersRef.current },
-drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemId]: drawingsRef.current },
+tokensBySystem: { ...tokensBySystemRef.current, [activeSystemIdRef.current]: nt },
+mapsBySystem: { ...mapsBySystemRef.current, [activeSystemIdRef.current]: nm },
+poisBySystem: { ...poisBySystemRef.current, [activeSystemIdRef.current]: np },
+orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemIdRef.current]: orderMarkersRef.current },
+drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemIdRef.current]: drawingsRef.current },
 aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
@@ -4748,9 +4750,9 @@ aliveState: na, spawnState: ns,
   }, [activeMapId, maps, pois]);
 
   const selfAlive = currentPlayer ? aliveState[currentPlayer.id] ?? "alive" : "alive";
-  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "pyro") === activeSystemId);
+  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "stanton") === activeSystemId);
   const allTacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
-  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "pyro") === activeSystemId);
+  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
   if (!authReady) return (
@@ -4920,7 +4922,7 @@ aliveState: na, spawnState: ns,
               );
             })}
             <span className="text-gray-700 text-xs ml-2">
-              {allTacticalGroups.filter(g => (g.systemId ?? "pyro") === activeSystemId).length} Gruppen
+              {allTacticalGroups.filter(g => (g.systemId ?? "stanton") === activeSystemId).length} Gruppen
             </span>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -5048,7 +5050,7 @@ aliveState: na, spawnState: ns,
                 <button key={sys.id}
                   className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border text-xs font-semibold transition-all ${isActive ? "border-opacity-100 shadow-lg" : "border-gray-700 bg-gray-900 text-gray-400 hover:text-gray-200"}`}
                   style={isActive ? { color: info.color, backgroundColor: info.bg, borderColor: info.color + "88" } : {}}
-                  onClick={() => { setActiveSystemId(sys.id); setActiveMapId("main"); }}>
+                  onClick={() => { setActiveSystemId(sys.id); }}>
                   <span>{info.short}</span>
                   <span>{sys.label}</span>
                   {transitCount > 0 && <span className="text-yellow-400 animate-pulse">⟳{transitCount}</span>}
@@ -5137,7 +5139,7 @@ aliveState: na, spawnState: ns,
             />
           )}
 
-          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
+          <DraggablePanel title={`🗺 ${systems.find(s=>s.id===activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
             <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
