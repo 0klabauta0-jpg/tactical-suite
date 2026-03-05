@@ -118,6 +118,14 @@ const DEFAULT_GROUPS: Group[] = [
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+const DEFAULT_MAPS_BY_SYSTEM: Record<string, MapEntry[]> = {
+  stanton: [{ id: "main", label: "Stanton System", image: "" }],
+  pyro:    [{ id: "main", label: "Pyro System",    image: "/pyro-map.png" }],
+  nyx:     [{ id: "main", label: "Nyx System",     image: "" }],
+};
+function getDefaultMaps(systemId: string): MapEntry[] {
+  return DEFAULT_MAPS_BY_SYSTEM[systemId] ?? [{ id: "main", label: systemId, image: "" }];
+}
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -3775,28 +3783,36 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with current visible state
-useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
-useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
-useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
-useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
-useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
-useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
+// Track previous system to save state before switching
+const prevSystemIdRef = React.useRef(activeSystemId);
+const activeMapIdRef = React.useRef(activeMapId);
+useEffect(() => { activeMapIdRef.current = activeMapId; }, [activeMapId]);
 
-// When switching system tab, swap the map state to that system's dataset
+// When switching system tab: save current state to old system, load new system
 useEffect(() => {
-  const t = tokensBySystemRef.current[activeSystemId] ?? [];
-  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
-  const p = poisBySystemRef.current[activeSystemId] ?? [];
-  const d = drawingsBySystemRef.current[activeSystemId] ?? {};
-  const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
+  const prev = prevSystemIdRef.current;
+  if (prev !== activeSystemId) {
+    tokensBySystemRef.current[prev]       = tokensRef.current;
+    orderMarkersBySystemRef.current[prev] = orderMarkersRef.current;
+    mapsBySystemRef.current[prev]         = mapsRef.current;
+    poisBySystemRef.current[prev]         = poisRef.current;
+    drawingsBySystemRef.current[prev]     = drawingsRef.current;
+    activeMapIdBySystemRef.current[prev]  = activeMapIdRef.current;
+  }
+  prevSystemIdRef.current = activeSystemId;
 
-  setTokens(t); tokensRef.current = t;
+  const t  = tokensBySystemRef.current[activeSystemId]       ?? [];
+  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+  const m  = mapsBySystemRef.current[activeSystemId]         ?? getDefaultMaps(activeSystemId);
+  const p  = poisBySystemRef.current[activeSystemId]         ?? [];
+  const d  = drawingsBySystemRef.current[activeSystemId]     ?? {};
+  const am = activeMapIdBySystemRef.current[activeSystemId]  ?? "main";
+
+  setTokens(t);        tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
-  setMaps(m); mapsRef.current = m;
-  setPois(p); poisRef.current = p;
-  setDrawings(d); drawingsRef.current = d;
+  setMaps(m);          mapsRef.current = m;
+  setPois(p);          poisRef.current = p;
+  setDrawings(d);      drawingsRef.current = d;
   setActiveMapId(am);
 }, [activeSystemId]);
   useEffect(() => { orderMarkersRef.current = orderMarkers; }, [orderMarkers]);
@@ -4748,20 +4764,9 @@ aliveState: na, spawnState: ns,
   }, [activeMapId, maps, pois]);
 
   const selfAlive = currentPlayer ? aliveState[currentPlayer.id] ?? "alive" : "alive";
-  const spawnGroups = board.groups.filter((g) => {
-  if (!g.isSpawn) return false;
-  const inSystem = (g.systemId ?? "pyro") === activeSystemId;
-  const inTransit = transitStates[g.id] !== undefined &&
-    (transitStates[g.id].fromSystem === activeSystemId || transitStates[g.id].toSystem === activeSystemId);
-  return inSystem || inTransit;
-});
+  const spawnGroups = board.groups.filter((g) => g.isSpawn && (g.systemId ?? "stanton") === activeSystemId);
   const allTacticalGroups = board.groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
-  const tacticalGroups = allTacticalGroups.filter((g) => {
-  const inSystem = (g.systemId ?? "pyro") === activeSystemId;
-  const inTransit = transitStates[g.id] !== undefined &&
-    (transitStates[g.id].fromSystem === activeSystemId || transitStates[g.id].toSystem === activeSystemId);
-  return inSystem || inTransit;
-});
+  const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
   if (!authReady) return (
@@ -4931,12 +4936,7 @@ aliveState: na, spawnState: ns,
               );
             })}
             <span className="text-gray-700 text-xs ml-2">
-              {allTacticalGroups.filter(g => {
-              const inSystem = (g.systemId ?? "pyro") === activeSystemId;
-              const inTransit = transitStates[g.id] !== undefined &&
-                (transitStates[g.id].fromSystem === activeSystemId || transitStates[g.id].toSystem === activeSystemId);
-              return inSystem || inTransit;
-            }).length} Gruppen
+              {allTacticalGroups.filter(g => (g.systemId ?? "stanton") === activeSystemId).length} Gruppen
             </span>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -5162,12 +5162,7 @@ aliveState: na, spawnState: ns,
 
           {canWrite && (
             <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
-              <TokenPlacerPanel groups={board.groups.filter(g => {
-                  const inSystem = (g.systemId ?? "pyro") === activeSystemId;
-                  const inTransit = transitStates[g.id] !== undefined &&
-                    (transitStates[g.id].fromSystem === activeSystemId || transitStates[g.id].toSystem === activeSystemId);
-                  return inSystem || inTransit;
-                })}
+              <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 transitStates={transitStates}
