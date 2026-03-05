@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.006";
+const APP_VERSION = "1.007";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -1610,6 +1610,7 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
   const [submapsOpen, setSubmapsOpen] = useState(true);
   const [poisOpen, setPoisOpen] = useState<Record<string, boolean>>({});
   const togglePois = (id: string) => setPoisOpen(p => ({ ...p, [id]: !(p[id] ?? true) }));
+  const navSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   function handleSubmapDragEnd(e: any) {
     const { active, over } = e;
@@ -1638,7 +1639,7 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
             <span>Unterkarten ({submaps.length})</span>
           </button>
           {submapsOpen && (
-            <DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))} onDragEnd={handleSubmapDragEnd}>
+            <DndContext sensors={navSensors} onDragEnd={handleSubmapDragEnd}>
               <SortableContext items={submaps.map((m) => m.id)} strategy={rectSortingStrategy}>
                 {submaps.map((sm) => {
                   const smPois = pois.filter((p) => p.parentMapId === sm.id);
@@ -1665,7 +1666,7 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
                           )}
                         </div>
                         {pOpen && smPois.length > 0 && (
-                          <DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))}
+                          <DndContext sensors={navSensors}
                             onDragEnd={(e: any) => {
                               const { active, over } = e;
                               if (!over || active.id === over.id) return;
@@ -1941,11 +1942,11 @@ function DrawingToolbar({
   x: number; y: number; onMove: (x: number, y: number) => void;
   showGrid: boolean; onToggleGrid: () => void;
 }) {
-  if (!canDraw) return null;
   const [confirmClear, setConfirmClear] = useState(false);
-
   const dragging = useRef(false);
   const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+
+  if (!canDraw) return null;
 
   function onHandleDown(e: React.PointerEvent) {
     dragging.current = true;
@@ -3316,6 +3317,8 @@ function BoardApp() {
     placer:  { x: DEFAULT_PANEL_LAYOUT.placer.x,  y: DEFAULT_PANEL_LAYOUT.placer.y  },
     toolbar: { x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 },
     zoom:    { x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  },
+    notes:    { x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    },
+    logNotes: { x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false },
   });
   const [notesText, setNotesText] = useState("");
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
@@ -3657,47 +3660,41 @@ function BoardApp() {
   const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const movePanelNotes = useCallback((x: number, y: number) => {
-    const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
-    const pos = clampPanelPosition(x, y, n.w, n.h);
-    const next = { ...panelLayout, notes: { ...n, ...pos } };
-    setPanelLayout(next);
-    if (notesMoveDebounce.current) clearTimeout(notesMoveDebounce.current);
-    notesMoveDebounce.current = setTimeout(() => {
-      pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
-    }, 600);
-  }, [panelLayout]);
+    setLocalPanelPos(p => {
+      const n = p.notes;
+      const pos = clampPanelPosition(x, y, n.w, n.h);
+      return { ...p, notes: { ...n, ...pos } };
+    });
+  }, []);
 
   const resizePanelNotes = useCallback((w: number, h: number) => {
-    const n = panelLayout.notes ?? DEFAULT_PANEL_LAYOUT.notes;
-    const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
-    const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
-    const next = { ...panelLayout, notes: { ...n, ...size, ...pos } };
-    setPanelLayout(next);
-    if (notesResizeDebounce.current) clearTimeout(notesResizeDebounce.current);
-    notesResizeDebounce.current = setTimeout(() => {
-      pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, next);
-    }, 600);
-  }, [panelLayout]);
+    setLocalPanelPos(p => {
+      const n = p.notes;
+      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
+      const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
+      return { ...p, notes: { ...n, ...size, ...pos } };
+    });
+  }, []);
 
   const movePanelLogNotes = useCallback((x: number, y: number) => {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const pos = clampPanelPosition(x, y, ln.w, ln.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...pos } };
-    setPanelLayout(next);
-  }, [panelLayout]);
+    setLocalPanelPos(p => {
+      const ln = p.logNotes;
+      const pos = clampPanelPosition(x, y, ln.w, ln.h);
+      return { ...p, logNotes: { ...ln, ...pos } };
+    });
+  }, []);
 
   const resizePanelLogNotes = useCallback((w: number, h: number) => {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
-    const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
-    const next = { ...panelLayout, logNotes: { ...ln, ...size, ...pos } };
-    setPanelLayout(next);
-  }, [panelLayout]);
+    setLocalPanelPos(p => {
+      const ln = p.logNotes;
+      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
+      const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
+      return { ...p, logNotes: { ...ln, ...size, ...pos } };
+    });
+  }, []);
 
   function toggleLogNotesVisible() {
-    const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-    const next = { ...panelLayout, logNotes: { ...ln, visible: !ln.visible } };
-    setPanelLayout(next);
+    setLocalPanelPos(p => ({ ...p, logNotes: { ...p.logNotes, visible: !p.logNotes.visible } }));
   }
 
   const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -4231,7 +4228,7 @@ function BoardApp() {
               className={`text-xs px-2 py-1 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
               onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
             <button
-              className={`text-xs px-2 py-1 rounded border transition-colors ${(panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes).visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
+              className={`text-xs px-2 py-1 rounded border transition-colors ${localPanelPos.logNotes.visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
               onClick={toggleLogNotesVisible}
               title="Log-Notizen">📟</button>
 
@@ -4376,28 +4373,25 @@ function BoardApp() {
 
       {/* Floating Panels – sichtbar auf Board UND Karte */}
       {notesVisible && (
-        <NotesPanel x={panelLayout.notes?.x ?? 20} y={panelLayout.notes?.y ?? 70}
-          w={panelLayout.notes?.w ?? 320} h={panelLayout.notes?.h ?? 220}
+        <NotesPanel x={localPanelPos.notes.x} y={localPanelPos.notes.y}
+          w={localPanelPos.notes.w} h={localPanelPos.notes.h}
           text={notesText} onChange={handleNotesChange}
           onMove={movePanelNotes} onResize={resizePanelNotes}
           canWrite={canWrite} />
       )}
-      {(() => {
-        const ln = panelLayout.logNotes ?? DEFAULT_PANEL_LAYOUT.logNotes;
-        return (
-          <LogNotesPanel
-            x={ln.x} y={ln.y} w={ln.w} h={ln.h} visible={ln.visible}
-            entries={logEntries}
-            onAdd={handleAddLogEntry}
-            onClear={handleClearLogEntries}
-            onMove={movePanelLogNotes}
-            onResize={resizePanelLogNotes}
-            onToggleVisible={toggleLogNotesVisible}
-            canWrite={canWrite}
-            useRelTime={useRelTime}
-          />
-        );
-      })()}
+      <LogNotesPanel
+        x={localPanelPos.logNotes.x} y={localPanelPos.logNotes.y}
+        w={localPanelPos.logNotes.w} h={localPanelPos.logNotes.h}
+        visible={localPanelPos.logNotes.visible}
+        entries={logEntries}
+        onAdd={handleAddLogEntry}
+        onClear={handleClearLogEntries}
+        onMove={movePanelLogNotes}
+        onResize={resizePanelLogNotes}
+        onToggleVisible={toggleLogNotesVisible}
+        canWrite={canWrite}
+        useRelTime={useRelTime}
+      />
 
       {/* MAP */}
       {tab === "map" && (
