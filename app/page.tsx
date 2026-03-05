@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.007";
+const APP_VERSION = "1.008";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -773,6 +773,9 @@ function RoomPickerView({ onPick, onSetup }: {
   const [roomInput, setRoomInput] = useState("");
   const [checking, setChecking] = useState(false);
   const [msg, setMsg] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [newRoomId, setNewRoomId] = useState("");
+  const [createMsg, setCreateMsg] = useState("");
 
   async function handleJoin() {
     const r = roomInput.trim();
@@ -780,17 +783,15 @@ function RoomPickerView({ onPick, onSetup }: {
     setChecking(true); setMsg("");
     const cfg = await loadRoomConfig(r);
     setChecking(false);
-    if (!cfg) {
-      setMsg(`Raum „${r}" hat noch keine Konfiguration.`);
-      return;
-    }
-    // URL aktualisieren und Raum öffnen
+    if (!cfg) { setMsg(`Raum „${r}" hat noch keine Konfiguration.`); return; }
     window.history.replaceState({}, "", "?room=" + encodeURIComponent(r));
     onPick(r);
   }
 
-  function handleCreate() {
-    const r = roomInput.trim() || "neuer-raum";
+  function handleCreateConfirm() {
+    const r = newRoomId.trim();
+    if (!r) { setCreateMsg("Bitte eine Raum-ID eingeben."); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(r)) { setCreateMsg("Nur Buchstaben, Zahlen, - und _ erlaubt."); return; }
     window.history.replaceState({}, "", "?room=" + encodeURIComponent(r) + "&setup=1");
     onSetup(r);
   }
@@ -817,11 +818,44 @@ function RoomPickerView({ onPick, onSetup }: {
           {checking ? "Prüfe…" : "→ Raum beitreten"}
         </button>
 
-        <button
-          className="w-full bg-orange-700 hover:bg-orange-600 text-white rounded-lg py-2 text-sm font-medium"
-          onClick={handleCreate}>
-          ⚙ Neuen Raum erstellen
-        </button>
+        {/* Neuen Raum erstellen – mit Pflichtfeld für Raum-ID */}
+        {!showCreate ? (
+          <button
+            className="w-full bg-orange-700 hover:bg-orange-600 text-white rounded-lg py-2 text-sm font-medium"
+            onClick={() => { setShowCreate(true); setNewRoomId(""); setCreateMsg(""); }}>
+            ⚙ Neuen Raum erstellen
+          </button>
+        ) : (
+          <div className="mt-1 bg-gray-800 border border-orange-800 rounded-xl p-3">
+            <p className="text-orange-300 text-xs font-semibold mb-2">⚙ Neuen Raum erstellen</p>
+            <label className="text-gray-400 text-xs mb-1 block">
+              Raum-ID <span className="text-red-400">*</span>
+            </label>
+            <input
+              className="w-full bg-gray-700 border border-orange-700 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-orange-400 font-mono"
+              placeholder="z.B. alpha-template"
+              value={newRoomId}
+              autoFocus
+              onChange={(e) => { setNewRoomId(e.target.value); setCreateMsg(""); }}
+              onKeyDown={(e) => e.key === "Enter" && handleCreateConfirm()}
+            />
+            <p className="text-gray-600 text-xs mb-3">Nur Buchstaben, Zahlen, - und _</p>
+            {createMsg && <p className="text-red-400 text-xs mb-2">{createMsg}</p>}
+            <div className="flex gap-2">
+              <button
+                className="flex-1 bg-orange-700 hover:bg-orange-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+                onClick={handleCreateConfirm}
+                disabled={!newRoomId.trim()}>
+                Erstellen →
+              </button>
+              <button
+                className="px-3 py-2 rounded-lg border border-gray-600 text-gray-400 hover:bg-gray-700 text-sm"
+                onClick={() => setShowCreate(false)}>
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {msg && <p className="mt-3 text-xs text-red-400">{msg}</p>}
 
@@ -2642,7 +2676,7 @@ function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin, markers, onOpenMarker,
-  onCommitMarker, activeMapId, onRemoveToken,
+  onCommitMarker, activeMapId, onRemoveToken, getActiveGroupsForMarker,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
@@ -2656,6 +2690,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string; onRemoveToken: (gId: string, mapId: string) => void;
+  getActiveGroupsForMarker?: (markerId: string) => { groupId: string; color: string; label: string }[];
   orderMarkers: OrderMarker[];
   onMoveOrderMarkerLocal: (gId: string, x: number, y: number, mapId: string) => void;
   onCommitOrderMarker: (gId: string, x: number, y: number, mapId: string) => void;
@@ -2680,6 +2715,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   }, [scale]);
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
+  const [openGroupMenu, setOpenGroupMenu] = useState<string | null>(null); // markerId
   const [panning, setPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
@@ -2872,10 +2908,13 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 
         {/* Marker – Doppelklick öffnet, Einfachklick / Drag verschiebt */}
         {/* markerClickCounters: id → count, stored outside map via closure */}
-        {markers.map((m) => (
+        {markers.map((m) => {
+          const activeGroups = getActiveGroupsForMarker ? getActiveGroupsForMarker(m.id) : [];
+          const showGroupMenu = openGroupMenu === m.id;
+          return (
             <div key={m.id}
-              className={`absolute z-10 flex items-center gap-1 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
-              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdmin ? "cursor-move" : "cursor-pointer"}`}
+              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-100%)" }}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 if (isAdmin) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
@@ -2883,7 +2922,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               onClick={(e) => {
                 e.stopPropagation();
                 if (markerDrag) return;
-                // Doppelklick → Ebene wechseln
                 markerClickCount.current[m.id] = (markerClickCount.current[m.id] ?? 0) + 1;
                 if (markerClickTimer.current[m.id]) clearTimeout(markerClickTimer.current[m.id]);
                 if (markerClickCount.current[m.id] >= 2) {
@@ -2891,14 +2929,53 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 }
                 markerClickTimer.current[m.id] = setTimeout(() => { markerClickCount.current[m.id] = 0; }, 350);
               }}>
+              {/* Aktive-Gruppen-Badge */}
+              {activeGroups.length > 0 && (
+                <div className="relative">
+                  <button
+                    className="flex items-center gap-0.5 bg-gray-900 bg-opacity-90 border border-gray-600 rounded-full px-1.5 py-0.5 shadow-lg"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); setOpenGroupMenu(showGroupMenu ? null : m.id); }}
+                    title="Aktive Gruppen – klicken zum Verwalten">
+                    {activeGroups.slice(0, 5).map((g) => (
+                      <span key={g.groupId} className="w-3 h-3 rounded-full border border-gray-800 flex-shrink-0"
+                        style={{ backgroundColor: g.color }} title={g.label} />
+                    ))}
+                    {activeGroups.length > 5 && <span className="text-gray-400 text-xs">+{activeGroups.length - 5}</span>}
+                  </button>
+                  {/* Dropdown: Gruppen einzeln entfernen */}
+                  {showGroupMenu && (
+                    <div className="absolute bottom-full left-0 mb-1 bg-gray-900 border border-gray-600 rounded-xl shadow-xl p-2 min-w-max z-50"
+                      onPointerDown={(e) => e.stopPropagation()}>
+                      <p className="text-gray-500 text-xs mb-1.5 px-1">Gruppen auf dieser Ebene:</p>
+                      {activeGroups.map((g) => (
+                        <div key={g.groupId} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-800">
+                          <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: g.color }} />
+                          <span className="text-xs text-gray-300 flex-1">{g.label}</span>
+                          {onRemoveToken && (
+                            <button
+                              className="text-xs text-gray-600 hover:text-red-400 px-1"
+                              onClick={(e) => { e.stopPropagation(); onRemoveToken(g.groupId, m.id); }}
+                              title="Token entfernen">✕</button>
+                          )}
+                        </div>
+                      ))}
+                      <button className="mt-1 w-full text-xs text-gray-600 hover:text-gray-400 text-center"
+                        onClick={(e) => { e.stopPropagation(); setOpenGroupMenu(null); }}>schließen</button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Marker-Label */}
               <div className={`text-xs font-bold px-2 py-0.5 rounded-full border-2 shadow-lg select-none whitespace-nowrap ${
                 m.isPOI ? "bg-blue-700 border-blue-400 text-white" : "bg-yellow-500 border-yellow-300 text-black"
-              }`}>
+              } ${activeGroups.length > 0 ? "ring-2 ring-green-400 ring-offset-1 ring-offset-transparent" : ""}`}>
                 {m.isPOI ? "🔵" : "📍"} {m.label}
                 {isAdmin && <span className="ml-1 opacity-50">↵↵</span>}
               </div>
             </div>
-        ))}
+          );
+        })}
 
         {/* Gruppen-Tokens mit Hover-Tooltip + Entfernen-Button */}
         {visibleTokens.map((t) => {
@@ -4115,6 +4192,35 @@ function BoardApp() {
   const activeImage = normalizeImageUrl(activeMapEntry?.image ?? activePOI?.image ?? "");
   const activeLabel = activeMapEntry?.label ?? activePOI?.label ?? "";
 
+  // Build a map: childMapId → groups with tokens there (recursively through all levels)
+  const tokensByMap = useMemo(() => {
+    const result: Record<string, { groupId: string; color: string; label: string }[]> = {};
+    for (const t of tokens) {
+      const mid = t.mapId ?? "main";
+      if (!result[mid]) result[mid] = [];
+      const g = board.groups.find((g) => g.id === t.groupId);
+      if (g && !result[mid].find((e) => e.groupId === t.groupId)) {
+        result[mid].push({ groupId: g.id, color: groupColor(g), label: g.name });
+      }
+    }
+    return result;
+  }, [tokens, board.groups]);
+
+  // For a marker (child map/POI), collect all groups active on it or any of its descendants
+  function getActiveGroupsForMarker(markerId: string): { groupId: string; color: string; label: string }[] {
+    const direct = tokensByMap[markerId] ?? [];
+    // Also collect from sub-POIs of this map
+    const subPois = pois.filter((p) => p.parentMapId === markerId);
+    const indirect: { groupId: string; color: string; label: string }[] = [];
+    for (const sp of subPois) {
+      for (const g of (tokensByMap[sp.id] ?? [])) {
+        if (!indirect.find((e) => e.groupId === g.groupId) && !direct.find((e) => e.groupId === g.groupId))
+          indirect.push({ ...g });
+      }
+    }
+    return [...direct, ...indirect];
+  }
+
   const markersOnActive = useMemo(() => {
     if (activeMapId === "main") return maps.filter((m) => m.id !== "main").map((m) => ({ id: m.id, label: m.label, x: m.x ?? 0.5, y: m.y ?? 0.5, isPOI: false }));
     return pois.filter((p) => p.parentMapId === activeMapId).map((p) => ({ id: p.id, label: p.label, x: p.x ?? 0.5, y: p.y ?? 0.5, isPOI: true }));
@@ -4419,6 +4525,7 @@ function BoardApp() {
                 isAdmin={isAdmin} markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
                 activeMapId={activeMapId} onRemoveToken={removeToken}
+              getActiveGroupsForMarker={getActiveGroupsForMarker}
                 orderMarkers={orderMarkers}
                 onMoveOrderMarkerLocal={moveOrderMarkerLocal}
                 onCommitOrderMarker={upsertOrderMarker}
