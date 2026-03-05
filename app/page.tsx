@@ -21,7 +21,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 // VERSION
 // ─────────────────────────────────────────────────────────────
-const APP_VERSION = "1.009";
+const APP_VERSION = "1.010";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -889,8 +889,8 @@ function RoomPickerView({ onPick, onSetup }: {
                 ✕
               </button>
             </div>
-          </div>
-        )}
+	        </div>
+	      )}
 
         {msg && <p className="mt-3 text-xs text-red-400">{msg}</p>}
 
@@ -1986,11 +1986,12 @@ function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, 
 // TOKEN PLACER
 // ─────────────────────────────────────────────────────────────
 
-function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
+function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId, transitStates }: {
   groups: Group[];
   onPlace: (gId: string, x: number, y: number, mapId: string) => void;
   onPlaceOrder: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
+  transitStates?: TransitState;
 }) {
   // armed: null | { gId, mode: "token" | "order" }
   const [armed, setArmed] = useState<{ gId: string; mode: "token" | "order" } | null>(null);
@@ -2025,16 +2026,18 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
   return (
     <div>
       <div className="text-xs text-gray-500 mb-2">Karte: <span className="text-blue-400">{activeMapId}</span></div>
-      {tactical.map((g) => (
+      {tactical.map((g) => {
+        const inTransit = transitStates?.[g.id];
+        return (
         <div key={g.id} className="flex gap-1 mb-1">
           {/* Token-Button */}
           <button
             className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
-              isArmed(g.id, "token") ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
+              isArmed(g.id, "token") ? "bg-blue-600 border-blue-500 text-white" : inTransit ? "bg-yellow-950 border-yellow-700 text-yellow-300" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
             }`}
             onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmed(isArmed(g.id, "token") ? null : { gId: g.id, mode: "token" }); }}>
             <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: groupColor(g) }} />
-            {isArmed(g.id, "token") ? "▶ Klicke…" : g.label}
+            {isArmed(g.id, "token") ? "▶ Klicke…" : inTransit ? `⟳ ${g.label}` : g.label}
           </button>
           {/* Auftrags-Button */}
           <button
@@ -2046,7 +2049,8 @@ function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
             {isArmed(g.id, "order") ? "▶ Klicke…" : "⚑"}
           </button>
         </div>
-      ))}
+        );
+      })}
       {anyArmed && (
         <button className="w-full rounded-lg border border-red-800 px-2 py-1.5 text-xs bg-red-950 text-red-400"
           onClick={(e) => { e.stopPropagation(); setArmed(null); }}>Abbrechen</button>
@@ -2258,6 +2262,7 @@ function DrawingLayer({
   const pathPoints = useRef<{ x: number; y: number }[]>([]);
   const lineStart = useRef<{ x: number; y: number } | null>(null);
   const lastPos = useRef<{ x: number; y: number } | null>(null);
+  const shiftHeld = useRef(false);
 
   // Move tool state
   const [movingEl, setMovingEl] = useState<{ el: DrawElement; startRel: { x: number; y: number }; origEl: DrawElement } | null>(null);
@@ -2480,10 +2485,11 @@ function DrawingLayer({
       return;
     }
 
+    shiftHeld.current = e.shiftKey;
     if (tool === "marker_infantry" || tool === "marker_ground" || tool === "marker_air") {
       const kind = tool.replace("marker_", "") as "infantry" | "ground" | "air";
       onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: Date.now() });
-      onResetTool?.();
+      if (!e.shiftKey) onResetTool?.();
       return;
     }
 
@@ -2565,7 +2571,7 @@ function DrawingLayer({
       }
       pathPoints.current = [];
       redraw();
-      onResetTool?.();
+      if (!shiftHeld.current) onResetTool?.();
       return;
     }
 
@@ -2575,7 +2581,7 @@ function DrawingLayer({
         color, width: strokeWidth });
       lineStart.current = null;
       redraw();
-      onResetTool?.();
+      if (!shiftHeld.current) onResetTool?.();
       return;
     }
 
@@ -2586,7 +2592,7 @@ function DrawingLayer({
       movingPreviewRef.current = null;
       setMovingEl(null);
       onUpdateElement(committed);
-      onResetTool?.();
+      if (!shiftHeld.current) onResetTool?.();
       return;
     }
   }
@@ -3319,11 +3325,16 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 // NOTES PANEL
 // ─────────────────────────────────────────────────────────────
 
-function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: {
+function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite,
+  systemText, onSystemChange, systemLabel, minimized, onToggleMinimize,
+}: {
   x: number; y: number; w: number; h: number; text: string;
   onChange: (t: string) => void; onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void; canWrite: boolean;
+  systemText?: string; onSystemChange?: (t: string) => void; systemLabel?: string;
+  minimized?: boolean; onToggleMinimize?: () => void;
 }) {
+  const [noteTab, setNoteTab] = React.useState<"galaxy"|"system">("galaxy");
   const dragging = useRef(false);
   const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
   const resizing = useRef(false);
@@ -3351,23 +3362,42 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
 
   return (
     <div className="fixed z-40 rounded-xl border border-gray-600 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: h, minWidth: 180, minHeight: 120 }}>
+      style={{ left: x, top: y, width: w, height: minimized ? "auto" : h, minWidth: 180, minHeight: minimized ? 0 : 120 }}>
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
         onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
         <span className="text-gray-500 text-xs">⠿</span>
-        <span className="text-xs font-semibold text-gray-300 flex-1">📋 Notizen</span>
+        <span className="text-xs font-semibold text-gray-300">📋 Notizen</span>
+        {onSystemChange && (
+          <div className="flex gap-1 ml-1">
+            <button className={`text-xs px-1.5 py-0.5 rounded ${noteTab==="galaxy" ? "bg-blue-800 text-blue-200" : "text-gray-500 hover:text-gray-300"}`}
+              onPointerDown={e=>e.stopPropagation()} onClick={()=>setNoteTab("galaxy")}>🌌</button>
+            <button className={`text-xs px-1.5 py-0.5 rounded ${noteTab==="system" ? "bg-purple-800 text-purple-200" : "text-gray-500 hover:text-gray-300"}`}
+              onPointerDown={e=>e.stopPropagation()} onClick={()=>setNoteTab("system")}>{systemLabel ?? "⭐"}</button>
+          </div>
+        )}
+        <span className="flex-1" />
         <span className="text-gray-600 text-xs">{canWrite ? "schreibbar" : "lesend"}</span>
+        {onToggleMinimize && (
+          <button className="text-gray-500 hover:text-gray-300 text-xs px-1 ml-1" onPointerDown={e=>e.stopPropagation()} onClick={onToggleMinimize}>{minimized ? "□" : "─"}</button>
+        )}
       </div>
-      <textarea className="flex-1 bg-transparent text-gray-200 text-xs px-3 py-2 resize-none focus:outline-none placeholder-gray-600 font-mono"
-        placeholder={canWrite ? "Notizen, Protokoll, Befehle…" : ""}
-        value={text} readOnly={!canWrite} onChange={(e) => canWrite && onChange(e.target.value)}
-        onPointerDown={(e) => e.stopPropagation()} style={{ cursor: canWrite ? "text" : "default" }} spellCheck={false} />
-      <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
+      {!minimized && (noteTab === "galaxy" || !onSystemChange ? (
+        <textarea className="flex-1 bg-transparent text-gray-200 text-xs px-3 py-2 resize-none focus:outline-none placeholder-gray-600 font-mono"
+          placeholder={canWrite ? "🌌 Galaxieweite Notizen…" : ""}
+          value={text} readOnly={!canWrite} onChange={(e) => canWrite && onChange(e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()} style={{ cursor: canWrite ? "text" : "default" }} spellCheck={false} />
+      ) : (
+        <textarea className="flex-1 bg-transparent text-purple-100 text-xs px-3 py-2 resize-none focus:outline-none placeholder-gray-600 font-mono"
+          placeholder={canWrite ? `⭐ Notizen für ${systemLabel ?? "dieses System"}…` : ""}
+          value={systemText ?? ""} readOnly={!canWrite} onChange={(e) => canWrite && onSystemChange?.(e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()} style={{ cursor: canWrite ? "text" : "default" }} spellCheck={false} />
+      ))}
+      {!minimized && <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none"
         onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
           <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
         </svg>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -3377,7 +3407,7 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite }: 
 // LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
 // ─────────────────────────────────────────────────────────────
 
-function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime }: {
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime, minimized = false, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: LogEntry[];
   onAdd: (text: string) => void;
@@ -3387,6 +3417,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
   onToggleVisible: () => void;
   canWrite: boolean;
   useRelTime: boolean;
+  minimized?: boolean; onToggleMinimize?: () => void;
 }) {
   const dragging = useRef(false);
   const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
@@ -3439,7 +3470,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
 
   return (
     <div className="fixed z-40 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: visible ? h : "auto", minWidth: 180 }}>
+      style={{ left: x, top: y, width: w, height: (visible && !minimized) ? h : "auto", minWidth: 180 }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
         onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
@@ -3482,8 +3513,11 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
           onClick={onToggleVisible}>
           {visible ? "▲" : "▼"}
         </button>
+        {onToggleMinimize && (
+          <button className="text-gray-500 hover:text-gray-300 text-xs px-1" onPointerDown={e=>e.stopPropagation()} onClick={onToggleMinimize}>{minimized ? "□" : "─"}</button>
+        )}
       </div>
-      {visible && (
+      {visible && !minimized && (
         <>
           {/* Einträge */}
           <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 font-mono text-xs">
@@ -3586,6 +3620,8 @@ function BoardApp() {
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
+  const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
+  function toggleMinPanel(key: string) { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const [jumpgates, setJumpgates] = useState<Jumpgate[]>([...DEFAULT_JUMPGATES, ...DEFAULT_GALAXY_GATES]);
   const [transitStates, setTransitStates] = useState<TransitState>({});
@@ -3603,6 +3639,8 @@ function BoardApp() {
     logNotes: { x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false },
   });
   const [notesText, setNotesText] = useState("");
+  const [systemNotesTexts, setSystemNotesTexts] = useState<Record<string,string>>({});
+  const systemNotesRef = React.useRef<Record<string,string>>({});
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [useRelTime, setUseRelTime] = useState(false);
   const logEntriesRef = useRef<LogEntry[]>([]);
@@ -3793,6 +3831,7 @@ function BoardApp() {
         });
       }
       if (typeof data.notesText === "string") setNotesText(data.notesText);
+      if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (data.groupRoles) setGroupRoles(data.groupRoles);
       if (data.drawings) setDrawings(data.drawings);
@@ -3832,6 +3871,7 @@ function BoardApp() {
         aliveState: na, spawnState: ns, maps: nm, pois: np,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
+        systemNotesTexts: systemNotesRef.current,
         logEntries: logEntriesRef.current,
         groupRoles: ngr ?? groupRolesRef.current,
         drawings: drawingsRef.current,
@@ -4014,6 +4054,12 @@ function BoardApp() {
     notesDebounceRef.current = setTimeout(() => {
       setDoc(doc(db, "rooms", roomId, "state", "board"), { notesText: text, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
     }, 800);
+  }
+
+  function handleSystemNotesChange(sysId: string, text: string) {
+    const next = { ...systemNotesRef.current, [sysId]: text };
+    setSystemNotesTexts(next); systemNotesRef.current = next;
+    setDoc(doc(db, "rooms", roomId, "state", "board"), { systemNotesTexts: next, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
   }
 
   function toggleAlive(playerId: string) {
@@ -4528,34 +4574,57 @@ function BoardApp() {
   const tacticalGroups = allTacticalGroups.filter((g) => (g.systemId ?? "stanton") === activeSystemId);
   const unassignedGroup = board.groups.find((g) => g.id === "unassigned")!;
 
-  if (!authReady) return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-gray-400">Laden…</div></div>
-  );
-  // Kein Raum → Room-Picker zeigen
-  if (!pickedRoom && !roomIdParam) return (
-    <RoomPickerView
-      onPick={(r) => setPickedRoom(r)}
-      onSetup={(r) => { setPickedRoom(r); }}
-    />
-  );
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Laden…</div>
+      </div>
+    );
+  }
 
-  if (!user || !currentPlayer) return isSetup ? (
-    <RoomSetupView roomId={roomId} onDone={(p, cfg) => {
-      setCurrentPlayer(p);
-      setRoomCfg(cfg);
-      window.history.replaceState({}, "", "?room=" + roomId);
-    }} />
-  ) : (
-    <LoginView roomId={roomId} onLogin={(p, cfg) => {
-      const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
-      setIsNewPlayer(!hasProfile);
-      setShowProfile(!hasProfile);
-      setCurrentPlayer(p); setRoomCfg(cfg);
-    }} onBack={() => {
-      setPickedRoom(null);
-      window.history.replaceState({}, "", window.location.pathname);
-    }} />
-  );
+  // Kein Raum → Room-Picker zeigen
+  if (!pickedRoom && !roomIdParam) {
+    return (
+      <RoomPickerView
+        onPick={(r) => setPickedRoom(r)}
+        onSetup={(r) => {
+          setPickedRoom(r);
+        }}
+      />
+    );
+  }
+
+  if (!user || !currentPlayer) {
+    if (isSetup) {
+      return (
+        <RoomSetupView
+          roomId={roomId}
+          onDone={(p, cfg) => {
+            setCurrentPlayer(p);
+            setRoomCfg(cfg);
+            window.history.replaceState({}, "", "?room=" + roomId);
+          }}
+        />
+      );
+    }
+
+    return (
+      <LoginView
+        roomId={roomId}
+        onLogin={(p, cfg) => {
+          const hasProfile = !!(p.area || p.role || p.squadron || p.homeLocation);
+          setIsNewPlayer(!hasProfile);
+          setShowProfile(!hasProfile);
+          setCurrentPlayer(p);
+          setRoomCfg(cfg);
+        }}
+        onBack={() => {
+          setPickedRoom(null);
+          window.history.replaceState({}, "", window.location.pathname);
+        }}
+      />
+    );
+  }
 
   const roleBadge =
     role === "admin" ? "bg-red-900 text-red-300 border border-red-700" :
@@ -4787,7 +4856,12 @@ function BoardApp() {
           w={localPanelPos.notes.w} h={localPanelPos.notes.h}
           text={notesText} onChange={handleNotesChange}
           onMove={movePanelNotes} onResize={resizePanelNotes}
-          canWrite={canWrite} />
+          canWrite={canWrite}
+          systemText={systemNotesTexts[activeSystemId] ?? ""}
+          onSystemChange={(t) => handleSystemNotesChange(activeSystemId, t)}
+          systemLabel={systems.find(s=>s.id===activeSystemId)?.label ?? activeSystemId}
+          minimized={minimizedPanels["notes"]}
+          onToggleMinimize={() => toggleMinPanel("notes")} />
       )}
       <LogNotesPanel
         x={localPanelPos.logNotes.x} y={localPanelPos.logNotes.y}
@@ -4801,24 +4875,45 @@ function BoardApp() {
         onToggleVisible={toggleLogNotesVisible}
         canWrite={canWrite}
         useRelTime={useRelTime}
+        minimized={minimizedPanels["log"]}
+        onToggleMinimize={() => toggleMinPanel("log")}
       />
 
       {/* MAP */}
       {tab === "map" && (
-        <div className="flex-1 relative">
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-gray-900 bg-opacity-80 rounded-lg px-3 py-1.5 text-sm">
-            {breadcrumb.map((b, i) => (
-              <React.Fragment key={b.id}>
-                {i > 0 && <span className="text-gray-600">›</span>}
-                <button className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`} onClick={() => setActiveMapId(b.id)}>
-                  {b.label}
+        <div className="flex-1 relative flex flex-col">
+          {/* System-Tabs auf der Karte */}
+          <div className="flex items-center gap-2 px-4 py-2 bg-gray-950 border-b border-gray-800 flex-shrink-0 z-30">
+            {systems.map((sys) => {
+              const info = SYSTEM_ABBR[sys.id] ?? { short: sys.id.slice(0,2).toUpperCase(), color: "#9ca3af", bg: "#374151" };
+              const isActive = activeSystemId === sys.id;
+              const transitCount = Object.values(transitStates).filter((t: any) => t.toSystem === sys.id).length;
+              return (
+                <button key={sys.id}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border text-xs font-semibold transition-all ${isActive ? "border-opacity-100 shadow-lg" : "border-gray-700 bg-gray-900 text-gray-400 hover:text-gray-200"}`}
+                  style={isActive ? { color: info.color, backgroundColor: info.bg, borderColor: info.color + "88" } : {}}
+                  onClick={() => { setActiveSystemId(sys.id); setActiveMapId("main"); }}>
+                  <span>{info.short}</span>
+                  <span>{sys.label}</span>
+                  {transitCount > 0 && <span className="text-yellow-400 animate-pulse">⟳{transitCount}</span>}
                 </button>
-              </React.Fragment>
-            ))}
-            {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
+              );
+            })}
+            {/* Breadcrumb */}
+            <div className="ml-3 flex items-center gap-1 text-sm">
+              {breadcrumb.map((b: any, i: number) => (
+                <React.Fragment key={b.id}>
+                  {i > 0 && <span className="text-gray-600">›</span>}
+                  <button className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`} onClick={() => setActiveMapId(b.id)}>
+                    {b.label}
+                  </button>
+                </React.Fragment>
+              ))}
+              {isAdmin && <span className="text-yellow-600 text-xs ml-2">✥</span>}
+            </div>
           </div>
-
-          <div className="w-full h-full overflow-hidden" style={{ zIndex: 0 }}>
+          <div className="flex-1 relative">
+            <div className="absolute inset-0 overflow-hidden" style={{ zIndex: 0 }}>
             {!activeImage ? (
               <AutoMap label={activeLabel} mapId={activeMapId} />
             ) : (
@@ -4898,11 +4993,13 @@ function BoardApp() {
               <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
+                transitStates={transitStates}
                 activeMapId={activeMapId} />
             </DraggablePanel>
           )}
 
         </div>
+      </div>
       )}
 
     </div>
@@ -4934,6 +5031,3 @@ export default function Page() {
     </Suspense>
   );
 }
-
-// EXPORT
-// ─────────────────────────────────────────────────────────────
