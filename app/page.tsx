@@ -1024,9 +1024,28 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (signInErr: any) {
-        if (signInErr?.code === "auth/user-not-found") {
-          await createUserWithEmailAndPassword(auth, email, pw);
-        } else { throw signInErr; }
+        // Firebase ≥ v9.12 gibt "auth/invalid-credential" statt "auth/user-not-found"
+        // wenn der Account noch nicht existiert. Alle Varianten abfangen:
+        const signInCode: string = signInErr?.code ?? "";
+        const isNoAccount =
+          signInCode === "auth/user-not-found" ||
+          signInCode === "auth/invalid-credential" ||
+          signInCode === "auth/invalid-login-credentials" ||
+          signInCode === "auth/user-disabled";
+        if (isNoAccount) {
+          try {
+            await createUserWithEmailAndPassword(auth, email, pw);
+          } catch (createErr: any) {
+            // Race-Condition: Account wurde zwischen Sign-in und Create angelegt
+            if (createErr?.code === "auth/email-already-in-use") {
+              await signInWithEmailAndPassword(auth, email, pw);
+            } else {
+              throw createErr;
+            }
+          }
+        } else {
+          throw signInErr;
+        }
       }
 
       // (kein Self-Registration mehr – newPlayerData ist immer null)
