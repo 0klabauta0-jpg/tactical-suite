@@ -109,20 +109,24 @@ const DEFAULT_GROUPS: Group[] = [
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
-const DEFAULT_MAPS_BY_SYSTEM: Record<string, MapEntry[]> = {
-  stanton: [{ id: "main", label: "Stanton System", image: "" }],
-  pyro:    [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }],
-  nyx:     [{ id: "main", label: "Nyx System", image: "" }],
-};
-function getDefaultMaps(systemId: string): MapEntry[] {
-  return DEFAULT_MAPS_BY_SYSTEM[systemId] ?? [{ id: "main", label: systemId, image: "" }];
-}
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
   { id: "pyro",    label: "Pyro",    x: 0.60, y: 0.40 },
   { id: "nyx",     label: "Nyx",     x: 0.50, y: 0.65 },
 ];
+
+function getDefaultMaps(systemId?: string): MapEntry[] {
+  switch ((systemId ?? "pyro").toLowerCase()) {
+    case "stanton":
+      return [{ id: "main", label: "Stanton System", image: "/stanton-map.png" }];
+    case "nyx":
+      return [{ id: "main", label: "Nyx System", image: "/nyx-map.png" }];
+    case "pyro":
+    default:
+      return [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+  }
+}
 
 // Galaxie-Systemwechsel erfolgt über das Dropdown auf der Gruppenkarte
 
@@ -3486,7 +3490,7 @@ function BoardApp() {
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
   const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
-  const [maps, setMaps] = useState<MapEntry[]>(DEFAULT_MAPS);
+  const [maps, setMaps] = useState<MapEntry[]>(getDefaultMaps("pyro"));
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
   const [showProfile, setShowProfile] = useState(false);
@@ -3645,7 +3649,7 @@ const visibleSystemIdRef = useRef(activeSystemId);
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with the system currently shown in the map UI
+// Keep per-system caches in sync with the system that is actually visible right now
 useEffect(() => { tokensBySystemRef.current[visibleSystemIdRef.current] = tokens; }, [tokens]);
 useEffect(() => { orderMarkersBySystemRef.current[visibleSystemIdRef.current] = orderMarkers; }, [orderMarkers]);
 useEffect(() => { mapsBySystemRef.current[visibleSystemIdRef.current] = maps; }, [maps]);
@@ -3653,7 +3657,7 @@ useEffect(() => { poisBySystemRef.current[visibleSystemIdRef.current] = pois; },
 useEffect(() => { drawingsBySystemRef.current[visibleSystemIdRef.current] = drawings; }, [drawings]);
 useEffect(() => { activeMapIdBySystemRef.current[visibleSystemIdRef.current] = activeMapId; }, [activeMapId]);
 
-// When switching system tab, persist the currently visible system first, then load the target system
+// When switching system tab, first persist the currently visible system, then load the target system
 useEffect(() => {
   const prevSystemId = visibleSystemIdRef.current;
 
@@ -4967,7 +4971,7 @@ aliveState: na, spawnState: ns,
 
           {canWrite && (
             <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
-              <TokenPlacerPanel groups={board.groups.filter(g => (g.systemId ?? "pyro") === activeSystemId)}
+              <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
