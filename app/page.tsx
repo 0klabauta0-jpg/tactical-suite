@@ -585,47 +585,65 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   const [templateRoomId, setTemplateRoomId] = useState("");
   const [availableRooms, setAvailableRooms] = useState<string[]>([]);
 
-  // Alle vorhandenen Räume laden für Template-Auswahl
   useEffect(() => {
-    getDocs(collection(db, "rooms")).then((snap) => {
-      const ids = snap.docs.map((d) => d.id).filter((id) => id !== roomId && id.toLowerCase().includes("template")).sort();
-      setAvailableRooms(ids);
-    }).catch(() => {});
+    getDocs(collection(db, "rooms"))
+      .then((snap) => {
+        const ids = snap.docs
+          .map((d) => d.id)
+          .filter((id) => id !== roomId && id.toLowerCase().includes("template"))
+          .sort();
+        setAvailableRooms(ids);
+      })
+      .catch(() => {});
   }, [roomId]);
 
-  // Bestehende Config laden
   useEffect(() => {
     loadRoomConfig(roomId).then((cfg) => {
-      if (cfg) { setSheetUrl(cfg.sheetUrl); setPassword(cfg.password); setRoomName(cfg.roomName ?? ""); setSheetShareUrl(cfg.sheetShareUrl ?? ""); }
+      if (cfg) {
+        setSheetUrl(cfg.sheetUrl);
+        setPassword(cfg.password);
+        setRoomName(cfg.roomName ?? "");
+        setSheetShareUrl(cfg.sheetShareUrl ?? "");
+      }
       setLoading(false);
     });
   }, [roomId]);
 
   async function handleSave() {
-    if (!sheetUrl.startsWith("http")) { setMsg({ text: "sheetUrl muss mit http(s):// beginnen.", ok: false }); return; }
-    if (!password.trim()) { setMsg({ text: "Passwort darf nicht leer sein.", ok: false }); return; }
-    // Einfacher Admin-Schlüssel: verhindert dass jeder die Config überschreibt.
-    // Wer den Key kennt, darf konfigurieren. Key wird NICHT in Firestore gespeichert.
+    if (!sheetUrl.startsWith("http")) {
+      setMsg({ text: "sheetUrl muss mit http(s):// beginnen.", ok: false });
+      return;
+    }
+    if (!password.trim()) {
+      setMsg({ text: "Passwort darf nicht leer sein.", ok: false });
+      return;
+    }
+
     const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
-    if (adminKey !== SETUP_KEY) { setMsg({ text: "Falscher Setup-Schlüssel.", ok: false }); return; }
-    setSaving(true); setMsg(null);
+    if (adminKey !== SETUP_KEY) {
+      setMsg({ text: "Falscher Setup-Schlüssel.", ok: false });
+      return;
+    }
+
+    setSaving(true);
+    setMsg(null);
+
     try {
-      // ── Schritt 1: Firebase Auth ZUERST (sonst Firestore-Writes geblockt) ──
-      // Wir nutzen den Setup-Schlüssel als temporäres Auth-Passwort für einen
-      // "setup-user" der nur zum Schreiben der Config berechtigt ist.
-      // Falls adminHandle angegeben: direkt als Admin einloggen/anlegen.
-      const authHandle = adminHandle.trim() || "__setup__";
+      // Technischer Setup-User, getrennt vom echten Admin-Handle
+      const authHandle = "__setup__";
       const email = nameToFakeEmail(authHandle, roomId);
-      const pw = password.trim() + "tcs-setup";
+      const pw = adminKey.trim() + "_tcs_internal";
+
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (authErr: any) {
         if (authErr?.code === "auth/user-not-found") {
           await createUserWithEmailAndPassword(auth, email, pw);
-        } else { throw authErr; }
+        } else {
+          throw authErr;
+        }
       }
 
-      // ── Schritt 2: Firestore schreiben (jetzt authentifiziert) ───────────
       await setDoc(doc(db, "rooms", roomId, "config", "main"), {
         sheetUrl: sheetUrl.trim(),
         sheetShareUrl: sheetShareUrl.trim(),
@@ -634,32 +652,40 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         updatedAt: serverTimestamp(),
       });
 
-      // ── Schritt 2b: Template-Raum übernehmen (falls ausgewählt) ────────
       if (templateRoomId && templateRoomId !== roomId) {
         try {
           const templateSnap = await getDoc(doc(db, "rooms", templateRoomId, "state", "board"));
           if (templateSnap.exists()) {
             const td = templateSnap.data() as any;
             const templateData: Record<string, any> = {};
-            if (Array.isArray(td.groups)  && td.groups.length  > 0) templateData.groups  = td.groups;
-            if (td.columns && Object.keys(td.columns).length   > 0) templateData.columns = td.columns;
-            if (Array.isArray(td.maps)    && td.maps.length    > 0) templateData.maps    = td.maps;
-            if (Array.isArray(td.pois)    && td.pois.length    > 0) templateData.pois    = td.pois;
+
+            if (Array.isArray(td.groups) && td.groups.length > 0) templateData.groups = td.groups;
+            if (td.columns && Object.keys(td.columns).length > 0) templateData.columns = td.columns;
+            if (Array.isArray(td.maps) && td.maps.length > 0) templateData.maps = td.maps;
+            if (Array.isArray(td.pois) && td.pois.length > 0) templateData.pois = td.pois;
+
             if (Object.keys(templateData).length > 0) {
-              await setDoc(doc(db, "rooms", roomId, "state", "board"),
-                { ...templateData, updatedAt: serverTimestamp() }, { merge: true });
+              await setDoc(
+                doc(db, "rooms", roomId, "state", "board"),
+                { ...templateData, updatedAt: serverTimestamp() },
+                { merge: true }
+              );
             }
           }
-        } catch (_) { /* Template nicht erreichbar – kein Problem */ }
+        } catch (_) {}
       }
 
-      // Admin-Handle in playerOverrides als admin eintragen
       if (adminHandle.trim()) {
         const adminId = stableId(adminHandle.trim());
         const existing = await loadFirestoreOverrides(roomId);
         const next = {
           ...existing,
-          [adminId]: { ...(existing[adminId] ?? {}), name: adminHandle.trim(), appRole: "admin", lastSheetAppRole: "admin" },
+          [adminId]: {
+            ...(existing[adminId] ?? {}),
+            name: adminHandle.trim(),
+            appRole: "admin",
+            lastSheetAppRole: "admin",
+          },
         };
         firestoreOverrideCache[roomId] = next;
         await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
@@ -667,15 +693,25 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
 
       invalidateRoomConfig(roomId);
 
-      // ── Schritt 3: Auto-Login wenn Handle angegeben ───────────────────────
       if (onDone && adminHandle.trim()) {
         const adminId = stableId(adminHandle.trim());
         const adminPlayer: Player = {
-          id: adminId, name: adminHandle.trim(),
-          area: "", role: "", squadron: "", status: "",
-          ampel: "", appRole: "admin", homeLocation: "",
+          id: adminId,
+          name: adminHandle.trim(),
+          area: "",
+          role: "",
+          squadron: "",
+          status: "",
+          ampel: "",
+          appRole: "admin",
+          homeLocation: "",
         };
-        const cfg: RoomConfig = { sheetUrl: sheetUrl.trim(), password: password.trim(), roomName: roomName.trim() || roomId, sheetShareUrl: sheetShareUrl.trim() };
+        const cfg: RoomConfig = {
+          sheetUrl: sheetUrl.trim(),
+          password: password.trim(),
+          roomName: roomName.trim() || roomId,
+          sheetShareUrl: sheetShareUrl.trim(),
+        };
         onDone(adminPlayer, cfg);
         return;
       }
@@ -683,8 +719,9 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
     } catch (e: any) {
       setMsg({ text: `Fehler: ${e?.message ?? "Unbekannt"}`, ok: false });
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   return (
@@ -721,7 +758,9 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
               Sheet → Datei → Im Web veröffentlichen → CSV → URL kopieren
             </p>
 
-            <label className="text-gray-300 text-xs mb-1 block">Google Sheet Freigabe-Link <span className="text-gray-500">(optional – für schnelles Teilen im Team)</span></label>
+            <label className="text-gray-300 text-xs mb-1 block">
+              Google Sheet Freigabe-Link <span className="text-gray-500">(optional – für schnelles Teilen im Team)</span>
+            </label>
             <input
               className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500 font-mono"
               placeholder="https://docs.google.com/spreadsheets/d/…/edit?usp=sharing"
@@ -733,15 +772,18 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
             </p>
 
             <label className="text-gray-300 text-xs mb-1 block">
-              Template laden <span className="text-gray-500">(optional – Gruppen &amp; Karten aus bestehendem Raum übernehmen)</span>
+              Template laden <span className="text-gray-500">(optional – Gruppen & Karten aus bestehendem Raum übernehmen)</span>
             </label>
             <select
               className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-1 text-sm focus:outline-none focus:border-blue-500"
               value={templateRoomId}
-              onChange={(e) => setTemplateRoomId(e.target.value)}>
+              onChange={(e) => setTemplateRoomId(e.target.value)}
+            >
               <option value="">– Kein Template –</option>
               {availableRooms.map((id) => (
-                <option key={id} value={id}>{id}</option>
+                <option key={id} value={id}>
+                  {id}
+                </option>
               ))}
             </select>
             <p className="text-gray-600 text-xs mb-4">
@@ -777,7 +819,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
             <button
               className="w-full bg-orange-600 hover:bg-orange-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               onClick={handleSave}
-              disabled={saving}>
+              disabled={saving}
+            >
               {saving ? "Speichere…" : "Konfiguration speichern"}
             </button>
 
@@ -786,9 +829,16 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
             )}
 
             <div className="mt-5 border-t border-gray-800 pt-4 text-gray-600 text-xs space-y-1">
-              <p>Firestore-Pfad: <span className="font-mono text-gray-500">rooms/{roomId}/config/main</span></p>
-              <p>Felder: <span className="font-mono text-gray-500">sheetUrl</span>, <span className="font-mono text-gray-500">password</span></p>
-              <p>Nach dem Speichern → Seite ohne <span className="font-mono">?setup=1</span> aufrufen.</p>
+              <p>
+                Firestore-Pfad: <span className="font-mono text-gray-500">rooms/{roomId}/config/main</span>
+              </p>
+              <p>
+                Felder: <span className="font-mono text-gray-500">sheetUrl</span>,{" "}
+                <span className="font-mono text-gray-500">password</span>
+              </p>
+              <p>
+                Nach dem Speichern → Seite ohne <span className="font-mono">?setup=1</span> aufrufen.
+              </p>
             </div>
           </>
         )}
