@@ -116,8 +116,8 @@ const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "nyx",     label: "Nyx",     x: 0.50, y: 0.65 },
 ];
 
-function getDefaultMaps(systemId?: string): MapEntry[] {
-  switch ((systemId ?? "pyro").toLowerCase()) {
+function getDefaultMaps(systemId: string): MapEntry[] {
+  switch ((systemId || "").toLowerCase()) {
     case "stanton":
       return [{ id: "main", label: "Stanton System", image: "/stanton-map.png" }];
     case "nyx":
@@ -3497,6 +3497,7 @@ function BoardApp() {
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
+  const activeSystemIdRef = useRef(activeSystemId);
   const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
   function toggleMinPanel(key: string) { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
@@ -3649,15 +3650,16 @@ const visibleSystemIdRef = useRef(activeSystemId);
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with the system that is actually visible right now
+// Keep per-system caches in sync with the system that is actually visible in the map UI
 useEffect(() => { tokensBySystemRef.current[visibleSystemIdRef.current] = tokens; }, [tokens]);
 useEffect(() => { orderMarkersBySystemRef.current[visibleSystemIdRef.current] = orderMarkers; }, [orderMarkers]);
 useEffect(() => { mapsBySystemRef.current[visibleSystemIdRef.current] = maps; }, [maps]);
 useEffect(() => { poisBySystemRef.current[visibleSystemIdRef.current] = pois; }, [pois]);
 useEffect(() => { drawingsBySystemRef.current[visibleSystemIdRef.current] = drawings; }, [drawings]);
 useEffect(() => { activeMapIdBySystemRef.current[visibleSystemIdRef.current] = activeMapId; }, [activeMapId]);
+useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
 
-// When switching system tab, first persist the currently visible system, then load the target system
+// When switching system tab, persist the previously visible system first, then load the target system
 useEffect(() => {
   const prevSystemId = visibleSystemIdRef.current;
 
@@ -3666,7 +3668,7 @@ useEffect(() => {
   mapsBySystemRef.current[prevSystemId] = mapsRef.current;
   poisBySystemRef.current[prevSystemId] = poisRef.current;
   drawingsBySystemRef.current[prevSystemId] = drawingsRef.current;
-  activeMapIdBySystemRef.current[prevSystemId] = activeMapIdBySystemRef.current[prevSystemId] ?? activeMapId;
+  activeMapIdBySystemRef.current[prevSystemId] = activeMapId;
 
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
@@ -3847,26 +3849,27 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const activeTokens = tokensBySystemRef.current[activeSystemId] ?? [];
+const targetSystemId = activeSystemIdRef.current || activeSystemId;
+const activeTokens = tokensBySystemRef.current[targetSystemId] ?? [];
 setTokens(activeTokens);
 tokensRef.current = activeTokens;
 
-const activeOM = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+const activeOM = orderMarkersBySystemRef.current[targetSystemId] ?? [];
 setOrderMarkers(activeOM);
 orderMarkersRef.current = activeOM;
 
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
+const activeMaps = mapsBySystemRef.current[targetSystemId] ?? getDefaultMaps(targetSystemId);
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
-const activePois = poisBySystemRef.current[activeSystemId] ?? [];
+const activePois = poisBySystemRef.current[targetSystemId] ?? [];
 setPois(activePois);
 poisRef.current = activePois;
 
-const activeDrawings = drawingsBySystemRef.current[activeSystemId] ?? {};
+const activeDrawings = drawingsBySystemRef.current[targetSystemId] ?? {};
 setDrawings(activeDrawings);
 drawingsRef.current = activeDrawings;
 
