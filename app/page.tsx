@@ -3920,39 +3920,61 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   // writes
 async function pushTokensOnly(nt: Token[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  tokensBySystemRef.current[activeSystemId] = nt;
-  try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
-  catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
+  const sysId = visibleSystemIdRef.current;
+  tokensBySystemRef.current[sysId] = nt;
+  try {
+    await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() });
+  } catch {
+    await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true });
+  }
 }
 
 async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  orderMarkersBySystemRef.current[activeSystemId] = nm;
-  try { await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }); }
-  catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
+  const sysId = visibleSystemIdRef.current;
+  orderMarkersBySystemRef.current[sysId] = nm;
+  try {
+    await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() });
+  } catch {
+    await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true });
+  }
 }
 
-  async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
-    nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
-    try {
-      await setDoc(doc(db, "rooms", roomId, "state", "board"), {
-        groups: nb.groups, columns: nb.columns,
-tokensBySystem: { ...tokensBySystemRef.current, [activeSystemId]: nt },
-mapsBySystem: { ...mapsBySystemRef.current, [activeSystemId]: nm },
-poisBySystem: { ...poisBySystemRef.current, [activeSystemId]: np },
-orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemId]: orderMarkersRef.current },
-drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemId]: drawingsRef.current },
-aliveState: na, spawnState: ns,
-        ...(nl ? { panelLayout: nl } : {}),
-        notesText: notesRef.current,
-        systemNotesTexts: systemNotesRef.current,
-        logEntries: logEntriesRef.current,
-        groupRoles: ngr ?? groupRolesRef.current,
-        systems: systemsRef.current,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    } catch (err) { console.error("Firestore:", err); }
+async function pushAll(
+  nb: BoardState,
+  nt: Token[],
+  na: PlayerAliveState,
+  ns: PlayerSpawnState,
+  nm: MapEntry[],
+  np: POI[],
+  nl?: PanelLayout,
+  ngr?: GroupRoles
+) {
+  const sysId = visibleSystemIdRef.current;
+
+  try {
+    await setDoc(doc(db, "rooms", roomId, "state", "board"), {
+      groups: nb.groups,
+      columns: nb.columns,
+      tokensBySystem: { ...tokensBySystemRef.current, [sysId]: nt },
+      mapsBySystem: { ...mapsBySystemRef.current, [sysId]: nm },
+      poisBySystem: { ...poisBySystemRef.current, [sysId]: np },
+      orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [sysId]: orderMarkersRef.current },
+      drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current },
+      aliveState: na,
+      spawnState: ns,
+      ...(nl ? { panelLayout: nl } : {}),
+      notesText: notesRef.current,
+      systemNotesTexts: systemNotesRef.current,
+      logEntries: logEntriesRef.current,
+      groupRoles: ngr ?? groupRolesRef.current,
+      systems: systemsRef.current,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.error("Firestore:", err);
   }
+}
 
   // GroupRoles
   async function setPlayerField(playerId: string, field: keyof Player, value: string) {
@@ -4307,7 +4329,9 @@ aliveState: na, spawnState: ns,
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
   }
 
-  const upsertToken = useCallback((gId: string, x: number, y: number, mapId: string) => { commitToken(gId, x, y, mapId); }, []);
+  const upsertToken = (gId: string, x: number, y: number, mapId: string) => {
+  commitToken(gId, x, y, mapId);
+};
 
   function removeToken(gId: string, mapId: string) {
     if (!canWrite) return;
