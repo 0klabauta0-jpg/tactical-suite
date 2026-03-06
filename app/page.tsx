@@ -3634,6 +3634,7 @@ const mapsBySystemRef = useRef<Record<string, MapEntry[]>>({});
 const poisBySystemRef = useRef<Record<string, POI[]>>({});
 const drawingsBySystemRef = useRef<Record<string, DrawingsMap>>({});
 const activeMapIdBySystemRef = useRef<Record<string, string>>({});
+const visibleSystemIdRef = useRef(activeSystemId);
   const notesRef = useRef(notesText);
   const groupRolesRef = useRef(groupRoles);
 
@@ -3644,22 +3645,33 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with current visible state
-useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
-useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
-useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
-useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
-useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
-useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
+// Keep per-system caches in sync with the system currently shown in the map UI
+useEffect(() => { tokensBySystemRef.current[visibleSystemIdRef.current] = tokens; }, [tokens]);
+useEffect(() => { orderMarkersBySystemRef.current[visibleSystemIdRef.current] = orderMarkers; }, [orderMarkers]);
+useEffect(() => { mapsBySystemRef.current[visibleSystemIdRef.current] = maps; }, [maps]);
+useEffect(() => { poisBySystemRef.current[visibleSystemIdRef.current] = pois; }, [pois]);
+useEffect(() => { drawingsBySystemRef.current[visibleSystemIdRef.current] = drawings; }, [drawings]);
+useEffect(() => { activeMapIdBySystemRef.current[visibleSystemIdRef.current] = activeMapId; }, [activeMapId]);
 
-// When switching system tab, swap the map state to that system's dataset
+// When switching system tab, persist the currently visible system first, then load the target system
 useEffect(() => {
+  const prevSystemId = visibleSystemIdRef.current;
+
+  tokensBySystemRef.current[prevSystemId] = tokensRef.current;
+  orderMarkersBySystemRef.current[prevSystemId] = orderMarkersRef.current;
+  mapsBySystemRef.current[prevSystemId] = mapsRef.current;
+  poisBySystemRef.current[prevSystemId] = poisRef.current;
+  drawingsBySystemRef.current[prevSystemId] = drawingsRef.current;
+  activeMapIdBySystemRef.current[prevSystemId] = activeMapIdBySystemRef.current[prevSystemId] ?? activeMapId;
+
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
   const m = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
   const p = poisBySystemRef.current[activeSystemId] ?? [];
   const d = drawingsBySystemRef.current[activeSystemId] ?? {};
   const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
+
+  visibleSystemIdRef.current = activeSystemId;
 
   setTokens(t); tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
@@ -3801,7 +3813,7 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : DEFAULT_MAPS]))
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k)]))
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
