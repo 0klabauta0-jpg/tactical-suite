@@ -109,6 +109,14 @@ const DEFAULT_GROUPS: Group[] = [
 ];
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+const DEFAULT_MAPS_BY_SYSTEM: Record<string, MapEntry[]> = {
+  stanton: [{ id: "main", label: "Stanton System", image: "" }],
+  pyro:    [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }],
+  nyx:     [{ id: "main", label: "Nyx System", image: "" }],
+};
+function getDefaultMaps(systemId: string): MapEntry[] {
+  return DEFAULT_MAPS_BY_SYSTEM[systemId] ?? [{ id: "main", label: systemId, image: "" }];
+}
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -3648,7 +3656,7 @@ useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; 
 useEffect(() => {
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+  const m = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
   const p = poisBySystemRef.current[activeSystemId] ?? [];
   const d = drawingsBySystemRef.current[activeSystemId] ?? {};
   const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
@@ -3834,7 +3842,7 @@ orderMarkersRef.current = activeOM;
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+const activeMaps = mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId);
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
@@ -4947,7 +4955,7 @@ aliveState: na, spawnState: ns,
 
           {canWrite && (
             <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
-              <TokenPlacerPanel groups={board.groups}
+              <TokenPlacerPanel groups={board.groups.filter(g => (g.systemId ?? "pyro") === activeSystemId)}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
