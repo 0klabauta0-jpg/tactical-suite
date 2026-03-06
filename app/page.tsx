@@ -616,7 +616,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       // Falls adminHandle angegeben: direkt als Admin einloggen/anlegen.
       const authHandle = adminHandle.trim() || "__setup__";
       const email = nameToFakeEmail(authHandle, roomId);
-      const pw = password.trim() + "_tcs_internal";
+      const pw = password.trim() + "tcs-setup";
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (authErr: any) {
