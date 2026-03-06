@@ -110,30 +110,6 @@ const DEFAULT_GROUPS: Group[] = [
 
 const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
-function getDefaultMaps(systemId: string): MapEntry[] {
-  switch (systemId) {
-    case "stanton":
-      return [{ id: "main", label: "Stanton System", image: "/stanton-map.png" }];
-    case "nyx":
-      return [{ id: "main", label: "Nyx System", image: "/nyx-map.png" }];
-    case "pyro":
-    default:
-      return [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
-  }
-}
-
-function normalizeMapsForSystem(systemId: string, maps: MapEntry[] | undefined | null): MapEntry[] {
-  const fallback = getDefaultMaps(systemId);
-  if (!Array.isArray(maps) || maps.length === 0) return fallback;
-  let hasMain = false;
-  const next = maps.map((m) => {
-    if (m.id !== "main") return m;
-    hasMain = true;
-    return { ...m, label: fallback[0].label, image: fallback[0].image };
-  });
-  return hasMain ? next : [...fallback, ...next];
-}
-
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
   { id: "pyro",    label: "Pyro",    x: 0.60, y: 0.40 },
@@ -3502,7 +3478,7 @@ function BoardApp() {
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
   const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
-  const [maps, setMaps] = useState<MapEntry[]>(getDefaultMaps("pyro"));
+  const [maps, setMaps] = useState<MapEntry[]>(DEFAULT_MAPS);
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
   const [showProfile, setShowProfile] = useState(false);
@@ -3663,7 +3639,7 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
 // Keep per-system caches in sync with current visible state
 useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
 useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
-useEffect(() => { mapsBySystemRef.current[activeSystemId] = normalizeMapsForSystem(activeSystemId, maps); }, [maps, activeSystemId]);
+useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
 useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
 useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
 useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
@@ -3672,7 +3648,7 @@ useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; 
 useEffect(() => {
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = normalizeMapsForSystem(activeSystemId, mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId));
+  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
   const p = poisBySystemRef.current[activeSystemId] ?? [];
   const d = drawingsBySystemRef.current[activeSystemId] ?? {};
   const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
@@ -3680,7 +3656,6 @@ useEffect(() => {
   setTokens(t); tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
   setMaps(m); mapsRef.current = m;
-  mapsBySystemRef.current[activeSystemId] = m;
   setPois(p); poisRef.current = p;
   setDrawings(d); drawingsRef.current = d;
   setActiveMapId(am);
@@ -3818,7 +3793,7 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, normalizeMapsForSystem(k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k))]))
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : DEFAULT_MAPS]))
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
@@ -3859,9 +3834,8 @@ orderMarkersRef.current = activeOM;
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = normalizeMapsForSystem(activeSystemId, mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId));
+const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
 setMaps(activeMaps);
-mapsBySystemRef.current[activeSystemId] = activeMaps;
 mapsRef.current = activeMaps;
 
 const activePois = poisBySystemRef.current[activeSystemId] ?? [];
@@ -4964,31 +4938,16 @@ aliveState: na, spawnState: ns,
             />
           )}
 
-          <DraggablePanel
-            title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`}
-            tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte."
-            canDrag={true}
-            x={localPanelPos.nav.x}
-            y={localPanelPos.nav.y}
-            onMove={movePanelNav}
-            defaultHeight={280}
-          >
-            <MapNavPanel maps={normalizeMapsForSystem(activeSystemId, maps)} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+          <DraggablePanel title="Karten" tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
+            <MapNavPanel maps={maps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
               onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
           </DraggablePanel>
 
           {canWrite && (
-            <DraggablePanel
-              title={`Token setzen · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`}
-              tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token."
-              canDrag={true}
-              x={localPanelPos.placer.x}
-              y={localPanelPos.placer.y}
-              onMove={movePanelPlacer}
-            >
-              <TokenPlacerPanel groups={tacticalGroups}
+            <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
+              <TokenPlacerPanel groups={board.groups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
