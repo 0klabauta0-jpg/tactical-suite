@@ -637,8 +637,27 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (authErr: any) {
-        if (authErr?.code === "auth/user-not-found") {
-          await createUserWithEmailAndPassword(auth, email, pw);
+        // "auth/user-not-found" is deprecated in Firebase ≥ v9.12 – now returns
+        // "auth/invalid-credential". We also handle "auth/invalid-login-credentials"
+        // (some SDK versions). For the setup user we always try to create it when
+        // any sign-in error suggests the account doesn't exist yet.
+        const code: string = authErr?.code ?? "";
+        const isNoAccount =
+          code === "auth/user-not-found" ||
+          code === "auth/invalid-credential" ||
+          code === "auth/invalid-login-credentials" ||
+          code === "auth/user-disabled";
+        if (isNoAccount) {
+          try {
+            await createUserWithEmailAndPassword(auth, email, pw);
+          } catch (createErr: any) {
+            // If it already exists (race-condition) just retry sign-in once
+            if (createErr?.code === "auth/email-already-in-use") {
+              await signInWithEmailAndPassword(auth, email, pw);
+            } else {
+              throw createErr;
+            }
+          }
         } else {
           throw authErr;
         }
