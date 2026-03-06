@@ -108,7 +108,19 @@ const DEFAULT_GROUPS: Group[] = [
   { id: "spawn1", label: "Spawn", isSpawn: true, systemId: "pyro" },
 ];
 
-const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+function getDefaultMaps(systemId: string): MapEntry[] {
+  switch (systemId) {
+    case "stanton":
+      return [{ id: "main", label: "Stanton System", image: "/stanton-map.png" }];
+    case "nyx":
+      return [{ id: "main", label: "Nyx System", image: "/nyx-map.png" }];
+    case "pyro":
+    default:
+      return [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+  }
+}
+
+const DEFAULT_MAPS: MapEntry[] = getDefaultMaps("pyro");
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -3478,13 +3490,15 @@ function BoardApp() {
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
   const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
-  const [maps, setMaps] = useState<MapEntry[]>(DEFAULT_MAPS);
+  const [activeSystemId, setActiveSystemId] = useState("pyro");
+  const [maps, setMaps] = useState<MapEntry[]>(() => getDefaultMaps("pyro"));
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
   const [showProfile, setShowProfile] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
-  const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
+ 
+  const visibleSystemIdRef = useRef("pyro");
   const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
   function toggleMinPanel(key: string) { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
@@ -3636,30 +3650,40 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Keep per-system caches in sync with current visible state
-useEffect(() => { tokensBySystemRef.current[activeSystemId] = tokens; }, [tokens, activeSystemId]);
-useEffect(() => { orderMarkersBySystemRef.current[activeSystemId] = orderMarkers; }, [orderMarkers, activeSystemId]);
-useEffect(() => { mapsBySystemRef.current[activeSystemId] = maps; }, [maps, activeSystemId]);
-useEffect(() => { poisBySystemRef.current[activeSystemId] = pois; }, [pois, activeSystemId]);
-useEffect(() => { drawingsBySystemRef.current[activeSystemId] = drawings; }, [drawings, activeSystemId]);
-useEffect(() => { activeMapIdBySystemRef.current[activeSystemId] = activeMapId; }, [activeMapId, activeSystemId]);
+// Keep per-system caches in sync with the actually visible system
+useEffect(() => { tokensBySystemRef.current[visibleSystemIdRef.current] = tokens; }, [tokens]);
+useEffect(() => { orderMarkersBySystemRef.current[visibleSystemIdRef.current] = orderMarkers; }, [orderMarkers]);
+useEffect(() => { mapsBySystemRef.current[visibleSystemIdRef.current] = maps; }, [maps]);
+useEffect(() => { poisBySystemRef.current[visibleSystemIdRef.current] = pois; }, [pois]);
+useEffect(() => { drawingsBySystemRef.current[visibleSystemIdRef.current] = drawings; }, [drawings]);
+useEffect(() => { activeMapIdBySystemRef.current[visibleSystemIdRef.current] = activeMapId; }, [activeMapId]);
 
-// When switching system tab, swap the map state to that system's dataset
-useEffect(() => {
-  const t = tokensBySystemRef.current[activeSystemId] ?? [];
-  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
-  const m = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
-  const p = poisBySystemRef.current[activeSystemId] ?? [];
-  const d = drawingsBySystemRef.current[activeSystemId] ?? {};
-  const am = activeMapIdBySystemRef.current[activeSystemId] ?? "main";
+function switchSystem(nextSystemId: string) {
+  const currentSystemId = visibleSystemIdRef.current;
 
+  tokensBySystemRef.current[currentSystemId] = tokensRef.current;
+  orderMarkersBySystemRef.current[currentSystemId] = orderMarkersRef.current;
+  mapsBySystemRef.current[currentSystemId] = mapsRef.current;
+  poisBySystemRef.current[currentSystemId] = poisRef.current;
+  drawingsBySystemRef.current[currentSystemId] = drawingsRef.current;
+  activeMapIdBySystemRef.current[currentSystemId] = activeMapId;
+
+  const t = tokensBySystemRef.current[nextSystemId] ?? [];
+  const om = orderMarkersBySystemRef.current[nextSystemId] ?? [];
+  const m = mapsBySystemRef.current[nextSystemId] ?? getDefaultMaps(nextSystemId);
+  const p = poisBySystemRef.current[nextSystemId] ?? [];
+  const d = drawingsBySystemRef.current[nextSystemId] ?? {};
+  const am = activeMapIdBySystemRef.current[nextSystemId] ?? "main";
+
+  visibleSystemIdRef.current = nextSystemId;
+  setActiveSystemId(nextSystemId);
   setTokens(t); tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
   setMaps(m); mapsRef.current = m;
   setPois(p); poisRef.current = p;
   setDrawings(d); drawingsRef.current = d;
   setActiveMapId(am);
-}, [activeSystemId]);
+}
   useEffect(() => { orderMarkersRef.current = orderMarkers; }, [orderMarkers]);
   useEffect(() => { notesRef.current = notesText; }, [notesText]);
   useEffect(() => { logEntriesRef.current = logEntries; }, [logEntries]);
@@ -3793,7 +3817,12 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : DEFAULT_MAPS]))
+    ? Object.fromEntries(
+    Object.entries(data.mapsBySystem).map(([k, v]) => [
+      k,
+      Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k),
+    ])
+  )
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
@@ -3823,26 +3852,26 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const activeTokens = tokensBySystemRef.current[activeSystemId] ?? [];
+const activeTokens = tokensBySystemRef.current[visibleSystemIdRef.current] ?? [];
 setTokens(activeTokens);
 tokensRef.current = activeTokens;
 
-const activeOM = orderMarkersBySystemRef.current[activeSystemId] ?? [];
+const activeOM = orderMarkersBySystemRef.current[visibleSystemIdRef.current] ?? [];
 setOrderMarkers(activeOM);
 orderMarkersRef.current = activeOM;
 
 setAliveState(data.aliveState ?? {});
 setSpawnState(data.spawnState ?? {});
 
-const activeMaps = mapsBySystemRef.current[activeSystemId] ?? DEFAULT_MAPS;
+const activeMaps = mapsBySystemRef.current[visibleSystemIdRef.current] ?? getDefaultMaps(visibleSystemIdRef.current);
 setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
-const activePois = poisBySystemRef.current[activeSystemId] ?? [];
+const activePois = poisBySystemRef.current[visibleSystemIdRef.current] ?? [];
 setPois(activePois);
 poisRef.current = activePois;
 
-const activeDrawings = drawingsBySystemRef.current[activeSystemId] ?? {};
+const activeDrawings = drawingsBySystemRef.current[visibleSystemIdRef.current] ?? {};
 setDrawings(activeDrawings);
 drawingsRef.current = activeDrawings;
 
@@ -3881,14 +3910,14 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   // writes
 async function pushTokensOnly(nt: Token[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  tokensBySystemRef.current[activeSystemId] = nt;
+  tokensBySystemRef.current[visibleSystemIdRef.current] = nt;
   try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
 
 async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
-  orderMarkersBySystemRef.current[activeSystemId] = nm;
+  orderMarkersBySystemRef.current[visibleSystemIdRef.current] = nm;
   try { await updateDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }); }
   catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
@@ -3898,11 +3927,11 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), {
         groups: nb.groups, columns: nb.columns,
-tokensBySystem: { ...tokensBySystemRef.current, [activeSystemId]: nt },
-mapsBySystem: { ...mapsBySystemRef.current, [activeSystemId]: nm },
-poisBySystem: { ...poisBySystemRef.current, [activeSystemId]: np },
-orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [activeSystemId]: orderMarkersRef.current },
-drawingsBySystem: { ...drawingsBySystemRef.current, [activeSystemId]: drawingsRef.current },
+tokensBySystem: { ...tokensBySystemRef.current, [visibleSystemIdRef.current]: nt },
+mapsBySystem: { ...mapsBySystemRef.current, [visibleSystemIdRef.current]: nm },
+poisBySystem: { ...poisBySystemRef.current, [visibleSystemIdRef.current]: np },
+orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [visibleSystemIdRef.current]: orderMarkersRef.current },
+drawingsBySystem: { ...drawingsBySystemRef.current, [visibleSystemIdRef.current]: drawingsRef.current },
 aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
@@ -4726,7 +4755,7 @@ aliveState: na, spawnState: ns,
                 <button key={sys.id}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${isActive ? "border-opacity-100 shadow-lg" : "border-gray-700 bg-gray-900 text-gray-400 hover:text-gray-200"}`}
                   style={isActive ? { color: info.color, backgroundColor: info.bg, borderColor: info.color + "88" } : {}}
-                  onClick={() => setActiveSystemId(sys.id)}>
+                  onClick={() => switchSystem(sys.id)}>
                   <span className="font-bold">{info.short}</span>
                   <span>{sys.label}</span>
                 </button>
@@ -4858,7 +4887,7 @@ aliveState: na, spawnState: ns,
                 <button key={sys.id}
                   className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border text-xs font-semibold transition-all ${isActive ? "border-opacity-100 shadow-lg" : "border-gray-700 bg-gray-900 text-gray-400 hover:text-gray-200"}`}
                   style={isActive ? { color: info.color, backgroundColor: info.bg, borderColor: info.color + "88" } : {}}
-                  onClick={() => { setActiveSystemId(sys.id); }}>
+                  onClick={() => switchSystem(sys.id)}>
                   <span>{info.short}</span>
                   <span>{sys.label}</span>
                 </button>
