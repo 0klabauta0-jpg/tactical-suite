@@ -3783,18 +3783,17 @@ const activeMapIdBySystemRef = useRef<Record<string, string>>({});
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
 
-// Refs for stale-closure-free access in write functions + switch
+// Refs für stale-closure-freien Zugriff in Write-Funktionen
 const activeSystemIdRef = React.useRef(activeSystemId);
 const activeMapIdRef    = React.useRef(activeMapId);
 const prevSystemIdRef   = React.useRef(activeSystemId);
 useEffect(() => { activeSystemIdRef.current = activeSystemId; }, [activeSystemId]);
 useEffect(() => { activeMapIdRef.current    = activeMapId;    }, [activeMapId]);
 
-// When switching system: save old state, load new state
+// Systemwechsel: alten Zustand sichern, neuen laden
 useEffect(() => {
   const prev = prevSystemIdRef.current;
   if (prev !== activeSystemId) {
-// Save current visible state into the system we're LEAVING
     tokensBySystemRef.current[prev]       = tokensRef.current;
     orderMarkersBySystemRef.current[prev] = orderMarkersRef.current;
     mapsBySystemRef.current[prev]         = mapsRef.current;
@@ -3804,9 +3803,8 @@ useEffect(() => {
   }
   prevSystemIdRef.current = activeSystemId;
 
-// Load the system we're ENTERING
   const t  = tokensBySystemRef.current[activeSystemId]       ?? [];
-  const om = orderMarkersBySystemRef.current[activeSystemIdRef.current] ?? [];
+  const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
   const m  = mapsBySystemRef.current[activeSystemId]         ?? getDefaultMaps(activeSystemId);
   const p  = poisBySystemRef.current[activeSystemId]         ?? [];
   const d  = drawingsBySystemRef.current[activeSystemId]     ?? {};
@@ -4455,16 +4453,39 @@ aliveState: na, spawnState: ns,
     if (!canWrite) return;
     const transit = transitRef.current[gId];
     if (!transit) return;
-        // Gruppe in neues System verschieben
+    const toSys   = transit.toSystem;
+    const fromSys = transit.fromSystem;
     const nextBoard: BoardState = {
       ...boardRef.current,
-      groups: boardRef.current.groups.map((g) => g.id === gId ? { ...g, systemId: transit.toSystem } : g),
+      groups: boardRef.current.groups.map((g) => g.id === gId ? { ...g, systemId: toSys } : g),
     };
     setBoard(nextBoard); boardRef.current = nextBoard;
-        // Transit-State entfernen
+    // Token der Gruppe vom Quell- ins Zielsystem verschieben
+    const fromTokens    = tokensBySystemRef.current[fromSys] ?? [];
+    const toTokens      = tokensBySystemRef.current[toSys]   ?? [];
+    const groupTokens   = fromTokens.filter(t => t.groupId === gId);
+    tokensBySystemRef.current[fromSys] = fromTokens.filter(t => t.groupId !== gId);
+    tokensBySystemRef.current[toSys]   = [...toTokens.filter(t => t.groupId !== gId), ...groupTokens];
+    // Sichtbaren State aktualisieren
+    const curTokens = tokensBySystemRef.current[activeSystemIdRef.current] ?? [];
+    setTokens(curTokens); tokensRef.current = curTokens;
+    // Transit entfernen
     const { [gId]: _, ...rest } = transitRef.current;
     setTransitStates(rest); transitRef.current = rest;
-    pushAll(nextBoard, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
+    // Alles speichern
+    setDoc(doc(db, "rooms", roomId, "state", "board"), {
+      groups: nextBoard.groups, columns: nextBoard.columns,
+      tokensBySystem: tokensBySystemRef.current,
+      mapsBySystem: mapsBySystemRef.current,
+      poisBySystem: poisBySystemRef.current,
+      orderMarkersBySystem: orderMarkersBySystemRef.current,
+      drawingsBySystem: drawingsBySystemRef.current,
+      aliveState: aliveRef.current, spawnState: spawnRef.current,
+      notesText: notesRef.current, systemNotesTexts: systemNotesRef.current,
+      logEntries: logEntriesRef.current, groupRoles: groupRolesRef.current,
+      systems: systemsRef.current, jumpgates: jumpgatesRef.current,
+      transitStates: rest, updatedAt: serverTimestamp(),
+    }, { merge: true }).catch(console.error);
   }
 
   function cancelTransit(gId: string) {
@@ -5166,7 +5187,12 @@ aliveState: na, spawnState: ns,
 
           {canWrite && (
             <DraggablePanel title="Token setzen" tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
-              <TokenPlacerPanel groups={board.groups}
+              <TokenPlacerPanel groups={board.groups.filter(g => {
+                  const inSystem = (g.systemId ?? "pyro") === activeSystemId;
+                  const inTransit = transitStates[g.id] !== undefined &&
+                    (transitStates[g.id].fromSystem === activeSystemId || transitStates[g.id].toSystem === activeSystemId);
+                  return inSystem || inTransit;
+                })}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 transitStates={transitStates}
