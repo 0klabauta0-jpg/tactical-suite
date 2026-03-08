@@ -2967,14 +2967,17 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   // Tatsächlicher Bildbereich innerhalb des object-contain Containers (Letterbox-Offset)
   const [imgOffset, setImgOffset] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
+  const transformDivRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // ResizeObserver auf map-img → berechnet tatsächlichen Bildbereich (object-contain)
+    // imgOffset: tatsächlicher Bildbereich innerhalb des object-contain Containers
+    // Wichtig: relativ zur transform-Div (nicht zum Root), damit Zoom keine Auswirkung hat
     function updateImgOffset() {
       const img = document.getElementById("map-img") as HTMLImageElement | null;
-      const container = mapRootRef.current;
-      if (!img || !container || !img.naturalWidth || !img.naturalHeight) return;
-      const cw = container.clientWidth;
-      const ch = container.clientHeight;
+      const transformDiv = transformDivRef.current;
+      if (!img || !transformDiv || !img.naturalWidth || !img.naturalHeight) return;
+      // clientWidth/Height der transform-Div ist unabhängig von scale()
+      const cw = transformDiv.clientWidth;
+      const ch = transformDiv.clientHeight;
       const iAspect = img.naturalWidth / img.naturalHeight;
       const cAspect = cw / ch;
       let iw: number, ih: number;
@@ -3125,9 +3128,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
             }
           }
         }
-        if (drawTool !== "pointer" && canDraw) return; onBgMove(e);
+        if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgMove(e);
       }}
-      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}
+      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
       onPointerLeave={() => { setGridCoord(null); setGridPixel(null); }}>
 
       {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
@@ -3142,7 +3145,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         </div>
       )}
 
-      <div style={{
+      <div ref={transformDivRef} style={{
         transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
         transformOrigin: "center center",
         transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
@@ -3244,6 +3247,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 e.stopPropagation();
                 if (isAdminProp) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
               }}
+              onPointerMove={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgMove(e); } }}
+              onPointerUp={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgUp(); } }}
               onClick={(e) => {
                 e.stopPropagation();
                 if (markerDrag) return;
@@ -3326,6 +3331,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                 setTokenDrag(tokenKey); lastTokenPos.current = null;
               }}
+              onPointerMove={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgMove(e); } }}
+              onPointerUp={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgUp(); } }}
               onMouseEnter={() => setHoveredToken(tokenKey)}
               onMouseLeave={() => setHoveredToken(null)}
               title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
