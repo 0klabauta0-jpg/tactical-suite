@@ -2574,6 +2574,22 @@ function DrawingLayer({
   }
 
   function onPointerMove(e: React.PointerEvent) {
+    // Grid-Koordinaten immer tracken (unabhängig von canDraw)
+    if (showGrid) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const px = (e.clientX - rect.left) / rect.width;
+        const py = (e.clientY - rect.top) / rect.height;
+        const ci = Math.min(29, Math.floor(px * 30));
+        const col = ci < 26 ? String.fromCharCode(65 + ci) : "A" + String.fromCharCode(65 + (ci - 26));
+        const row = Math.min(20, Math.floor(py * 20) + 1);
+        setMouseCoord(`${col}${row}`);
+        setMousePixel({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      }
+    } else {
+      if (mouseCoord) { setMouseCoord(null); setMousePixel(null); }
+    }
+
     if (!canDraw) return;
     const p = toRel(e.clientX, e.clientY);
     if (!p) return;
@@ -2767,7 +2783,28 @@ function DrawingLayer({
       ref={containerRef}
       className="absolute inset-0"
       style={{ zIndex: 20, pointerEvents: tool === "pointer" ? "none" : "auto" }}
+      onMouseMove={showGrid ? (e) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const px = (e.clientX - rect.left) / rect.width;
+        const py = (e.clientY - rect.top) / rect.height;
+        const ci = Math.min(29, Math.floor(px * 30));
+        const col = ci < 26 ? String.fromCharCode(65 + ci) : "A" + String.fromCharCode(65 + (ci - 26));
+        const row = Math.min(20, Math.floor(py * 20) + 1);
+        setMouseCoord(`${col}${row}`);
+        setMousePixel({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      } : undefined}
+      onMouseLeave={showGrid ? () => { setMouseCoord(null); setMousePixel(null); } : undefined}
     >
+      {/* Grid-Tracking-Div: über dem Canvas, aber nur für mousemove – kein click-blocking */}
+      {showGrid && (
+        <div className="absolute inset-0" style={{ zIndex: 22, pointerEvents: "none" }}
+          ref={(el) => {
+            if (!el) return;
+            // Nutze native addEventListener mit passive:true um den Cursor nicht zu blockieren
+          }}
+        />
+      )}
       <canvas
         ref={canvasRef}
         style={{
@@ -2918,6 +2955,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [openGroupMenu, setOpenGroupMenu] = useState<string | null>(null); // markerId
   const [panning, setPanning] = useState(false);
+  const [gridCoord, setGridCoord] = useState<string | null>(null);
+  const [gridPixel, setGridPixel] = useState<{ x: number; y: number } | null>(null);
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
@@ -3033,10 +3072,39 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
       onWheel={onWheel}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
-      onPointerMove={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgMove(e); }}
-      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}>
+      onPointerMove={(e) => {
+        // Grid-Koordinaten immer tracken
+        if (showGrid) {
+          const img = document.getElementById("map-img");
+          if (img) {
+            const r = img.getBoundingClientRect();
+            const px = (e.clientX - r.left) / r.width;
+            const py = (e.clientY - r.top) / r.height;
+            if (px >= 0 && px <= 1 && py >= 0 && py <= 1) {
+              const ci = Math.min(29, Math.floor(px * 30));
+              const col = ci < 26 ? String.fromCharCode(65 + ci) : "A" + String.fromCharCode(65 + (ci - 26));
+              const row = Math.min(20, Math.floor(py * 20) + 1);
+              setGridCoord(`${col}${row}`);
+              setGridPixel({ x: e.clientX, y: e.clientY });
+            }
+          }
+        }
+        if (drawTool !== "pointer" && canDraw) return; onBgMove(e);
+      }}
+      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw) return; onBgUp(); }}
+      onPointerLeave={() => { setGridCoord(null); setGridPixel(null); }}>
 
       {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
+
+      {/* Grid-Koordinaten-Label am Mauszeiger */}
+      {showGrid && gridCoord && gridPixel && (
+        <div className="fixed z-50 pointer-events-none select-none"
+          style={{ left: gridPixel.x + 14, top: gridPixel.y - 22 }}>
+          <span className="bg-black bg-opacity-60 text-white text-xs font-mono px-1.5 py-0.5 rounded border border-white border-opacity-25">
+            {gridCoord}
+          </span>
+        </div>
+      )}
 
       <div style={{
         transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
