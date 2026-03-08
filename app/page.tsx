@@ -4893,9 +4893,18 @@ aliveState: na, spawnState: ns,
       }
     }
 
-    const withoutOld = tokensRef.current.filter(
-      (t) => !(t.groupId === gId && (t.mapId ?? "main") === fromMapId)
-    );
+    // Alle Sub-Map-IDs sammeln (alle POIs + Unterkarten außer "main")
+    const allSubIds = new Set([
+      ...mapsRef.current.filter((m) => m.id !== "main").map((m) => m.id),
+      ...poisRef.current.map((p) => p.id),
+    ]);
+
+    // Beim Hochziehen auf main: Token dieser Gruppe von ALLEN Unter-Ebenen entfernen
+    // Beim Hochziehen eine Ebene: nur den Token von fromMapId entfernen
+    const withoutOld = onMain
+      ? tokensRef.current.filter((t) => !(t.groupId === gId && allSubIds.has(t.mapId ?? "")))
+      : tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === fromMapId));
+
     const existing = withoutOld.findIndex(
       (t) => t.groupId === gId && (t.mapId ?? "main") === targetMapId
     );
