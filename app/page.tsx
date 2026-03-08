@@ -2957,6 +2957,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const [panning, setPanning] = useState(false);
   const [gridCoord, setGridCoord] = useState<string | null>(null);
   const [gridPixel, setGridPixel] = useState<{ x: number; y: number } | null>(null);
+  // Bildseitenverhältnis für korrektes Layout (kein object-contain Letterboxing)
+  const [imgAspect, setImgAspect] = useState<number | null>(null);
   const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
@@ -3111,8 +3113,29 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         transformOrigin: "center center",
         transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
+        display: "flex", alignItems: "center", justifyContent: "center",
       }}>
-        <img id="map-img" src={imageSrc} alt="Map" className="w-full h-full object-contain block select-none" draggable={false} />
+        {/* Wrapper mit exaktem Bildseitenverhältnis – kein object-contain Letterboxing */}
+        <div style={{
+          position: "relative",
+          width: imgAspect ? (imgAspect >= 1 ? "100%" : `${imgAspect * 100}%`) : "100%",
+          height: imgAspect ? (imgAspect < 1 ? "100%" : `${100 / imgAspect}%`) : "100%",
+          maxWidth: imgAspect ? `${imgAspect * 100}vh` : undefined,
+          maxHeight: imgAspect ? `${100 / imgAspect * 100}vw` : undefined,
+          aspectRatio: imgAspect ? String(imgAspect) : undefined,
+          flexShrink: 0,
+        }}>
+        <img id="map-img" src={imageSrc} alt="Map"
+          className="block select-none"
+          style={{ width: "100%", height: "100%", display: "block" }}
+          draggable={false}
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            if (img.naturalWidth && img.naturalHeight) {
+              setImgAspect(img.naturalWidth / img.naturalHeight);
+            }
+          }}
+        />
 
         {/* Drawing Layer – innerhalb der transform-Div, bewegt/skaliert mit der Karte */}
         <DrawingLayer
@@ -3386,6 +3409,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           );
         })}
       </div>
+        </div>{/* end aspect-ratio wrapper */}
     </div>
   );
 }
