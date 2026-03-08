@@ -3022,13 +3022,32 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const markerClickCount = useRef<Record<string, number>>({});
   const markerClickTimer = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  function getMapCoords(e: React.PointerEvent) {
-    const img = document.getElementById("map-img");
-    if (!img) return null;
-    const rect = img.getBoundingClientRect();
+  function getMapCoords(e: React.PointerEvent | PointerEvent) {
+    const container = mapRootRef.current;
+    const io = imgOffset;
+    if (!container) return null;
+
+    const cr = container.getBoundingClientRect();
+    // Inverse der CSS-Transform: translate(offset.x, offset.y) scale(scale) mit origin=center
+    // 1. Mausposition relativ zur Mitte des Containers
+    const mx = e.clientX - (cr.left + cr.width  / 2);
+    const my = e.clientY - (cr.top  + cr.height / 2);
+    // 2. Rückgängig: translate → scale
+    const lx = (mx - offset.x) / scale;  // logisch, relativ zur Mitte
+    const ly = (my - offset.y) / scale;
+    // 3. Relativ zur oberen linken Ecke des transform-Div
+    const px = lx + cr.width  / 2;  // px in transform-Div-Koordinaten
+    const py = ly + cr.height / 2;
+
+    // 4. Relativ zum imgOffset-Bereich (wo das Bild tatsächlich sitzt)
+    const left = io ? io.left   : 0;
+    const top  = io ? io.top    : 0;
+    const w    = io ? io.width  : cr.width;
+    const h    = io ? io.height : cr.height;
+
     return {
-      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+      x: Math.max(0, Math.min(1, (px - left) / w)),
+      y: Math.max(0, Math.min(1, (py - top)  / h)),
     };
   }
 
