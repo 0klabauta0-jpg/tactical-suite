@@ -5456,35 +5456,27 @@ aliveState: na, spawnState: ns,
               </button>
             )}
             <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
-            {/* Notizen / Log-Buttons (bestehend, rechteckig) */}
+            {/* Notizen (rechteckig, bestehend) */}
             <button
               className={`text-xs px-2 py-1 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
               onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
-            <button
-              className={`text-xs px-2 py-1 rounded border transition-colors ${localPanelPos.logNotes.visible ? "bg-blue-900 border-blue-600 text-blue-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
-              onClick={toggleLogNotesVisible}
-              title="Log-Notizen">📟</button>
-            <button
-              className={`text-xs px-2 py-1 rounded border transition-colors ${localPanelPos.opLog.visible ? "bg-purple-900 border-purple-600 text-purple-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
-              onClick={toggleOpLogVisible}
-              title={`Op-Log${opLogActive ? " (aktiv ▶)" : " (gestoppt)"}`}>
-              🗒{opLogActive ? <span className="ml-0.5 text-green-400">▶</span> : null}
-            </button>
 
             <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
 
-            {/* Runde Tool-Panel Buttons */}
+            {/* Runde Panel-Buttons */}
             {[
-              { key: "toolbar",  icon: "✏",  title: "Zeichnen",     show: showToolbar,  set: setShowToolbar,  active: "bg-orange-900 border-orange-600 text-orange-200" },
-              { key: "zoom",     icon: "🔍", title: "Zoom",         show: showZoom,     set: setShowZoom,     active: "bg-gray-700 border-gray-500 text-gray-200" },
-              { key: "nav",      icon: "🗺", title: "Karten",       show: showNav,      set: setShowNav,      active: "bg-teal-900 border-teal-600 text-teal-200" },
-              { key: "placer",   icon: "⬡",  title: "Token setzen", show: showPlacer,   set: setShowPlacer,   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
-            ].map(({ key, icon, title, show, set, active }) => (
+              { key: "lognotes", icon: "📟", title: "Log-Notizen",   show: localPanelPos.logNotes.visible, toggle: toggleLogNotesVisible,          active: "bg-blue-900 border-blue-600 text-blue-200" },
+              { key: "oplog",    icon: "🗒",  title: `Op-Log${opLogActive ? " ▶" : ""}`, show: localPanelPos.opLog.visible, toggle: toggleOpLogVisible, active: "bg-purple-900 border-purple-600 text-purple-200" },
+              { key: "toolbar",  icon: "✏",  title: "Zeichnen",      show: showToolbar,  toggle: () => setShowToolbar(v => !v),  active: "bg-orange-900 border-orange-600 text-orange-200" },
+              { key: "zoom",     icon: "🔍", title: "Zoom",          show: showZoom,     toggle: () => setShowZoom(v => !v),     active: "bg-gray-700 border-gray-500 text-gray-200" },
+              { key: "nav",      icon: "🗺", title: "Karten",        show: showNav,      toggle: () => setShowNav(v => !v),      active: "bg-teal-900 border-teal-600 text-teal-200" },
+              { key: "placer",   icon: "⬡",  title: "Token setzen",  show: showPlacer,   toggle: () => setShowPlacer(v => !v),   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
+            ].map(({ key, icon, title, show, toggle, active }) => (
               <button key={key}
                 className={`w-7 h-7 rounded-full border text-xs flex items-center justify-center transition-colors flex-shrink-0 ${show ? active : "border-gray-700 text-gray-600 hover:text-gray-300 hover:border-gray-500"}`}
-                onClick={() => set(v => !v)}
+                onClick={toggle}
                 title={title}>
-                {icon}
+                {key === "oplog" && opLogActive ? <><span>{icon}</span><span className="text-green-400 text-xs leading-none">▶</span></> : icon}
               </button>
             ))}
 
