@@ -2846,7 +2846,7 @@ function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
   onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin: isAdminProp, markers, onOpenMarker,
-  onCommitMarker, activeMapId, onRemoveToken, getActiveGroupsForMarker,
+  onCommitMarker, activeMapId, onRemoveToken, onMoveTokenUp, getActiveGroupsForMarker,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
@@ -2860,6 +2860,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
   activeMapId: string; onRemoveToken: (gId: string, mapId: string) => void;
+  onMoveTokenUp?: (gId: string, fromMapId: string) => void;
   getActiveGroupsForMarker?: (markerId: string) => { groupId: string; color: string; label: string }[];
   orderMarkers: OrderMarker[];
   onMoveOrderMarkerLocal: (gId: string, x: number, y: number, mapId: string) => void;
@@ -3123,12 +3124,14 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                         <div key={g.groupId} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-800">
                           <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: g.color }} />
                           <span className="text-xs text-gray-300 flex-1">{g.label}</span>
-                          {onRemoveToken && (
-                            <button
-                              className="text-xs text-gray-600 hover:text-red-400 px-1"
-                              onClick={(e) => { e.stopPropagation(); onRemoveToken(g.groupId, m.id); }}
-                              title="Token entfernen">✕</button>
-                          )}
+                          <button
+                            className="text-xs text-gray-600 hover:text-orange-400 px-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onMoveTokenUp ? onMoveTokenUp(g.groupId, m.id) : onRemoveToken?.(g.groupId, m.id);
+                              setOpenGroupMenu(null);
+                            }}
+                            title="Gruppe auf übergeordnete Ebene verschieben">↑</button>
                         </div>
                       ))}
                       <button className="mt-1 w-full text-xs text-gray-600 hover:text-gray-400 text-center"
@@ -4843,6 +4846,43 @@ aliveState: na, spawnState: ns,
   }
 
 
+  // Token von Unterkarte/POI auf übergeordnete Karte verschieben
+  // fromMapId = die Unterkarte/POI-ID, auf der der Token gerade liegt
+  function moveTokenUp(gId: string, fromMapId: string) {
+    if (!canWrite) return;
+    // Finde die übergeordnete Karte:
+    // 1. Wenn fromMapId eine POI ist → parentMapId der POI
+    // 2. Wenn fromMapId eine Unterkarte (MapEntry, nicht "main") ist → "main"
+    const poi = poisRef.current.find((p) => p.id === fromMapId);
+    const parentMapId = poi ? poi.parentMapId : "main";
+
+    // Position des Markers auf der Parent-Karte
+    let markerX = 0.5;
+    let markerY = 0.5;
+    if (poi) {
+      markerX = poi.x ?? 0.5;
+      markerY = poi.y ?? 0.5;
+    } else {
+      // fromMapId ist eine Unterkarte (MapEntry) → finde ihre Position auf "main"
+      const mapEntry = mapsRef.current.find((m) => m.id === fromMapId);
+      if (mapEntry) { markerX = mapEntry.x ?? 0.5; markerY = mapEntry.y ?? 0.5; }
+    }
+
+    // Token von fromMapId entfernen
+    const withoutOld = tokensRef.current.filter(
+      (t) => !(t.groupId === gId && (t.mapId ?? "main") === fromMapId)
+    );
+    // Token auf parentMapId setzen (an Marker-Position)
+    const existing = withoutOld.findIndex(
+      (t) => t.groupId === gId && (t.mapId ?? "main") === parentMapId
+    );
+    const next = existing === -1
+      ? [...withoutOld, { groupId: gId, x: markerX, y: markerY, mapId: parentMapId }]
+      : withoutOld.map((t, i) => i === existing ? { ...t, x: markerX, y: markerY } : t);
+
+    setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+  }
+
   function setGroupSystem(gId: string, sysId: string) {
     if (!canWrite) return;
     const g = boardRef.current.groups.find((g) => g.id === gId);
@@ -5509,7 +5549,7 @@ aliveState: na, spawnState: ns,
                 canWriteTokens={canWrite && drawTool === "pointer"}
                 markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
-                activeMapId={activeMapId} onRemoveToken={removeToken}
+                activeMapId={activeMapId} onRemoveToken={removeToken} onMoveTokenUp={moveTokenUp}
                 getActiveGroupsForMarker={getActiveGroupsForMarker}
                     isAdmin={role === "admin"}
                     orderMarkers={orderMarkers}
