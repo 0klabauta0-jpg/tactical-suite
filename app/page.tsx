@@ -2308,6 +2308,8 @@ function DrawingLayer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const drawing = useRef(false);
+  const [mouseCoord, setMouseCoord] = useState<string | null>(null);
+  const [mousePixel, setMousePixel] = useState<{ x: number; y: number } | null>(null);
   const pathPoints = useRef<{ x: number; y: number }[]>([]);
   const lineStart = useRef<{ x: number; y: number } | null>(null);
   const lastPos = useRef<{ x: number; y: number } | null>(null);
@@ -2576,6 +2578,18 @@ function DrawingLayer({
     const p = toRel(e.clientX, e.clientY);
     if (!p) return;
     lastPos.current = p;
+    // Koordinaten-Label für Grid-Anzeige
+    if (showGrid) {
+      const ci = Math.min(29, Math.floor(p.x * 30));
+      const col = ci < 26 ? String.fromCharCode(65 + ci) : "A" + String.fromCharCode(65 + (ci - 26));
+      const row = Math.min(20, Math.floor(p.y * 20) + 1);
+      setMouseCoord(`${col}${row}`);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) setMousePixel({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } else {
+      setMouseCoord(null);
+      setMousePixel(null);
+    }
 
     if (tool === "eraser" && e.buttons === 1) { eraseAt(p); return; }
 
@@ -2766,7 +2780,18 @@ function DrawingLayer({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerLeave={() => { setMouseCoord(null); setMousePixel(null); }}
       />
+
+      {/* Grid-Koordinaten-Anzeige am Mauszeiger */}
+      {showGrid && mouseCoord && mousePixel && (
+        <div className="absolute z-30 pointer-events-none select-none"
+          style={{ left: mousePixel.x + 14, top: mousePixel.y - 20 }}>
+          <span className="bg-black bg-opacity-50 text-white text-xs font-mono px-1.5 py-0.5 rounded border border-white border-opacity-20">
+            {mouseCoord}
+          </span>
+        </div>
+      )}
 
       {/* Text-Eingabefeld – positioniert relativ zum Bild */}
       {textInput && (
