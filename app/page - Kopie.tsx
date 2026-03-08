@@ -3819,14 +3819,13 @@ function BoardApp() {
   const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
-  const [localPanelPos, setLocalPanelPos] = useState<PanelLayout>({
+  const [localPanelPos, setLocalPanelPos] = useState({
     nav:     { x: DEFAULT_PANEL_LAYOUT.nav.x,     y: DEFAULT_PANEL_LAYOUT.nav.y     },
     placer:  { x: DEFAULT_PANEL_LAYOUT.placer.x,  y: DEFAULT_PANEL_LAYOUT.placer.y  },
     toolbar: { x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 },
     zoom:    { x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  },
     notes:    { x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    },
     logNotes: { x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false },
-    opLog:    { x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false },
   });
 
   // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
