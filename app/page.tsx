@@ -584,17 +584,32 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   const [loading, setLoading] = useState(true);
   const [templateRoomId, setTemplateRoomId] = useState("");
   const [availableRooms, setAvailableRooms] = useState<string[]>([]);
+  const [templateLoadErr, setTemplateLoadErr] = useState(false);
 
+  // Template-Räume laden – braucht einen eingeloggten Auth-User.
+  // Falls noch kein User vorhanden (Setup-Screen vor Login) → anonymously einloggen.
   useEffect(() => {
-    getDocs(collection(db, "rooms"))
-      .then((snap) => {
+    let cancelled = false;
+    async function loadTemplates() {
+      setTemplateLoadErr(false);
+      try {
+        if (!auth.currentUser) {
+          const { signInAnonymously } = await import("firebase/auth");
+          try { await signInAnonymously(auth); } catch (_) { /* bereits eingeloggt oder kein Anon-Auth */ }
+        }
+        const snap = await getDocs(collection(db, "rooms"));
+        if (cancelled) return;
         const ids = snap.docs
           .map((d) => d.id)
           .filter((id) => id !== roomId && id.toLowerCase().includes("template"))
           .sort();
         setAvailableRooms(ids);
-      })
-      .catch(() => {});
+      } catch (e: any) {
+        if (!cancelled) setTemplateLoadErr(true);
+      }
+    }
+    loadTemplates();
+    return () => { cancelled = true; };
   }, [roomId]);
 
   useEffect(() => {
@@ -805,6 +820,9 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
                 </option>
               ))}
             </select>
+            {templateLoadErr && (
+              <p className="text-yellow-500 text-xs mb-1">⚠ Templates konnten nicht geladen werden – fehlende Firestore-Leseberechtigung oder kein Netz.</p>
+            )}
             <p className="text-gray-600 text-xs mb-4">
               Wähle einen bestehenden Raum als Vorlage. Gruppen und Karten werden kopiert – Spieler, Notizen und Tokens nicht.
             </p>
@@ -1024,28 +1042,9 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (signInErr: any) {
-        // Firebase ≥ v9.12 gibt "auth/invalid-credential" statt "auth/user-not-found"
-        // wenn der Account noch nicht existiert. Alle Varianten abfangen:
-        const signInCode: string = signInErr?.code ?? "";
-        const isNoAccount =
-          signInCode === "auth/user-not-found" ||
-          signInCode === "auth/invalid-credential" ||
-          signInCode === "auth/invalid-login-credentials" ||
-          signInCode === "auth/user-disabled";
-        if (isNoAccount) {
-          try {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: any) {
-            // Race-Condition: Account wurde zwischen Sign-in und Create angelegt
-            if (createErr?.code === "auth/email-already-in-use") {
-              await signInWithEmailAndPassword(auth, email, pw);
-            } else {
-              throw createErr;
-            }
-          }
-        } else {
-          throw signInErr;
-        }
+        if (signInErr?.code === "auth/user-not-found") {
+          await createUserWithEmailAndPassword(auth, email, pw);
+        } else { throw signInErr; }
       }
 
       // (kein Self-Registration mehr – newPlayerData ist immer null)
