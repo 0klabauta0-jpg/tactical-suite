@@ -2963,6 +2963,43 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const lastTokenPos = useRef<{ x: number; y: number } | null>(null);
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
   const [hoveredToken, setHoveredToken] = useState<string | null>(null);
+  const mapRootRef = useRef<HTMLDivElement>(null);
+  // Tatsächlicher Bildbereich innerhalb des object-contain Containers (Letterbox-Offset)
+  const [imgOffset, setImgOffset] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    // ResizeObserver auf map-img → berechnet tatsächlichen Bildbereich (object-contain)
+    function updateImgOffset() {
+      const img = document.getElementById("map-img") as HTMLImageElement | null;
+      const container = mapRootRef.current;
+      if (!img || !container || !img.naturalWidth || !img.naturalHeight) return;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const iAspect = img.naturalWidth / img.naturalHeight;
+      const cAspect = cw / ch;
+      let iw: number, ih: number;
+      if (iAspect > cAspect) { iw = cw; ih = cw / iAspect; }
+      else { ih = ch; iw = ch * iAspect; }
+      setImgOffset({ left: (cw - iw) / 2, top: (ch - ih) / 2, width: iw, height: ih });
+    }
+    const ro = new ResizeObserver(updateImgOffset);
+    if (mapRootRef.current) ro.observe(mapRootRef.current);
+    updateImgOffset();
+    return () => ro.disconnect();
+  }, [imgAspect]);
+
+  // Nicht-passiver Wheel-Listener → verhindert Browser-Scroll, Mausrad = Zoom
+  useEffect(() => {
+    const el = mapRootRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.91;
+      setScale((s) => Math.max(0.3, Math.min(6, s * zoomFactor)));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
   // Double-click tracking for markers (stored outside render map)
   const markerClickCount = useRef<Record<string, number>>({});
   const markerClickTimer = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -2977,11 +3014,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     };
   }
 
-  // BUGFIX: Mausrad → nur Panning (kein Zoom), Zoom nur über Buttons
-  function onWheel(e: React.WheelEvent) {
-    // Panning mit Mausrad: horizontal und vertikal
-    setOffset((o) => ({ x: o.x - e.deltaX * 0.8, y: o.y - e.deltaY * 0.8 }));
-  }
+  // Mausrad-Zoom: handled via nicht-passivem native listener auf mapRootRef (siehe useEffect oben)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function onWheel(_e: React.WheelEvent) { /* handled natively */ }
 
   function onBgDown(e: React.PointerEvent) {
     if (tokenDrag || markerDrag) return;
@@ -3070,9 +3105,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   }
 
   return (
-    <div className="w-full h-full overflow-hidden relative"
+    <div ref={mapRootRef} className="w-full h-full overflow-hidden relative"
       style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
-      onWheel={onWheel}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
       onPointerMove={(e) => {
         // Grid-Koordinaten immer tracken
@@ -3113,21 +3147,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         transformOrigin: "center center",
         transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
-        display: "flex", alignItems: "center", justifyContent: "center",
       }}>
-        {/* Wrapper mit exaktem Bildseitenverhältnis – kein object-contain Letterboxing */}
-        <div style={{
-          position: "relative",
-          width: imgAspect ? (imgAspect >= 1 ? "100%" : `${imgAspect * 100}%`) : "100%",
-          height: imgAspect ? (imgAspect < 1 ? "100%" : `${100 / imgAspect}%`) : "100%",
-          maxWidth: imgAspect ? `${imgAspect * 100}vh` : undefined,
-          maxHeight: imgAspect ? `${100 / imgAspect * 100}vw` : undefined,
-          aspectRatio: imgAspect ? String(imgAspect) : undefined,
-          flexShrink: 0,
-        }}>
         <img id="map-img" src={imageSrc} alt="Map"
-          className="block select-none"
-          style={{ width: "100%", height: "100%", display: "block" }}
+          className="w-full h-full object-contain block select-none"
           draggable={false}
           onLoad={(e) => {
             const img = e.currentTarget;
@@ -3136,6 +3158,15 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
             }
           }}
         />
+
+        {/* Overlay-Div: sitzt exakt über dem Bildbereich (letterbox-korrigiert) */}
+        <div style={{
+          position: "absolute",
+          left:   imgOffset ? imgOffset.left   : 0,
+          top:    imgOffset ? imgOffset.top    : 0,
+          width:  imgOffset ? imgOffset.width  : "100%",
+          height: imgOffset ? imgOffset.height : "100%",
+        }}>
 
         {/* Drawing Layer – innerhalb der transform-Div, bewegt/skaliert mit der Karte */}
         <DrawingLayer
@@ -3409,7 +3440,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           );
         })}
       </div>
-        </div>{/* end aspect-ratio wrapper */}
+        </div>{/* end imgOffset overlay */}
     </div>
   );
 }
