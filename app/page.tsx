@@ -4468,10 +4468,16 @@ aliveState: na, spawnState: ns,
   }
 
   function pushOpLog(entries: OpLogEntry[]) {
+    // Firestore verträgt kein undefined – Felder ohne Wert weglassen
+    const clean = entries.map(e => {
+      const r: Record<string, unknown> = { ts: e.ts, actor: e.actor, type: e.type, text: e.text };
+      if (e.systemId !== undefined) r.systemId = e.systemId;
+      return r;
+    });
     opLogRef.current = entries;
     setOpLogEntries(entries);
     setDoc(doc(db, "rooms", roomId, "state", "board"),
-      { opLogEntries: entries, updatedAt: serverTimestamp() }, { merge: true }
+      { opLogEntries: clean, updatedAt: serverTimestamp() }, { merge: true }
     ).catch(console.error);
   }
 
@@ -4538,7 +4544,6 @@ aliveState: na, spawnState: ns,
         ts: Date.now(), actor: currentPlayer?.name ?? "?",
         type: "op_start",
         text: `── Operation gestartet (${currentPlayer?.name ?? "?"}) ──`,
-        systemId: undefined,
       };
       const nextEntries = [...opLogRef.current, startEntry];
       pushOpLog(nextEntries);
@@ -4557,7 +4562,6 @@ aliveState: na, spawnState: ns,
         ts: Date.now(), actor: currentPlayer?.name ?? "?",
         type: "op_stop",
         text: `── Operation gestoppt ──`,
-        systemId: undefined,
       };
       pushOpLog([...opLogRef.current, stopEntry]);
     }
