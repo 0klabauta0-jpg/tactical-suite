@@ -4850,35 +4850,58 @@ aliveState: na, spawnState: ns,
   // fromMapId = die Unterkarte/POI-ID, auf der der Token gerade liegt
   function moveTokenUp(gId: string, fromMapId: string) {
     if (!canWrite) return;
-    // Finde die übergeordnete Karte:
-    // 1. Wenn fromMapId eine POI ist → parentMapId der POI
-    // 2. Wenn fromMapId eine Unterkarte (MapEntry, nicht "main") ist → "main"
-    const poi = poisRef.current.find((p) => p.id === fromMapId);
-    const parentMapId = poi ? poi.parentMapId : "main";
 
-    // Position des Markers auf der Parent-Karte
-    let markerX = 0.5;
-    let markerY = 0.5;
-    if (poi) {
-      markerX = poi.x ?? 0.5;
-      markerY = poi.y ?? 0.5;
+    // Kontext-abhängig:
+    // - User ist auf "main" → Token direkt auf main holen (egal wie tief verschachtelt)
+    // - User ist auf Unterkarte → genau eine Ebene hoch
+    const onMain = activeMapId === "main";
+
+    let targetMapId: string;
+    let posX: number;
+    let posY: number;
+
+    if (onMain) {
+      // Alle Ebenen hochlaufen bis wir das Element finden das direkt auf main liegt
+      let currentId = fromMapId;
+      posX = 0.5; posY = 0.5;
+      while (currentId !== "main") {
+        const poi = poisRef.current.find((p) => p.id === currentId);
+        if (poi) {
+          posX = poi.x ?? 0.5;
+          posY = poi.y ?? 0.5;
+          currentId = poi.parentMapId;
+        } else {
+          const mapEntry = mapsRef.current.find((m) => m.id === currentId);
+          posX = mapEntry?.x ?? 0.5;
+          posY = mapEntry?.y ?? 0.5;
+          currentId = "main";
+        }
+      }
+      targetMapId = "main";
     } else {
-      // fromMapId ist eine Unterkarte (MapEntry) → finde ihre Position auf "main"
-      const mapEntry = mapsRef.current.find((m) => m.id === fromMapId);
-      if (mapEntry) { markerX = mapEntry.x ?? 0.5; markerY = mapEntry.y ?? 0.5; }
+      // Genau eine Ebene hoch
+      const poi = poisRef.current.find((p) => p.id === fromMapId);
+      if (poi) {
+        targetMapId = poi.parentMapId;
+        posX = poi.x ?? 0.5;
+        posY = poi.y ?? 0.5;
+      } else {
+        const mapEntry = mapsRef.current.find((m) => m.id === fromMapId);
+        targetMapId = "main";
+        posX = mapEntry?.x ?? 0.5;
+        posY = mapEntry?.y ?? 0.5;
+      }
     }
 
-    // Token von fromMapId entfernen
     const withoutOld = tokensRef.current.filter(
       (t) => !(t.groupId === gId && (t.mapId ?? "main") === fromMapId)
     );
-    // Token auf parentMapId setzen (an Marker-Position)
     const existing = withoutOld.findIndex(
-      (t) => t.groupId === gId && (t.mapId ?? "main") === parentMapId
+      (t) => t.groupId === gId && (t.mapId ?? "main") === targetMapId
     );
     const next = existing === -1
-      ? [...withoutOld, { groupId: gId, x: markerX, y: markerY, mapId: parentMapId }]
-      : withoutOld.map((t, i) => i === existing ? { ...t, x: markerX, y: markerY } : t);
+      ? [...withoutOld, { groupId: gId, x: posX, y: posY, mapId: targetMapId }]
+      : withoutOld.map((t, i) => i === existing ? { ...t, x: posX, y: posY } : t);
 
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
   }
