@@ -1317,7 +1317,10 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
   }
   function onHeaderMove(e: React.PointerEvent) {
     if (!dragging.current) return;
-    onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
+    onMove(
+        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
+        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
+      );
   }
   function onHeaderUp() { dragging.current = false; }
 
@@ -3006,7 +3009,11 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     const handler = (e: WheelEvent) => {
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.1 : 0.91;
-      setScale((s) => Math.max(0.3, Math.min(6, s * zoomFactor)));
+      setScale((s) => {
+        const next = Math.max(0.3, Math.min(6, s * zoomFactor));
+        if (next <= 1) setOffset({ x: 0, y: 0 }); // reset pan wenn rausgezoomt
+        return next;
+      });
     };
     el.addEventListener("wheel", handler, { passive: false });
     return () => el.removeEventListener("wheel", handler);
@@ -3029,12 +3036,26 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function onWheel(_e: React.WheelEvent) { /* handled natively */ }
 
-  function onBgDown(_e: React.PointerEvent) {
-    // Karte nicht verschiebbar
+  function onBgDown(e: React.PointerEvent) {
+    if (tokenDrag || markerDrag || orderMarkerDrag) return;
+    if (scale <= 1) return; // Panning nur wenn reingezoomt
+    setPanning(true);
+    panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onBgMove(e: React.PointerEvent) {
-    // Kein Karten-Panning
+    if (panning && !tokenDrag && !markerDrag && !orderMarkerDrag) {
+      // Panning begrenzen: max offset = (scale-1)/2 * containerSize
+      const container = mapRootRef.current;
+      if (container) {
+        const maxX = (scale - 1) * container.clientWidth  / 2;
+        const maxY = (scale - 1) * container.clientHeight / 2;
+        const nx = panStart.current.ox + e.clientX - panStart.current.x;
+        const ny = panStart.current.oy + e.clientY - panStart.current.y;
+        setOffset({ x: Math.max(-maxX, Math.min(maxX, nx)), y: Math.max(-maxY, Math.min(maxY, ny)) });
+      }
+    }
     if (tokenDrag && canWriteTokens) {
       const c = getMapCoords(e);
       if (c) { lastTokenPos.current = c; const [gId] = tokenDrag.split(":"); onMoveTokenLocal(gId, c.x, c.y, activeMapId); }
@@ -3112,8 +3133,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 
   return (
     <div ref={mapRootRef} className="w-full h-full overflow-hidden relative"
-      style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : "default" }}
-      onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
+      style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : scale > 1 ? (panning ? "grabbing" : "grab") : "default" }}
+      onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw && scale <= 1) return; onBgDown(e); }}
       onPointerMove={(e) => {
         // Grid-Koordinaten immer tracken
         if (showGrid) {
@@ -3436,7 +3457,10 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite,
   }
   function onHeaderMove(e: React.PointerEvent) {
     if (!dragging.current) return;
-    onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
+    onMove(
+        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
+        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
+      );
   }
   function onHeaderUp() { dragging.current = false; }
   function onResizeDown(e: React.PointerEvent) {
@@ -3525,7 +3549,10 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
   }
   function onHeaderMove(e: React.PointerEvent) {
     if (!dragging.current) return;
-    onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
+    onMove(
+        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
+        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
+      );
   }
   function onHeaderUp() { dragging.current = false; }
   function onResizeDown(e: React.PointerEvent) {
@@ -3687,7 +3714,10 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
   }
   function onHeaderMove(e: React.PointerEvent) {
     if (!dragging.current) return;
-    onMove(Math.max(0, start.current.px + e.clientX - start.current.mx), Math.max(0, start.current.py + e.clientY - start.current.my));
+    onMove(
+        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
+        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
+      );
   }
   function onHeaderUp() { dragging.current = false; }
   function onResizeDown(e: React.PointerEvent) {
