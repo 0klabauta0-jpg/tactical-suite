@@ -584,32 +584,17 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
   const [loading, setLoading] = useState(true);
   const [templateRoomId, setTemplateRoomId] = useState("");
   const [availableRooms, setAvailableRooms] = useState<string[]>([]);
-  const [templateLoadErr, setTemplateLoadErr] = useState(false);
 
-  // Template-Räume laden – braucht einen eingeloggten Auth-User.
-  // Falls noch kein User vorhanden (Setup-Screen vor Login) → anonymously einloggen.
   useEffect(() => {
-    let cancelled = false;
-    async function loadTemplates() {
-      setTemplateLoadErr(false);
-      try {
-        if (!auth.currentUser) {
-          const { signInAnonymously } = await import("firebase/auth");
-          try { await signInAnonymously(auth); } catch (_) { /* bereits eingeloggt oder kein Anon-Auth */ }
-        }
-        const snap = await getDocs(collection(db, "rooms"));
-        if (cancelled) return;
+    getDocs(collection(db, "rooms"))
+      .then((snap) => {
         const ids = snap.docs
           .map((d) => d.id)
           .filter((id) => id !== roomId && id.toLowerCase().includes("template"))
           .sort();
         setAvailableRooms(ids);
-      } catch (e: any) {
-        if (!cancelled) setTemplateLoadErr(true);
-      }
-    }
-    loadTemplates();
-    return () => { cancelled = true; };
+      })
+      .catch(() => {});
   }, [roomId]);
 
   useEffect(() => {
@@ -820,9 +805,6 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
                 </option>
               ))}
             </select>
-            {templateLoadErr && (
-              <p className="text-yellow-500 text-xs mb-1">⚠ Templates konnten nicht geladen werden – fehlende Firestore-Leseberechtigung oder kein Netz.</p>
-            )}
             <p className="text-gray-600 text-xs mb-4">
               Wähle einen bestehenden Raum als Vorlage. Gruppen und Karten werden kopiert – Spieler, Notizen und Tokens nicht.
             </p>
@@ -2199,7 +2181,7 @@ function DrawingToolbar({
       >
         <span className="text-gray-500 text-xs">⠿</span>
         <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
-        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: Klicken, alle 30s blasser, löscht sich automatisch"} />
+        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: Klicken zum Setzen. Zeigt Minuten seit Platzierung (+Xm). Manuell mit Radierer entfernen."} />
       </div>
 
       <div className="flex flex-col gap-2 p-2">
@@ -2247,7 +2229,7 @@ function DrawingToolbar({
 
         {/* Feindmarker */}
         <div className="border-t border-gray-700 pt-1.5">
-          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (fade)</div>
+          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (+min)</div>
           <div className="flex gap-1">
             {markerTools.map((m) => (
               <button key={m.id} title={m.title} onClick={() => setTool(m.id)}
@@ -2301,12 +2283,13 @@ function DrawingToolbar({
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements, tool, color, strokeWidth, canDraw, showGrid,
+  elements, tool, color, strokeWidth, canDraw, showGrid, markerTick,
   onAddElement, onRemoveElement, onUpdateElement, onResetTool,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
   canDraw: boolean; showGrid: boolean;
+  markerTick?: number;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
   onUpdateElement: (el: DrawElement) => void;
@@ -2331,7 +2314,7 @@ function DrawingLayer({
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
   // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl]);
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
 
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
@@ -2424,7 +2407,7 @@ function DrawingLayer({
         const cy = el.y * H;
         const sz = 18; // Radius des Symbols in px
         ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity));
+        ctx.globalAlpha = 1.0;
         ctx.strokeStyle = el.color;
         ctx.fillStyle = el.color;
         ctx.lineWidth = 2.5;
@@ -2464,13 +2447,15 @@ function DrawingLayer({
           ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy + sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy + sz * 0.55); ctx.stroke();
         }
 
-        // Label unten
-        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity)) * 0.9;
+        // Label + Timestamp unten
+        ctx.globalAlpha = 0.9;
         ctx.font = `bold 9px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         const label = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
-        ctx.fillText(label, cx, cy + sz + 2);
+        const mins = Math.floor((Date.now() - (el.createdAt ?? Date.now())) / 60000);
+        const tsLabel = mins < 1 ? `${label} <1m` : `${label} +${mins}m`;
+        ctx.fillText(tsLabel, cx, cy + sz + 2);
         ctx.restore();
       }
     }
@@ -2857,7 +2842,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
-  showGrid, onScaleChange,
+  showGrid, onScaleChange, markerTick,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -2879,6 +2864,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onRemoveDrawElement: (id: string) => void;
   onUpdateDrawElement: (el: DrawElement) => void;
   showGrid: boolean;
+  markerTick?: number;
   onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -3030,6 +3016,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           strokeWidth={drawWidth}
           canDraw={canDraw}
           showGrid={showGrid}
+          markerTick={markerTick}
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
           onUpdateElement={onUpdateDrawElement}
@@ -4463,31 +4450,12 @@ aliveState: na, spawnState: ns,
     }, 300);
   }
 
-  // ── Feindmarker Fade-Timer: alle 30s → opacity -0.2, bei ≤ 0 → löschen ──
+  // ── Feindmarker: Minuten-Ticker für Timestamp-Anzeige (kein Fade mehr) ──
+  const [markerTick, setMarkerTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => {
-      setDrawings((prev) => {
-        let changed = false;
-        const next: DrawingsMap = {};
-        for (const [mapId, els] of Object.entries(prev)) {
-          const updated = els
-            .map((el) => {
-              if (el.type !== "marker") return el;
-              const newOpacity = Math.round((el.opacity - 0.2) * 100) / 100;
-              changed = true;
-              return { ...el, opacity: newOpacity };
-            })
-            .filter((el) => el.type !== "marker" || (el as any).opacity > 0);
-          next[mapId] = updated;
-        }
-        if (!changed) return prev;
-        drawingsRef.current = next;
-        pushDrawings(next);
-        return next;
-      });
-    }, 30_000);
+    const id = setInterval(() => setMarkerTick(t => t + 1), 60_000);
     return () => clearInterval(id);
-  }, [roomId]);
+  }, []);
 
   function addDrawElement(el: DrawElement) {
     if (!canWrite) return;
@@ -5044,6 +5012,7 @@ aliveState: na, spawnState: ns,
                 onRemoveDrawElement={removeDrawElement}
                 onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
+                markerTick={markerTick}
                 onScaleChange={handleScaleChange}
                 onResetDrawTool={() => setDrawTool("pointer")}
               />
