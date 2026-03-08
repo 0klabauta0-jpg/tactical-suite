@@ -2294,12 +2294,12 @@ function DrawingToolbar({
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements, tool, color, strokeWidth, canDraw, showGrid,
+  elements, tool, color, strokeWidth, canDraw, showGrid, markerTick,
   onAddElement, onRemoveElement, onUpdateElement, onResetTool,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
-  canDraw: boolean; showGrid: boolean;
+  canDraw: boolean; showGrid: boolean; markerTick?: number;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
   onUpdateElement: (el: DrawElement) => void;
@@ -2324,7 +2324,7 @@ function DrawingLayer({
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
   // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl]);
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
 
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
@@ -2360,24 +2360,25 @@ function DrawingLayer({
 
     // Gitternetz
     if (showGrid) {
-      const cols = 10, rows = 10;
+      const GCOLS = 30, GROWS = 20;
+      function gridColLabel(i: number): string {
+        if (i < 26) return String.fromCharCode(65 + i);
+        return "A" + String.fromCharCode(65 + (i - 26));
+      }
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
       ctx.lineWidth = 1;
-      ctx.font = "bold 11px Arial";
+      ctx.font = "bold 8px Arial";
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.textBaseline = "top";
-      for (let c = 0; c <= cols; c++) {
-        const px = (c / cols) * W;
+      for (let c = 0; c <= GCOLS; c++) {
+        const px = (c / GCOLS) * W;
         ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
-        if (c < cols) {
-          const label = String.fromCharCode(65 + c); // A, B, C …
-          ctx.fillText(label, px + 3, 3);
-        }
+        if (c < GCOLS) ctx.fillText(gridColLabel(c), px + 2, 3);
       }
-      for (let r = 0; r <= rows; r++) {
-        const py = (r / rows) * H;
+      for (let r = 0; r <= GROWS; r++) {
+        const py = (r / GROWS) * H;
         ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
-        if (r < rows) ctx.fillText(String(r + 1), 3, py + 3);
+        if (r < GROWS) ctx.fillText(String(r + 1), 3, py + 3);
       }
     }
 
@@ -2457,13 +2458,16 @@ function DrawingLayer({
           ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy + sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy + sz * 0.55); ctx.stroke();
         }
 
-        // Label unten
-        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity)) * 0.9;
+        // Label + Timestamp unten
+        ctx.globalAlpha = 0.9;
         ctx.font = `bold 9px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const label = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
-        ctx.fillText(label, cx, cy + sz + 2);
+        const kindLabel = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
+        const ageMs = Date.now() - (el.createdAt ?? Date.now());
+        const ageMins = Math.floor(ageMs / 60000);
+        const timeLabel = ageMins < 1 ? "<1m" : ageMins < 60 ? `${ageMins}m` : `${Math.floor(ageMins/60)}h${ageMins%60 > 0 ? ageMins%60+"m" : ""}`;
+        ctx.fillText(`${kindLabel} ${timeLabel}`, cx, cy + sz + 2);
         ctx.restore();
       }
     }
@@ -2516,7 +2520,7 @@ function DrawingLayer({
     ro.observe(img);
     syncCanvasSize();
     return () => ro.disconnect();
-  }, [elements, showGrid]);
+  }, [elements, showGrid, markerTick]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDraw || tool === "pointer") return;
@@ -2850,7 +2854,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
-  showGrid, onScaleChange,
+  showGrid, onScaleChange, markerTick,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -2873,6 +2877,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onRemoveDrawElement: (id: string) => void;
   onUpdateDrawElement: (el: DrawElement) => void;
   showGrid: boolean;
+  markerTick?: number;
   onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -3024,6 +3029,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           strokeWidth={drawWidth}
           canDraw={canDraw}
           showGrid={showGrid}
+          markerTick={markerTick}
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
           onUpdateElement={onUpdateDrawElement}
@@ -4465,8 +4471,9 @@ aliveState: na, spawnState: ns,
 
   // x/y are 0.0–1.0 normalized coords → "C4", "F7" etc.
   function coordLabel(x: number, y: number): string {
-    const col = String.fromCharCode(65 + Math.min(9, Math.floor(x * 10))); // A–J
-    const row = Math.min(10, Math.floor(y * 10) + 1);                       // 1–10
+    const ci = Math.min(29, Math.floor(x * 30)); // 0–29
+    const col = ci < 26 ? String.fromCharCode(65 + ci) : "A" + String.fromCharCode(65 + (ci - 26));
+    const row = Math.min(20, Math.floor(y * 20) + 1); // 1–20
     return `${col}${row}`;
   }
 
@@ -4977,31 +4984,12 @@ aliveState: na, spawnState: ns,
     }, 300);
   }
 
-  // ── Feindmarker Fade-Timer: alle 30s → opacity -0.2, bei ≤ 0 → löschen ──
+  // ── Feindmarker Timestamp-Tick: alle 60s neu rendern (kein Fade, kein Löschen) ──
+  const [markerTick, setMarkerTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => {
-      setDrawings((prev) => {
-        let changed = false;
-        const next: DrawingsMap = {};
-        for (const [mapId, els] of Object.entries(prev)) {
-          const updated = els
-            .map((el) => {
-              if (el.type !== "marker") return el;
-              const newOpacity = Math.round((el.opacity - 0.2) * 100) / 100;
-              changed = true;
-              return { ...el, opacity: newOpacity };
-            })
-            .filter((el) => el.type !== "marker" || (el as any).opacity > 0);
-          next[mapId] = updated;
-        }
-        if (!changed) return prev;
-        drawingsRef.current = next;
-        pushDrawings(next);
-        return next;
-      });
-    }, 30_000);
+    const id = setInterval(() => setMarkerTick((n) => n + 1), 60_000);
     return () => clearInterval(id);
-  }, [roomId]);
+  }, []);
 
   function addDrawElement(el: DrawElement) {
     if (!canWrite) return;
@@ -5596,6 +5584,7 @@ aliveState: na, spawnState: ns,
                 onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
                 onScaleChange={handleScaleChange}
+                markerTick={markerTick}
                 onResetDrawTool={() => setDrawTool("pointer")}
               />
             )}
