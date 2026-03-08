@@ -4022,6 +4022,10 @@ function BoardApp() {
   const [useRelTime, setUseRelTime] = useState(false);
   const logEntriesRef = useRef<LogEntry[]>([]);
   const [notesVisible, setNotesVisible] = useState(true);
+  const [showToolbar,  setShowToolbar]  = useState(true);
+  const [showZoom,     setShowZoom]     = useState(true);
+  const [showNav,      setShowNav]      = useState(true);
+  const [showPlacer,   setShowPlacer]   = useState(true);
 
   // ── Op-Log state ────────────────────────────────────────────────────
   const [opLogEntries, setOpLogEntries] = useState<OpLogEntry[]>([]);
@@ -5421,6 +5425,7 @@ aliveState: na, spawnState: ns,
               </button>
             )}
             <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
+            {/* Notizen / Log-Buttons (bestehend, rechteckig) */}
             <button
               className={`text-xs px-2 py-1 rounded border transition-colors ${notesVisible ? "bg-gray-700 border-gray-500 text-gray-200" : "border-gray-700 text-gray-600 hover:text-gray-300"}`}
               onClick={() => setNotesVisible(v => !v)} title="Notizen ein/ausblenden">📋</button>
@@ -5434,6 +5439,23 @@ aliveState: na, spawnState: ns,
               title={`Op-Log${opLogActive ? " (aktiv ▶)" : " (gestoppt)"}`}>
               🗒{opLogActive ? <span className="ml-0.5 text-green-400">▶</span> : null}
             </button>
+
+            <span className="w-px h-4 bg-gray-700 flex-shrink-0" />
+
+            {/* Runde Tool-Panel Buttons */}
+            {[
+              { key: "toolbar",  icon: "✏",  title: "Zeichnen",     show: showToolbar,  set: setShowToolbar,  active: "bg-orange-900 border-orange-600 text-orange-200" },
+              { key: "zoom",     icon: "🔍", title: "Zoom",         show: showZoom,     set: setShowZoom,     active: "bg-gray-700 border-gray-500 text-gray-200" },
+              { key: "nav",      icon: "🗺", title: "Karten",       show: showNav,      set: setShowNav,      active: "bg-teal-900 border-teal-600 text-teal-200" },
+              { key: "placer",   icon: "⬡",  title: "Token setzen", show: showPlacer,   set: setShowPlacer,   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
+            ].map(({ key, icon, title, show, set, active }) => (
+              <button key={key}
+                className={`w-7 h-7 rounded-full border text-xs flex items-center justify-center transition-colors flex-shrink-0 ${show ? active : "border-gray-700 text-gray-600 hover:text-gray-300 hover:border-gray-500"}`}
+                onClick={() => set(v => !v)}
+                title={title}>
+                {icon}
+              </button>
+            ))}
 
           </div>
 
@@ -5708,7 +5730,7 @@ aliveState: na, spawnState: ns,
           </div>
 
           {/* Drawing Toolbar – verschiebbar, nur wenn Bild vorhanden */}
-          {activeImage && (
+          {activeImage && showToolbar && (
             <DrawingToolbar
               tool={drawTool} setTool={setDrawTool}
               color={drawColor} setColor={setDrawColor}
@@ -5725,7 +5747,7 @@ aliveState: na, spawnState: ns,
           )}
 
           {/* Zoom Panel – verschiebbares Fenster */}
-          {activeImage && (
+          {activeImage && showZoom && (
             <ZoomPanel
               x={localPanelPos.zoom.x}
               y={localPanelPos.zoom.y}
@@ -5737,14 +5759,14 @@ aliveState: na, spawnState: ns,
             />
           )}
 
-          <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
+          {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
             <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
               onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
-          </DraggablePanel>
+          </DraggablePanel>}
 
-          {canWrite && (
+          {canWrite && showPlacer && (
             <DraggablePanel title={`Token setzen · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
               <TokenPlacerPanel groups={tacticalGroups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
