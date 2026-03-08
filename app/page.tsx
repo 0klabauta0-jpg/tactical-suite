@@ -2955,8 +2955,14 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const offsetRef = useRef({ x: 0, y: 0 }); // für lag-freies Panning via DOM
 
-  function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
+  function resetView() {
+    setScale(1);
+    offsetRef.current = { x: 0, y: 0 };
+    setOffset({ x: 0, y: 0 });
+    if (transformDivRef.current) transformDivRef.current.style.transform = `translate(0px,0px) scale(1)`;
+  }
 
   // expose scale control to parent (for ZoomPanel)
   useEffect(() => {
@@ -3011,7 +3017,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       const zoomFactor = e.deltaY < 0 ? 1.1 : 0.91;
       setScale((s) => {
         const next = Math.max(0.3, Math.min(6, s * zoomFactor));
-        if (next <= 1) setOffset({ x: 0, y: 0 }); // reset pan wenn rausgezoomt
+        if (next <= 1) { offsetRef.current = { x: 0, y: 0 }; setOffset({ x: 0, y: 0 }); } // reset pan wenn rausgezoomt
         return next;
       });
     };
@@ -3065,14 +3071,15 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 
   function onBgMove(e: React.PointerEvent) {
     if (panning && !tokenDrag && !markerDrag && !orderMarkerDrag) {
-      // Panning begrenzen: max offset = (scale-1)/2 * containerSize
       const container = mapRootRef.current;
-      if (container) {
+      if (container && transformDivRef.current) {
         const maxX = (scale - 1) * container.clientWidth  / 2;
         const maxY = (scale - 1) * container.clientHeight / 2;
-        const nx = panStart.current.ox + e.clientX - panStart.current.x;
-        const ny = panStart.current.oy + e.clientY - panStart.current.y;
-        setOffset({ x: Math.max(-maxX, Math.min(maxX, nx)), y: Math.max(-maxY, Math.min(maxY, ny)) });
+        const nx = Math.max(-maxX, Math.min(maxX, panStart.current.ox + e.clientX - panStart.current.x));
+        const ny = Math.max(-maxY, Math.min(maxY, panStart.current.oy + e.clientY - panStart.current.y));
+        offsetRef.current = { x: nx, y: ny };
+        // Direkt per DOM – kein React re-render, kein Frame-Delay
+        transformDivRef.current.style.transform = `translate(${nx}px,${ny}px) scale(${scale})`;
       }
     }
     if (tokenDrag && canWriteTokens) {
@@ -3099,6 +3106,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     if (orderMarkerDrag && lastOrderMarkerPos.current && canWriteTokens) {
       onCommitOrderMarker(orderMarkerDrag, lastOrderMarkerPos.current.x, lastOrderMarkerPos.current.y, activeMapId);
     }
+    if (panning) setOffset(offsetRef.current); // sync nach Pan
     setPanning(false); setTokenDrag(null); lastTokenPos.current = null;
     setMarkerDrag(null); lastMarkerPos.current = null;
     setOrderMarkerDrag(null); lastOrderMarkerPos.current = null;
@@ -3191,7 +3199,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       <div ref={transformDivRef} style={{
         transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
         transformOrigin: "center center",
-        transition: tokenDrag || markerDrag ? "none" : "transform 0.1s",
+        transition: (tokenDrag || markerDrag || panning) ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
       }}>
         <img id="map-img" src={imageSrc} alt="Map"
@@ -5757,6 +5765,16 @@ aliveState: na, spawnState: ns,
               />
             )}
           </div>
+
+          {/* Zoom/Pan Reset Button */}
+          {activeImage && (mapScale !== 1) && (
+            <button
+              className="absolute bottom-3 right-3 z-40 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-900 bg-opacity-80 border border-gray-600 text-gray-300 text-xs hover:bg-gray-800 hover:text-white transition-colors shadow-lg"
+              onClick={() => resetViewRef.current()}
+              title="Zoom & Pan zurücksetzen">
+              ⊙ Reset
+            </button>
+          )}
 
           {/* Drawing Toolbar – verschiebbar, nur wenn Bild vorhanden */}
           {activeImage && showToolbar && (
