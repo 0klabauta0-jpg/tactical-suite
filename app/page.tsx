@@ -4249,11 +4249,24 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   catch { await setDoc(ref, { orderMarkersBySystem: orderMarkersBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
 }
 
+  // Firestore akzeptiert kein undefined – rekursiv entfernen
+  function stripUndefined<T>(obj: T): T {
+    if (Array.isArray(obj)) return obj.map(stripUndefined) as unknown as T;
+    if (obj !== null && typeof obj === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+        if (v !== undefined) out[k] = stripUndefined(v);
+      }
+      return out as T;
+    }
+    return obj;
+  }
+
   async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
     nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
     const sysId = visibleSystemIdRef.current;
     try {
-      await setDoc(doc(db, "rooms", roomId, "state", "board"), {
+      await setDoc(doc(db, "rooms", roomId, "state", "board"), stripUndefined({
         groups: nb.groups, columns: nb.columns,
 tokensBySystem: { ...tokensBySystemRef.current, [sysId]: nt },
 mapsBySystem: { ...mapsBySystemRef.current, [sysId]: nm },
@@ -4268,7 +4281,7 @@ aliveState: na, spawnState: ns,
         groupRoles: ngr ?? groupRolesRef.current,
         systems: systemsRef.current,
         updatedAt: serverTimestamp(),
-      }, { merge: true });
+      }), { merge: true });
     } catch (err) { console.error("Firestore:", err); }
   }
 
