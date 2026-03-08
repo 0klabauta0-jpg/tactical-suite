@@ -1305,6 +1305,7 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
   const resizing = useRef(false);
   const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
   const [size, setSize] = useState({ w: minWidth, h: defaultHeight }); // h=0 = auto
+  const [minimized, setMinimized] = useState(false);
   const MIN_W = minWidth;
   const MIN_H = 80;
 
@@ -1337,24 +1338,31 @@ function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWi
 
   return (
     <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: size.w, height: size.h > 0 ? size.h : undefined, minWidth: MIN_W }}>
+      style={{ left: x, top: y, width: size.w, height: minimized ? "auto" : (size.h > 0 ? size.h : undefined), minWidth: MIN_W }}>
       <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none flex-shrink-0 ${canDrag ? "cursor-move" : "cursor-default"}`}
         onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
         {canDrag && <span className="text-gray-500 text-xs">⠿</span>}
-        <span className="text-xs font-semibold text-gray-300">{title}</span>
+        <span className="text-xs font-semibold text-gray-300 flex-1">{title}</span>
         {tooltip && <HelpTip text={tooltip} />}
+        <button className="text-gray-500 hover:text-gray-300 text-xs px-1 ml-1"
+          onPointerDown={e => e.stopPropagation()}
+          onClick={() => setMinimized(v => !v)}>{minimized ? "□" : "─"}</button>
       </div>
-      <div className="p-2 overflow-y-auto overflow-x-hidden flex-1"
-        style={{ scrollbarWidth: "thin", scrollbarColor: "#4B5563 transparent" }}>
-        {children}
-      </div>
+      {!minimized && (
+        <div className="p-2 overflow-y-auto overflow-x-hidden flex-1"
+          style={{ scrollbarWidth: "thin", scrollbarColor: "#4B5563 transparent" }}>
+          {children}
+        </div>
+      )}
       {/* Resize handle */}
-      <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none flex-shrink-0"
-        onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-          <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
-        </svg>
-      </div>
+      {!minimized && (
+        <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none flex-shrink-0"
+          onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+            <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
+          </svg>
+        </div>
+      )}
     </div>
   );
 }
@@ -3021,17 +3029,12 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function onWheel(_e: React.WheelEvent) { /* handled natively */ }
 
-  function onBgDown(e: React.PointerEvent) {
-    if (tokenDrag || markerDrag) return;
-    setPanning(true);
-    panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  function onBgDown(_e: React.PointerEvent) {
+    // Karte nicht verschiebbar
   }
 
   function onBgMove(e: React.PointerEvent) {
-    if (panning && !tokenDrag && !markerDrag) {
-      setOffset({ x: panStart.current.ox + e.clientX - panStart.current.x, y: panStart.current.oy + e.clientY - panStart.current.y });
-    }
+    // Kein Karten-Panning
     if (tokenDrag && canWriteTokens) {
       const c = getMapCoords(e);
       if (c) { lastTokenPos.current = c; const [gId] = tokenDrag.split(":"); onMoveTokenLocal(gId, c.x, c.y, activeMapId); }
@@ -3109,7 +3112,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 
   return (
     <div ref={mapRootRef} className="w-full h-full overflow-hidden relative"
-      style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : panning ? "grabbing" : "grab" }}
+      style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : "default" }}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw) return; onBgDown(e); }}
       onPointerMove={(e) => {
         // Grid-Koordinaten immer tracken
@@ -3148,7 +3151,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       <div ref={transformDivRef} style={{
         transform: `translate(${offset.x}px,${offset.y}px) scale(${scale})`,
         transformOrigin: "center center",
-        transition: panning || tokenDrag || markerDrag ? "none" : "transform 0.1s",
+        transition: tokenDrag || markerDrag ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
       }}>
         <img id="map-img" src={imageSrc} alt="Map"
@@ -3186,53 +3189,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           onResetTool={onResetDrawTool}
         />
 
-        {/* Gitternetz – skaliert mit Karte mit, Buchstaben-Spalten + Zahlen-Zeilen */}
-        {showGrid && (
-          <svg
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            viewBox="0 0 1 1"
-            preserveAspectRatio="none"
-            style={{ overflow: "visible", zIndex: 8 }}
-          >
-            {/* 10×10 Raster */}
-            {Array.from({ length: 9 }, (_, i) => {
-              const pos = (i + 1) / 10;
-              return (
-                <g key={i}>
-                  <line x1={pos} y1={0} x2={pos} y2={1}
-                    stroke="rgba(255,255,255,0.15)" strokeWidth={0.001} vectorEffect="non-scaling-stroke" />
-                  <line x1={0} y1={pos} x2={1} y2={pos}
-                    stroke="rgba(255,255,255,0.15)" strokeWidth={0.001} vectorEffect="non-scaling-stroke" />
-                </g>
-              );
-            })}
-            {/* Außenrahmen */}
-            <rect x={0} y={0} width={1} height={1} fill="none"
-              stroke="rgba(255,255,255,0.25)" strokeWidth={0.002} vectorEffect="non-scaling-stroke" />
-            {/* Spalten-Buchstaben (A–J) oben */}
-            {Array.from({ length: 10 }, (_, i) => (
-              <text key={`col-${i}`}
-                x={(i + 0.5) / 10} y={-0.008}
-                textAnchor="middle" dominantBaseline="auto"
-                fontSize={0.018} fill="rgba(255,255,255,0.55)"
-                fontFamily="monospace" fontWeight="bold"
-                vectorEffect="non-scaling-stroke">
-                {String.fromCharCode(65 + i)}
-              </text>
-            ))}
-            {/* Zeilen-Zahlen (1–10) links */}
-            {Array.from({ length: 10 }, (_, i) => (
-              <text key={`row-${i}`}
-                x={-0.008} y={(i + 0.5) / 10}
-                textAnchor="end" dominantBaseline="middle"
-                fontSize={0.018} fill="rgba(255,255,255,0.55)"
-                fontFamily="monospace" fontWeight="bold"
-                vectorEffect="non-scaling-stroke">
-                {i + 1}
-              </text>
-            ))}
-          </svg>
-        )}
+        {/* Altes SVG-Außenraster entfernt – Grid ist jetzt nur im Canvas */}
 
         {/* Marker – Doppelklick öffnet, Einfachklick / Drag verschiebt */}
         {/* markerClickCounters: id → count, stored outside map via closure */}
@@ -3415,6 +3372,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                   setOrderMarkerDrag(m.groupId); lastOrderMarkerPos.current = null;
                 }}
+                onPointerMove={(e) => { if (orderMarkerDrag === m.groupId) { e.stopPropagation(); onBgMove(e); } }}
+                onPointerUp={(e) => { if (orderMarkerDrag === m.groupId) { e.stopPropagation(); onBgUp(); } }}
                 onMouseEnter={() => setHoveredOrderMarker(m.groupId)}
                 onMouseLeave={() => setHoveredOrderMarker(null)}
                 title={canWriteTokens ? "Auftrag ziehen  ·  ✕ entfernen" : "Auftrag"}>
@@ -3637,13 +3596,6 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
             </button>
           </div>
         )}
-        <button
-          className="text-gray-500 hover:text-white text-xs px-1"
-          title={visible ? "Minimieren" : "Aufklappen"}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={onToggleVisible}>
-          {visible ? "▲" : "▼"}
-        </button>
         {onToggleMinimize && (
           <button className="text-gray-500 hover:text-gray-300 text-xs px-1" onPointerDown={e=>e.stopPropagation()} onClick={onToggleMinimize}>{minimized ? "□" : "─"}</button>
         )}
@@ -3844,12 +3796,6 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
               onClick={() => setConfirmClear(false)}>✕</button>
           </div>
         )}
-        <button className="text-gray-500 hover:text-white text-xs px-1"
-          title={visible ? "Minimieren" : "Aufklappen"}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={onToggleVisible}>
-          {visible ? "▲" : "▼"}
-        </button>
         {onToggleMinimize && (
           <button className="text-gray-500 hover:text-gray-300 text-xs px-1"
             onPointerDown={e => e.stopPropagation()} onClick={onToggleMinimize}>
@@ -5475,7 +5421,7 @@ aliveState: na, spawnState: ns,
               { key: "lognotes", icon: "📟", title: "Log-Notizen",   show: localPanelPos.logNotes.visible, toggle: toggleLogNotesVisible,          active: "bg-blue-900 border-blue-600 text-blue-200" },
               { key: "oplog",    icon: "🗒",  title: `Op-Log${opLogActive ? " ▶" : ""}`, show: localPanelPos.opLog.visible, toggle: toggleOpLogVisible, active: "bg-purple-900 border-purple-600 text-purple-200" },
               { key: "toolbar",  icon: "✏",  title: "Zeichnen",      show: showToolbar,  toggle: () => setShowToolbar(v => !v),  active: "bg-orange-900 border-orange-600 text-orange-200" },
-              { key: "zoom",     icon: "🔍", title: "Zoom",          show: showZoom,     toggle: () => setShowZoom(v => !v),     active: "bg-gray-700 border-gray-500 text-gray-200" },
+
               { key: "nav",      icon: "🗺", title: "Karten",        show: showNav,      toggle: () => setShowNav(v => !v),      active: "bg-teal-900 border-teal-600 text-teal-200" },
               { key: "placer",   icon: "⬡",  title: "Token setzen",  show: showPlacer,   toggle: () => setShowPlacer(v => !v),   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
             ].map(({ key, icon, title, show, toggle, active }) => (
@@ -5661,40 +5607,44 @@ aliveState: na, spawnState: ns,
           minimized={minimizedPanels["notes"]}
           onToggleMinimize={() => toggleMinPanel("notes")} />
       )}
-      <LogNotesPanel
-        x={localPanelPos.logNotes.x} y={localPanelPos.logNotes.y}
-        w={localPanelPos.logNotes.w} h={localPanelPos.logNotes.h}
-        visible={localPanelPos.logNotes.visible}
-        entries={logEntries}
-        onAdd={handleAddLogEntry}
-        onClear={handleClearLogEntries}
-        onMove={movePanelLogNotes}
-        onResize={resizePanelLogNotes}
-        onToggleVisible={toggleLogNotesVisible}
-        canWrite={canWrite}
-        useRelTime={useRelTime}
-        minimized={minimizedPanels["log"]}
-        onToggleMinimize={() => toggleMinPanel("log")}
-      />
+      {localPanelPos.logNotes.visible && (
+        <LogNotesPanel
+          x={localPanelPos.logNotes.x} y={localPanelPos.logNotes.y}
+          w={localPanelPos.logNotes.w} h={localPanelPos.logNotes.h}
+          visible={true}
+          entries={logEntries}
+          onAdd={handleAddLogEntry}
+          onClear={handleClearLogEntries}
+          onMove={movePanelLogNotes}
+          onResize={resizePanelLogNotes}
+          onToggleVisible={toggleLogNotesVisible}
+          canWrite={canWrite}
+          useRelTime={useRelTime}
+          minimized={minimizedPanels["log"]}
+          onToggleMinimize={() => toggleMinPanel("log")}
+        />
+      )}
 
-      <OpLogPanel
-        x={localPanelPos.opLog.x} y={localPanelPos.opLog.y}
-        w={localPanelPos.opLog.w} h={localPanelPos.opLog.h}
-        visible={localPanelPos.opLog.visible}
-        entries={opLogEntries}
-        onClear={handleClearOpLog}
-        onToggleActive={handleToggleOpLog}
-        isActive={opLogActive}
-        canWrite={canWrite}
-        onMove={movePanelOpLog}
-        onResize={resizePanelOpLog}
-        onToggleVisible={toggleOpLogVisible}
-        isAdmin={isAdmin}
-        activeSystemId={activeSystemId}
-        systems={systems}
-        minimized={minimizedPanels["oplog"]}
-        onToggleMinimize={() => toggleMinPanel("oplog")}
-      />
+      {localPanelPos.opLog.visible && (
+        <OpLogPanel
+          x={localPanelPos.opLog.x} y={localPanelPos.opLog.y}
+          w={localPanelPos.opLog.w} h={localPanelPos.opLog.h}
+          visible={true}
+          entries={opLogEntries}
+          onClear={handleClearOpLog}
+          onToggleActive={handleToggleOpLog}
+          isActive={opLogActive}
+          canWrite={canWrite}
+          onMove={movePanelOpLog}
+          onResize={resizePanelOpLog}
+          onToggleVisible={toggleOpLogVisible}
+          isAdmin={isAdmin}
+          activeSystemId={activeSystemId}
+          systems={systems}
+          minimized={minimizedPanels["oplog"]}
+          onToggleMinimize={() => toggleMinPanel("oplog")}
+        />
+      )}
 
       {/* MAP */}
       {tab === "map" && (
@@ -5776,18 +5726,7 @@ aliveState: na, spawnState: ns,
             />
           )}
 
-          {/* Zoom Panel – verschiebbares Fenster */}
-          {activeImage && showZoom && (
-            <ZoomPanel
-              x={localPanelPos.zoom.x}
-              y={localPanelPos.zoom.y}
-              onMove={movePanelZoom}
-              scale={mapScale}
-              onZoomIn={() => zoomInRef.current()}
-              onZoomOut={() => zoomOutRef.current()}
-              onReset={() => resetViewRef.current()}
-            />
-          )}
+          {/* ZoomPanel entfernt – Zoom via Mausrad */}
 
           {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
             <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
