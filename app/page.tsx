@@ -4992,12 +4992,65 @@ aliveState: na, spawnState: ns,
     setTokens(next);
   }
 
+  // Gibt alle Vorfahren-Map-IDs zurück (von mapId bis "main")
+  function getAncestorMapIds(mapId: string): string[] {
+    const ancestors: string[] = [];
+    let current = mapId;
+    while (current !== "main") {
+      const poi = poisRef.current.find((p) => p.id === current);
+      if (poi) { ancestors.push(poi.parentMapId); current = poi.parentMapId; }
+      else {
+        const map = mapsRef.current.find((m) => m.id === current);
+        if (map && map.id !== "main") { ancestors.push("main"); current = "main"; }
+        else break;
+      }
+    }
+    return ancestors;
+  }
+
+  // Gibt alle Nachfahren-Map-IDs zurück (alle POIs + Unterkarten unterhalb von mapId)
+  function getDescendantMapIds(mapId: string): Set<string> {
+    const result = new Set<string>();
+    const queue = [mapId];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      poisRef.current.forEach((p) => { if (p.parentMapId === cur) { result.add(p.id); queue.push(p.id); } });
+      mapsRef.current.forEach((m) => { if (m.id !== "main" && m.id !== cur) {/* handled via POIs */} });
+    }
+    return result;
+  }
+
   function commitToken(gId: string, x: number, y: number, mapId: string) {
     const prev = tokensRef.current.map(normalizeToken);
     const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
     const isNew = i === -1;
     const oldToken = isNew ? null : prev[i];
-    const next = isNew ? [...prev, { groupId: gId, x, y, mapId }] : prev.map((t, idx) => idx === i ? { ...t, x, y, mapId } : t);
+
+    // Token setzen / bewegen
+    let next = isNew
+      ? [...prev, { groupId: gId, x, y, mapId }]
+      : prev.map((t, idx) => idx === i ? { ...t, x, y, mapId } : t);
+
+    if (mapId === "main") {
+      // Token auf Hauptkarte → alle Tokens dieser Gruppe auf Unterkarten entfernen
+      const subIds = new Set([
+        ...mapsRef.current.filter((m) => m.id !== "main").map((m) => m.id),
+        ...poisRef.current.map((p) => p.id),
+      ]);
+      next = next.filter((t) => !(t.groupId === gId && subIds.has(t.mapId ?? "")));
+      // Re-add the newly placed token
+      const stillHere = next.find((t) => t.groupId === gId && (t.mapId ?? "main") === "main");
+      if (!stillHere) next = [...next, { groupId: gId, x, y, mapId: "main" }];
+    } else {
+      // Token auf Unterkarte/POI → alle Tokens dieser Gruppe auf Vorfahren-Ebenen entfernen
+      const ancestorIds = new Set(getAncestorMapIds(mapId));
+      ancestorIds.add("main"); // immer auch main entfernen
+      next = next.filter((t) => !(t.groupId === gId && (ancestorIds.has(t.mapId ?? "main") || (t.mapId == null && ancestorIds.has("main")))));
+      // Re-add the newly placed token on current mapId
+      const stillHere = next.find((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
+      if (!stillHere) next = [...next, { groupId: gId, x, y, mapId }];
+    }
+
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
     // ── Op-Log ──────────────────────────────────────────────────
     const g = boardRef.current.groups.find((g) => g.id === gId);
@@ -5824,7 +5877,7 @@ aliveState: na, spawnState: ns,
 
           {/* ZoomPanel entfernt – Zoom via Mausrad */}
 
-          {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280}>
+          {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280} minWidth={360}>
             <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
               isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
               onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
