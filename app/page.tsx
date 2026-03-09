@@ -2981,6 +2981,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
   const [hoveredToken, setHoveredToken] = useState<string | null>(null);
   const mapRootRef = useRef<HTMLDivElement>(null);
+  const draggingTokenEl  = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Token-Drag
+  const draggingMarkerEl = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Marker-Drag
   // Tatsächlicher Bildbereich innerhalb des object-contain Containers (Letterbox-Offset)
   const [imgOffset, setImgOffset] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
@@ -3084,11 +3086,24 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     }
     if (tokenDrag && canWriteTokens) {
       const c = getMapCoords(e);
-      if (c) { lastTokenPos.current = c; const [gId] = tokenDrag.split(":"); onMoveTokenLocal(gId, c.x, c.y, activeMapId); }
+      if (c) {
+        lastTokenPos.current = c;
+        // Direkt per DOM – kein React Re-Render während des Drags
+        if (draggingTokenEl.current) {
+          draggingTokenEl.current.style.left = `${c.x * 100}%`;
+          draggingTokenEl.current.style.top  = `${c.y * 100}%`;
+        }
+      }
     }
     if (markerDrag) {
       const c = getMapCoords(e);
-      if (c) lastMarkerPos.current = c;
+      if (c) {
+        lastMarkerPos.current = c;
+        if (draggingMarkerEl.current) {
+          draggingMarkerEl.current.style.left = `${c.x * 100}%`;
+          draggingMarkerEl.current.style.top  = `${c.y * 100}%`;
+        }
+      }
     }
     if (orderMarkerDrag && canWriteTokens) {
       const c = getMapCoords(e);
@@ -3100,9 +3115,13 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     if (tokenDrag && lastTokenPos.current && canWriteTokens) {
       const [gId] = tokenDrag.split(":");
       const pos = lastTokenPos.current;
+      // Einmalig State + Firestore updaten
+      onMoveTokenLocal(gId, pos.x, pos.y, activeMapId);
       onCommitToken(gId, pos.x, pos.y, activeMapId);
     }
+    draggingTokenEl.current = null;
     if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
+    draggingMarkerEl.current = null;
     if (orderMarkerDrag && lastOrderMarkerPos.current && canWriteTokens) {
       onCommitOrderMarker(orderMarkerDrag, lastOrderMarkerPos.current.x, lastOrderMarkerPos.current.y, activeMapId);
     }
@@ -3250,7 +3269,12 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-100%)" }}
               onPointerDown={(e) => {
                 e.stopPropagation();
-                if (isAdminProp) { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMarkerDrag(m.id); lastMarkerPos.current = null; }
+                if (isAdminProp) {
+                  const el = e.currentTarget as HTMLElement;
+                  el.setPointerCapture(e.pointerId);
+                  draggingMarkerEl.current = el;
+                  setMarkerDrag(m.id); lastMarkerPos.current = null;
+                }
               }}
               onPointerMove={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgMove(e); } }}
               onPointerUp={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgUp(); } }}
@@ -3333,7 +3357,9 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 // Kein Drag starten wenn auf ✕ geklickt
                 if ((e.target as HTMLElement).dataset.removeBtn) return;
                 e.stopPropagation();
-                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                const el = e.currentTarget as HTMLElement;
+                el.setPointerCapture(e.pointerId);
+                draggingTokenEl.current = el;
                 setTokenDrag(tokenKey); lastTokenPos.current = null;
               }}
               onPointerMove={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgMove(e); } }}
@@ -4957,10 +4983,13 @@ aliveState: na, spawnState: ns,
 
   // TOKENS
   function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
-    setTokens((prev) => {
+    const next = (() => {
+      const prev = tokensRef.current;
       const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
       return i === -1 ? [...prev, { groupId: gId, x, y, mapId }] : prev.map((t, idx) => idx === i ? { ...t, x, y, mapId } : t);
-    });
+    })();
+    tokensRef.current = next;
+    setTokens(next);
   }
 
   function commitToken(gId: string, x: number, y: number, mapId: string) {
