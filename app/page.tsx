@@ -2983,6 +2983,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const mapRootRef = useRef<HTMLDivElement>(null);
   const draggingTokenEl  = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Token-Drag
   const draggingMarkerEl = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Marker-Drag
+  const isDraggingAny    = useRef(false); // sync flag – verhindert Pan-Start wenn Token/Marker gezogen
   // Tatsächlicher Bildbereich innerhalb des object-contain Containers (Letterbox-Offset)
   const [imgOffset, setImgOffset] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
@@ -3064,7 +3065,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   function onWheel(_e: React.WheelEvent) { /* handled natively */ }
 
   function onBgDown(e: React.PointerEvent) {
-    if (tokenDrag || markerDrag || orderMarkerDrag) return;
+    if (isDraggingAny.current || tokenDrag || markerDrag || orderMarkerDrag) return;
     if (scale <= 1) return; // Panning nur wenn reingezoomt
     setPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
@@ -3126,6 +3127,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
       onCommitOrderMarker(orderMarkerDrag, lastOrderMarkerPos.current.x, lastOrderMarkerPos.current.y, activeMapId);
     }
     if (panning) setOffset(offsetRef.current); // sync nach Pan
+    isDraggingAny.current = false;
     setPanning(false); setTokenDrag(null); lastTokenPos.current = null;
     setMarkerDrag(null); lastMarkerPos.current = null;
     setOrderMarkerDrag(null); lastOrderMarkerPos.current = null;
@@ -3273,6 +3275,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                   const el = e.currentTarget as HTMLElement;
                   el.setPointerCapture(e.pointerId);
                   draggingMarkerEl.current = el;
+                  isDraggingAny.current = true;
                   setMarkerDrag(m.id); lastMarkerPos.current = null;
                 }
               }}
@@ -3360,6 +3363,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 const el = e.currentTarget as HTMLElement;
                 el.setPointerCapture(e.pointerId);
                 draggingTokenEl.current = el;
+                isDraggingAny.current = true;
                 setTokenDrag(tokenKey); lastTokenPos.current = null;
               }}
               onPointerMove={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgMove(e); } }}
@@ -4703,7 +4707,9 @@ aliveState: na, spawnState: ns,
   ) {
     if (!opLogActiveRef.current) return;
     const pending = opLogPending.current;
-    // Cancel existing timer for this key
+    // Vorherigen Timer canceln, aber prevX/Y vom ersten Aufruf behalten (Startposition)
+    const existingPrevX = pending[key]?.prevX;
+    const existingPrevY = pending[key]?.prevY;
     if (pending[key]) clearTimeout(pending[key].timer);
 
     const timer = setTimeout(() => {
@@ -4711,24 +4717,24 @@ aliveState: na, spawnState: ns,
       if (!p) return;
       delete opLogPending.current[key];
 
-      // Distance check for token moves
+      // Distanz-Check: von der Startposition (prevX/Y) bis zur finalen Position (newX/Y im entry)
       if (opts?.minDist !== undefined && p.prevX !== undefined && p.prevY !== undefined) {
-        const finalToken = tokensRef.current.find(
-          (t) => t.groupId === entry.systemId?.split(":")[1]  // abused field for groupId
-        );
-        // We store groupId in a separate way – just check stored prevX/Y vs current entry coords
-        const dx = (p.entry as any).newX - p.prevX;
-        const dy = (p.entry as any).newY - p.prevY;
+        const dx = ((p.entry as any).newX ?? 0) - p.prevX;
+        const dy = ((p.entry as any).newY ?? 0) - p.prevY;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < (opts.minDist ?? 0.05)) return; // below threshold – skip
+        if (dist < (opts.minDist ?? 0.05)) return;
       }
 
       const next = [...opLogRef.current, p.entry];
-      // Keep max 1000 entries
       pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
-    }, 60_000);
+    }, 5_000); // 5s Debounce: schreibt 5s nach letzter Bewegung
 
-    pending[key] = { timer, entry, prevX: opts?.prevX, prevY: opts?.prevY };
+    // Startposition (prevX/Y) vom ersten Aufruf dieser Bewegung beibehalten
+    pending[key] = {
+      timer, entry,
+      prevX: existingPrevX ?? opts?.prevX,
+      prevY: existingPrevY ?? opts?.prevY,
+    };
   }
 
   // Immediate (no timer) op-log write – for deaths/respawns
