@@ -4698,8 +4698,8 @@ aliveState: na, spawnState: ns,
     ).catch(console.error);
   }
 
-  // Schedule an op-log entry with 60s debounce per key.
-  // For token moves: also checks distance threshold (minDist in 0.0–1.0 coords).
+  // Schedule an op-log entry with debounce per key.
+  // For token moves: also checks distance threshold (minDist in 0.0-1.0 coords).
   function scheduleOpLog(
     key: string,
     entry: OpLogEntry,
@@ -4707,9 +4707,12 @@ aliveState: na, spawnState: ns,
   ) {
     if (!opLogActiveRef.current) return;
     const pending = opLogPending.current;
-    // Vorherigen Timer canceln, aber prevX/Y vom ersten Aufruf behalten (Startposition)
-    const existingPrevX = pending[key]?.prevX;
-    const existingPrevY = pending[key]?.prevY;
+
+    // Startposition vom allerersten Aufruf dieser Bewegungssequenz beibehalten
+    const startX   = pending[key]?.prevX ?? opts?.prevX;
+    const startY   = pending[key]?.prevY ?? opts?.prevY;
+    const minDist  = (pending[key] as any)?.minDist ?? opts?.minDist;
+
     if (pending[key]) clearTimeout(pending[key].timer);
 
     const timer = setTimeout(() => {
@@ -4717,25 +4720,25 @@ aliveState: na, spawnState: ns,
       if (!p) return;
       delete opLogPending.current[key];
 
-      // Distanz-Check: von der Startposition (prevX/Y) bis zur finalen Position (newX/Y im entry)
-      if (opts?.minDist !== undefined && p.prevX !== undefined && p.prevY !== undefined) {
-        const dx = ((p.entry as any).newX ?? 0) - p.prevX;
-        const dy = ((p.entry as any).newY ?? 0) - p.prevY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < (opts.minDist ?? 0.05)) return;
+      // Distanz-Check: Startposition vs. finale newX/Y im entry
+      const md = (p as any).minDist as number | undefined;
+      if (md !== undefined && p.prevX !== undefined && p.prevY !== undefined) {
+        const finalX = (p.entry as any).newX as number | undefined;
+        const finalY = (p.entry as any).newY as number | undefined;
+        if (finalX !== undefined && finalY !== undefined) {
+          const dist = Math.sqrt((finalX - p.prevX) ** 2 + (finalY - p.prevY) ** 2);
+          if (dist < md) return;
+        }
       }
 
       const next = [...opLogRef.current, p.entry];
       pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
-    }, 5_000); // 5s Debounce: schreibt 5s nach letzter Bewegung
+    }, 30_000); // 30s Debounce
 
-    // Startposition (prevX/Y) vom ersten Aufruf dieser Bewegung beibehalten
-    pending[key] = {
-      timer, entry,
-      prevX: existingPrevX ?? opts?.prevX,
-      prevY: existingPrevY ?? opts?.prevY,
-    };
+    (pending[key] as any) = { timer, entry, prevX: startX, prevY: startY, minDist };
   }
+
+
 
   // Immediate (no timer) op-log write – for deaths/respawns
   function logOpImmediate(entry: OpLogEntry) {
