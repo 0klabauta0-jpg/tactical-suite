@@ -5068,22 +5068,35 @@ aliveState: na, spawnState: ns,
 
     setTokens(next); tokensRef.current = next; pushTokensOnly(next);
     // ── Op-Log ──────────────────────────────────────────────────
-    const g = boardRef.current.groups.find((g) => g.id === gId);
+    const g = boardRef.current.groups.find((gg) => gg.id === gId);
     if (g && !g.isSpawn) {
       const sysId = g.systemId ?? "pyro";
-      const mapLabel = [...mapsRef.current, ...poisRef.current].find((m) => m.id === mapId)?.label ?? mapId;
+      const allMaps = [...mapsRef.current, ...poisRef.current];
+      const getMapLabel = (id: string) => id === "main" ? "Hauptkarte" : (allMaps.find((m) => m.id === id)?.label ?? id);
       const actor = currentPlayer?.name ?? "?";
-      if (isNew) {
+
+      // Token dieser Gruppe auf einer anderen Ebene (vor dem Commit)
+      const prevOnOtherMap = prev.find((t) => t.groupId === gId && (t.mapId ?? "main") !== mapId);
+
+      if (prevOnOtherMap) {
+        // Ebenen-Wechsel
+        scheduleOpLog(`token_level:${gId}:${mapId}`, {
+          ts: Date.now(), actor, type: "token_set",
+          text: `${g.label}  ⬡ Ebene gewechselt  (${getMapLabel(prevOnOtherMap.mapId ?? "main")} ${coordLabel(prevOnOtherMap.x, prevOnOtherMap.y)} → ${getMapLabel(mapId)} ${coordLabel(x, y)})`,
+          systemId: sysId,
+        });
+      } else if (isNew) {
+        // Token neu gesetzt
         scheduleOpLog(`token_set:${gId}:${mapId}`, {
           ts: Date.now(), actor, type: "token_set",
-          text: `${g.label}  ⬡ Token gesetzt  (${mapLabel} · ${coordLabel(x, y)})`,
+          text: `${g.label}  ⬡ Token gesetzt  (${getMapLabel(mapId)} · ${coordLabel(x, y)})`,
           systemId: sysId,
         });
       } else {
-        // store newX/newY in entry for distance check
+        // Token bewegt (gleiche Ebene)
         const entry: any = {
           ts: Date.now(), actor, type: "token_move",
-          text: `${g.label}  ⬡ Token bewegt  (${mapLabel} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
+          text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
           systemId: sysId,
           newX: x, newY: y,
         };
