@@ -5147,20 +5147,16 @@ aliveState: na, spawnState: ns,
           systemId: sysId,
         });
       } else {
-        // ── Token bewegt (gleiche Ebene) – 30s Debounce + Distanzcheck ──
-        const moveKey = `token_move:${gId}:${mapId}`;
-        const existing = opLogPending.current[moveKey] as any;
-        // Startkoordinate: beim allerersten Aufruf aus oldToken, danach beibehalten
-        const startX = existing?.prevX ?? oldToken!.x;
-        const startY = existing?.prevY ?? oldToken!.y;
-        const entry: any = {
-          ts: Date.now(), actor, type: "token_move",
-          text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(startX, startY)} → ${coordLabel(x, y)})`,
-          systemId: sysId,
-          newX: x, newY: y,
-          _groupLabel: g.label, _mapLabel: getMapLabel(mapId),
-        };
-        scheduleOpLog(moveKey, entry, { minDist: 0.05, prevX: startX, prevY: startY });
+        // ── Token bewegt (gleiche Ebene) – sofort loggen wenn Mindestdistanz überschritten ──
+        // (commitToken wird nur einmal beim pointerUp aufgerufen, kein Debounce nötig)
+        const dist = Math.sqrt((x - oldToken!.x) ** 2 + (y - oldToken!.y) ** 2);
+        if (dist >= 0.02) { // ~0.6 Gitterfelder Mindestdistanz
+          logOpImmediate({
+            ts: Date.now(), actor, type: "token_move",
+            text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
+            systemId: sysId,
+          });
+        }
       }
     }
   }
