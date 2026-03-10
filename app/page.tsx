@@ -4698,8 +4698,6 @@ aliveState: na, spawnState: ns,
     ).catch(console.error);
   }
 
-  // Schedule an op-log entry with debounce per key.
-  // For token moves: also checks distance threshold (minDist in 0.0-1.0 coords).
   function scheduleOpLog(
     key: string,
     entry: OpLogEntry,
@@ -4709,11 +4707,12 @@ aliveState: na, spawnState: ns,
     const pending = opLogPending.current;
 
     // Startposition vom allerersten Aufruf dieser Bewegungssequenz beibehalten
-    const startX   = pending[key]?.prevX ?? opts?.prevX;
-    const startY   = pending[key]?.prevY ?? opts?.prevY;
-    const minDist  = (pending[key] as any)?.minDist ?? opts?.minDist;
+    const existing  = pending[key] as any;
+    const startX    = existing?.startX ?? existing?.prevX ?? opts?.prevX;
+    const startY    = existing?.startY ?? existing?.prevY ?? opts?.prevY;
+    const minDist   = existing?.minDist ?? opts?.minDist;
 
-    if (pending[key]) clearTimeout(pending[key].timer);
+    if (existing) clearTimeout(existing.timer);
 
     const timer = setTimeout(() => {
       const p = opLogPending.current[key];
@@ -4731,11 +4730,23 @@ aliveState: na, spawnState: ns,
         }
       }
 
-      const next = [...opLogRef.current, p.entry];
+      // Text neu generieren mit gespeicherter Startposition und finaler Position
+      const finalEntry = { ...p.entry };
+      const sx = (p as any).startX as number | undefined;
+      const sy = (p as any).startY as number | undefined;
+      const fx = (p.entry as any).newX as number | undefined;
+      const fy = (p.entry as any).newY as number | undefined;
+      if (sx !== undefined && sy !== undefined && fx !== undefined && fy !== undefined
+          && (p.entry as any)._groupLabel) {
+        finalEntry.text = `${(p.entry as any)._groupLabel}  ⬡ Token bewegt  (${(p.entry as any)._mapLabel} · ${coordLabel(sx, sy)} → ${coordLabel(fx, fy)})`;
+      }
+
+      const next = [...opLogRef.current, finalEntry];
       pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
     }, 30_000); // 30s Debounce
 
-    (pending[key] as any) = { timer, entry, prevX: startX, prevY: startY, minDist };
+    (pending[key] as any) = { timer, entry, prevX: startX, prevY: startY, minDist,
+      startX, startY };
   }
 
 
@@ -5090,15 +5101,44 @@ aliveState: na, spawnState: ns,
       const prevOnOtherMap = prev.find((t) => t.groupId === gId && (t.mapId ?? "main") !== mapId);
 
       if (prevOnOtherMap) {
-        // ── Ebenen-Wechsel: sofort loggen (kein Debounce nötig) ──
+        // ── Ebenen-Wechsel: vollständigen Pfad aufbauen ──
+        // z.B. Stanton → Daymar → Lamina PAF-I
+        function buildPath(startId: string, endId: string): string {
+          // Pfad von root bis startId
+          function pathFromRoot(id: string): string[] {
+            const parts: string[] = [];
+            let cur = id;
+            while (cur && cur !== "main") {
+              const poi = allMaps.find((m) => m.id === cur);
+              if (poi) { parts.unshift(poi.label); cur = (poi as any).parentMapId ?? "main"; }
+              else break;
+            }
+            parts.unshift(sysLabel); // System immer an erster Stelle
+            return parts;
+          }
+          const fromPath = pathFromRoot(startId);
+          const toPath   = pathFromRoot(endId);
+          // Gemeinsamen Prefix finden
+          let common = 0;
+          while (common < fromPath.length && common < toPath.length && fromPath[common] === toPath[common]) common++;
+          // Von-Seite: alles ab dem ersten unterschiedlichen Segment
+          const fromPart = fromPath.slice(common).join("→") || fromPath[fromPath.length - 1];
+          const toPart   = toPath.slice(common).join("→")   || toPath[toPath.length - 1];
+          // Gemeinsamer Präfix + Von→Nach
+          const prefix = fromPath.slice(0, common).join("→");
+          if (prefix) return `${prefix}  (${fromPart}→${toPart})`;
+          return `${fromPart} → ${toPart}`;
+        }
+        const fromId = prevOnOtherMap.mapId ?? "main";
+        const fullPath = buildPath(fromId, mapId);
         logOpImmediate({
           ts: Date.now(), actor, type: "token_set",
-          text: `${g.label}  ⬡ Ebene gewechselt  (${getMapLabel(prevOnOtherMap.mapId ?? "main")} ${coordLabel(prevOnOtherMap.x, prevOnOtherMap.y)} → ${getMapLabel(mapId)} ${coordLabel(x, y)})`,
+          text: `${g.label}  ⬡ Ebene  ${fullPath}  (${coordLabel(prevOnOtherMap.x, prevOnOtherMap.y)}→${coordLabel(x, y)})`,
           systemId: sysId,
         });
         // Alle laufenden Move-Timer dieser Gruppe canceln – frischer Start auf neuer Ebene
         const pendingKeys = Object.keys(opLogPending.current).filter(k => k.startsWith(`token_move:${gId}:`));
-        pendingKeys.forEach(k => { clearTimeout(opLogPending.current[k].timer); delete opLogPending.current[k]; });
+        pendingKeys.forEach(k => { clearTimeout((opLogPending.current[k] as any).timer); delete opLogPending.current[k]; });
       } else if (isNew) {
         // ── Token neu gesetzt ──
         logOpImmediate({
@@ -5109,13 +5149,18 @@ aliveState: na, spawnState: ns,
       } else {
         // ── Token bewegt (gleiche Ebene) – 30s Debounce + Distanzcheck ──
         const moveKey = `token_move:${gId}:${mapId}`;
+        const existing = opLogPending.current[moveKey] as any;
+        // Startkoordinate: beim allerersten Aufruf aus oldToken, danach beibehalten
+        const startX = existing?.prevX ?? oldToken!.x;
+        const startY = existing?.prevY ?? oldToken!.y;
         const entry: any = {
           ts: Date.now(), actor, type: "token_move",
-          text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
+          text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(startX, startY)} → ${coordLabel(x, y)})`,
           systemId: sysId,
           newX: x, newY: y,
+          _groupLabel: g.label, _mapLabel: getMapLabel(mapId),
         };
-        scheduleOpLog(moveKey, entry, { minDist: 0.05, prevX: oldToken!.x, prevY: oldToken!.y });
+        scheduleOpLog(moveKey, entry, { minDist: 0.05, prevX: startX, prevY: startY });
       }
     }
   }
