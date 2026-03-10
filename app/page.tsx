@@ -3116,9 +3116,10 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     if (tokenDrag && lastTokenPos.current && canWriteTokens) {
       const [gId] = tokenDrag.split(":");
       const pos = lastTokenPos.current;
-      // Einmalig State + Firestore updaten
-      onMoveTokenLocal(gId, pos.x, pos.y, activeMapId);
+      // commitToken zuerst – liest noch die alte Position aus tokensRef für Op-Log
       onCommitToken(gId, pos.x, pos.y, activeMapId);
+      // moveTokenLocal danach – updated tokensRef auf neue Position
+      onMoveTokenLocal(gId, pos.x, pos.y, activeMapId);
     }
     draggingTokenEl.current = null;
     if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
@@ -4919,7 +4920,7 @@ aliveState: na, spawnState: ns,
       return next;
     });
     if (g && !g.isSpawn) {
-      logOpImmediate({ ts: Date.now(), actor: currentPlayer?.name ?? "?",
+      scheduleOpLog(`group_delete:${g.id}`, { ts: Date.now(), actor: currentPlayer?.name ?? "?",
         type: "group_delete", text: `Gruppe "${g.label}"  ✕ gelöscht`,
         systemId: g.systemId ?? "pyro" });
     }
@@ -5131,7 +5132,7 @@ aliveState: na, spawnState: ns,
         }
         const fromId = prevOnOtherMap.mapId ?? "main";
         const fullPath = buildPath(fromId, mapId);
-        logOpImmediate({
+        scheduleOpLog(`token_level:${gId}`, {
           ts: Date.now(), actor, type: "token_set",
           text: `${g.label}  ⬡ Ebene  ${fullPath}  (${coordLabel(prevOnOtherMap.x, prevOnOtherMap.y)}→${coordLabel(x, y)})`,
           systemId: sysId,
@@ -5141,7 +5142,7 @@ aliveState: na, spawnState: ns,
         pendingKeys.forEach(k => { clearTimeout((opLogPending.current[k] as any).timer); delete opLogPending.current[k]; });
       } else if (isNew) {
         // ── Token neu gesetzt ──
-        logOpImmediate({
+        scheduleOpLog(`token_set:${gId}:${mapId}`, {
           ts: Date.now(), actor, type: "token_set",
           text: `${g.label}  ⬡ Token gesetzt  (${getMapLabel(mapId)} · ${coordLabel(x, y)})`,
           systemId: sysId,
@@ -5151,7 +5152,7 @@ aliveState: na, spawnState: ns,
         // (commitToken wird nur einmal beim pointerUp aufgerufen, kein Debounce nötig)
         const dist = Math.sqrt((x - oldToken!.x) ** 2 + (y - oldToken!.y) ** 2);
         if (dist >= 0.02) { // ~0.6 Gitterfelder Mindestdistanz
-          logOpImmediate({
+          scheduleOpLog(`token_move:${gId}:${mapId}`, {
             ts: Date.now(), actor, type: "token_move",
             text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
             systemId: sysId,
@@ -5173,7 +5174,7 @@ aliveState: na, spawnState: ns,
     const g = boardRef.current.groups.find((g) => g.id === gId);
     if (g && !g.isSpawn) {
       const mapLabel = [...mapsRef.current, ...poisRef.current].find((m) => m.id === mapId)?.label ?? mapId;
-      logOpImmediate({ ts: Date.now(), actor: currentPlayer?.name ?? "?", type: "token_remove",
+      scheduleOpLog(`token_remove:${gId}`, { ts: Date.now(), actor: currentPlayer?.name ?? "?", type: "token_remove",
         text: `${g.label}  ⬡ Token entfernt  (${mapLabel})`,
         systemId: g.systemId ?? "pyro" });
     }
