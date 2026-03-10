@@ -5080,37 +5080,42 @@ aliveState: na, spawnState: ns,
     const g = boardRef.current.groups.find((gg) => gg.id === gId);
     if (g && !g.isSpawn) {
       const sysId = g.systemId ?? "pyro";
+      const sysLabel = systems.find((s) => s.id === sysId)?.label ?? sysId;
       const allMaps = [...mapsRef.current, ...poisRef.current];
-      const getMapLabel = (id: string) => id === "main" ? "Hauptkarte" : (allMaps.find((m) => m.id === id)?.label ?? id);
+      // "main" = Systemname (z.B. "Pyro"), Unterkarten/POIs = ihr Label
+      const getMapLabel = (id: string) => id === "main" ? sysLabel : (allMaps.find((m) => m.id === id)?.label ?? id);
       const actor = currentPlayer?.name ?? "?";
 
-      // Token dieser Gruppe auf einer anderen Ebene (vor dem Commit)
+      // Token dieser Gruppe auf einer anderen Ebene VOR dem Commit
       const prevOnOtherMap = prev.find((t) => t.groupId === gId && (t.mapId ?? "main") !== mapId);
 
       if (prevOnOtherMap) {
-        // Ebenen-Wechsel
-        scheduleOpLog(`token_level:${gId}:${mapId}`, {
+        // ── Ebenen-Wechsel: sofort loggen (kein Debounce nötig) ──
+        logOpImmediate({
           ts: Date.now(), actor, type: "token_set",
           text: `${g.label}  ⬡ Ebene gewechselt  (${getMapLabel(prevOnOtherMap.mapId ?? "main")} ${coordLabel(prevOnOtherMap.x, prevOnOtherMap.y)} → ${getMapLabel(mapId)} ${coordLabel(x, y)})`,
           systemId: sysId,
         });
+        // Alle laufenden Move-Timer dieser Gruppe canceln – frischer Start auf neuer Ebene
+        const pendingKeys = Object.keys(opLogPending.current).filter(k => k.startsWith(`token_move:${gId}:`));
+        pendingKeys.forEach(k => { clearTimeout(opLogPending.current[k].timer); delete opLogPending.current[k]; });
       } else if (isNew) {
-        // Token neu gesetzt
-        scheduleOpLog(`token_set:${gId}:${mapId}`, {
+        // ── Token neu gesetzt ──
+        logOpImmediate({
           ts: Date.now(), actor, type: "token_set",
           text: `${g.label}  ⬡ Token gesetzt  (${getMapLabel(mapId)} · ${coordLabel(x, y)})`,
           systemId: sysId,
         });
       } else {
-        // Token bewegt (gleiche Ebene)
+        // ── Token bewegt (gleiche Ebene) – 30s Debounce + Distanzcheck ──
+        const moveKey = `token_move:${gId}:${mapId}`;
         const entry: any = {
           ts: Date.now(), actor, type: "token_move",
           text: `${g.label}  ⬡ Token bewegt  (${getMapLabel(mapId)} · ${coordLabel(oldToken!.x, oldToken!.y)} → ${coordLabel(x, y)})`,
           systemId: sysId,
           newX: x, newY: y,
         };
-        scheduleOpLog(`token_move:${gId}:${mapId}`, entry,
-          { minDist: 0.05, prevX: oldToken!.x, prevY: oldToken!.y });
+        scheduleOpLog(moveKey, entry, { minDist: 0.05, prevX: oldToken!.x, prevY: oldToken!.y });
       }
     }
   }
