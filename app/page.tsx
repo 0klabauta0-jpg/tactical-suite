@@ -3754,6 +3754,7 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
   const [confirmClear, setConfirmClear] = useState(false);
   const [scopeTab, setScopeTab] = useState<"galaxy" | string>("galaxy"); // "galaxy" | systemId
   const [useRelTime, setUseRelTime] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const SYSTEM_ABBR: Record<string, { short: string; color: string }> = {
     stanton: { short: "ST", color: "text-blue-400" },
@@ -3860,6 +3861,20 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => setUseRelTime(v => !v)}>
           +m
+        </button>
+        {/* Kopieren */}
+        <button
+          className={`text-xs px-1.5 py-0.5 rounded border transition-colors ${copied ? "border-green-600 text-green-400" : "border-gray-600 text-gray-500 hover:text-gray-200 hover:border-gray-400"}`}
+          title="Op-Log in Zwischenablage kopieren"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            const lines = filtered.map((e) => `[${formatTs(e.ts)}] ${e.text}`).join("\n");
+            navigator.clipboard.writeText(lines).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}>
+          {copied ? "✓" : "⎘"}
         </button>
         {/* Clear – nur Admin */}
         {isAdmin && !confirmClear && (
