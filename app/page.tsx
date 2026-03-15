@@ -3667,7 +3667,9 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
 
   return (
     <div className="fixed z-40 rounded-xl border border-blue-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: w, height: (visible && !minimized) ? h : "auto", minWidth: 180 }}>
+      style={{ left: x, top: y, width: w, height: (visible && !minimized) ? h : "auto", minWidth: 180 }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 select-none cursor-move flex-shrink-0"
         onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
@@ -3861,7 +3863,9 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
 
   return (
     <div className="fixed z-40 rounded-xl border border-purple-800 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden select-none"
-      style={{ left: x, top: y, width: w, height: (visible && !minimized) ? h : "auto", minWidth: 280 }}>
+      style={{ left: x, top: y, width: w, height: (visible && !minimized) ? h : "auto", minWidth: 280 }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move flex-shrink-0"
         onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
