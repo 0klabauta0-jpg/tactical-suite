@@ -1578,6 +1578,17 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
   );
 }
 
+// ── Block 1a: React.memo für Card (nach Card, vor SpawnBar) ────────────────
+const CardMemo = React.memo(Card, (prev, next) =>
+  prev.player === next.player &&
+  prev.aliveState[prev.player.id] === next.aliveState[next.player.id] &&
+  prev.groupRoles[prev.groupId] === next.groupRoles[next.groupId] &&
+  prev.canWrite === next.canWrite &&
+  prev.currentPlayerId === next.currentPlayerId &&
+  prev.spawnState[prev.player.id] === next.spawnState[next.player.id] &&
+  prev.groupColor === next.groupColor
+);
+
 // ─────────────────────────────────────────────────────────────
 // SPAWN BAR
 // ─────────────────────────────────────────────────────────────
@@ -1787,7 +1798,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
             )}
             {safeIds.map((pid) =>
               playersById[pid] ? (
-                <Card key={pid} player={playersById[pid]} aliveState={aliveState} currentPlayerId={currentPlayerId}
+                <CardMemo key={pid} player={playersById[pid]} aliveState={aliveState} currentPlayerId={currentPlayerId}
                   canWrite={canWrite} onToggleAlive={onToggleAlive} spawnGroups={spawnGroups}
                   spawnState={spawnState} onSetSpawn={onSetSpawn}
                   groupRoles={groupRoles} groupId={group.id} onSetRole={onSetRole}
@@ -1801,6 +1812,17 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
     </div>
   );
 }
+
+// ── Block 1b: React.memo für DroppableColumn ───────────────────────────────
+const DroppableColumnMemo = React.memo(DroppableColumn, (prev, next) =>
+  prev.group === next.group &&
+  prev.ids === next.ids &&
+  prev.aliveState === next.aliveState &&
+  prev.canWrite === next.canWrite &&
+  prev.groupRoles === next.groupRoles &&
+  prev.currentPlayerId === next.currentPlayerId &&
+  prev.spawnState === next.spawnState
+);
 
 // ─────────────────────────────────────────────────────────────
 // MAP NAV – Doppelklick zum Wechseln, Einfachklick nur Auswahl
@@ -4027,20 +4049,36 @@ function BoardApp() {
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
   const activeSystemIdRef = useRef(activeSystemId);
   const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
-  function toggleMinPanel(key: string) { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }
+  const toggleMinPanel = useCallback((key: string) => { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }, []);
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
-  const [localPanelPos, setLocalPanelPos] = useState<PanelLayout>({
-    nav:     { x: DEFAULT_PANEL_LAYOUT.nav.x,     y: DEFAULT_PANEL_LAYOUT.nav.y     },
-    placer:  { x: DEFAULT_PANEL_LAYOUT.placer.x,  y: DEFAULT_PANEL_LAYOUT.placer.y  },
-    toolbar: { x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 },
-    zoom:    { x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  },
-    notes:    { x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    },
-    logNotes: { x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false },
-    opLog:    { x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false },
-  });
+  // ── Block 5: Panel-State isoliert – jede Position eigener State ──
+  const [panelNav,      setPanelNav]      = useState({ x: DEFAULT_PANEL_LAYOUT.nav.x,    y: DEFAULT_PANEL_LAYOUT.nav.y    });
+  const [panelPlacer,   setPanelPlacer]   = useState({ x: DEFAULT_PANEL_LAYOUT.placer.x, y: DEFAULT_PANEL_LAYOUT.placer.y });
+  const [panelToolbar,  setPanelToolbar]  = useState({ x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 });
+  const [panelZoom,     setPanelZoom]     = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  });
+  const [panelNotes,    setPanelNotes]    = useState({ x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    });
+  const [panelLogNotes, setPanelLogNotes] = useState({ x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false });
+  const [panelOpLog,    setPanelOpLog]    = useState({ x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false });
+  // Backward-compat: localPanelPos als berechnetes Objekt für alle Stellen die es noch lesen
+  const localPanelPos = useMemo(() => ({
+    nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom,
+    notes: panelNotes, logNotes: panelLogNotes, opLog: panelOpLog,
+  }), [panelNav, panelPlacer, panelToolbar, panelZoom, panelNotes, panelLogNotes, panelOpLog]);
+  const setLocalPanelPos = (updater: (p: PanelLayout) => PanelLayout) => {
+    // Shim für alle Stellen die noch setLocalPanelPos nutzen (clamp-Effects etc.)
+    const cur: PanelLayout = { nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom, notes: panelNotes as any, logNotes: panelLogNotes as any, opLog: panelOpLog as any };
+    const next = updater(cur);
+    if (next.nav !== cur.nav) setPanelNav(next.nav);
+    if (next.placer !== cur.placer) setPanelPlacer(next.placer);
+    if (next.toolbar !== cur.toolbar) setPanelToolbar(next.toolbar);
+    if (next.zoom !== cur.zoom) setPanelZoom(next.zoom);
+    if (next.notes !== cur.notes) setPanelNotes(next.notes as any);
+    if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes as any);
+    if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog as any);
+  };
 
   // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
   // Dieser Clamp hält sie immer sichtbar.
@@ -4392,28 +4430,32 @@ poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
 const targetSystemId = activeSystemIdRef.current || activeSystemId;
+// ── Block 4: Refs sofort setzen (kein Re-render), dann State als Transition ──
 const activeTokens = tokensBySystemRef.current[targetSystemId] ?? [];
-setTokens(activeTokens);
 tokensRef.current = activeTokens;
 
 const activeOM = orderMarkersBySystemRef.current[targetSystemId] ?? [];
-setOrderMarkers(activeOM);
 orderMarkersRef.current = activeOM;
 
-setAliveState(data.aliveState ?? {});
-setSpawnState(data.spawnState ?? {});
-
 const activeMaps = normalizeMapsForSystem(targetSystemId, mapsBySystemRef.current[targetSystemId] ?? getDefaultMaps(targetSystemId));
-setMaps(activeMaps);
 mapsRef.current = activeMaps;
 
 const activePois = poisBySystemRef.current[targetSystemId] ?? [];
-setPois(activePois);
 poisRef.current = activePois;
 
 const activeDrawings = drawingsBySystemRef.current[targetSystemId] ?? {};
-setDrawings(activeDrawings);
 drawingsRef.current = activeDrawings;
+
+// Alle State-Updates gebatcht als niederprioritäre Transition → UI bleibt responsiv
+React.startTransition(() => {
+  setTokens(activeTokens);
+  setOrderMarkers(activeOM);
+  setAliveState(data.aliveState ?? {});
+  setSpawnState(data.spawnState ?? {});
+  setMaps(activeMaps);
+  setPois(activePois);
+  setDrawings(activeDrawings);
+});
 
 if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySystem && !data.orderMarkersBySystem && !data.drawingsBySystem) {
   setDoc(ref, {
@@ -4567,21 +4609,22 @@ aliveState: na, spawnState: ns,
     });
   }
 
-  function movePanelNav(x: number, y: number) {
-    setLocalPanelPos(p => ({ ...p, nav: { x, y } }));
-  }
+  // ── Block 2+5: stabile useCallback-Referenzen, direkte Setter ──
+  const movePanelNav = useCallback((x: number, y: number) => {
+    setPanelNav({ x, y });
+  }, []);
 
-  function movePanelPlacer(x: number, y: number) {
-    setLocalPanelPos(p => ({ ...p, placer: { x, y } }));
-  }
+  const movePanelPlacer = useCallback((x: number, y: number) => {
+    setPanelPlacer({ x, y });
+  }, []);
 
-  function movePanelToolbar(x: number, y: number) {
-    setLocalPanelPos(p => ({ ...p, toolbar: { x, y } }));
-  }
+  const movePanelToolbar = useCallback((x: number, y: number) => {
+    setPanelToolbar({ x, y });
+  }, []);
 
-  function movePanelZoom(x: number, y: number) {
-    setLocalPanelPos(p => ({ ...p, zoom: { x, y } }));
-  }
+  const movePanelZoom = useCallback((x: number, y: number) => {
+    setPanelZoom({ x, y });
+  }, []);
 
   // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
   useEffect(() => {
@@ -5714,9 +5757,9 @@ aliveState: na, spawnState: ns,
         </div>
       )}
 
-      {/* BOARD */}
-      {tab === "board" && (
-        <div className="flex-1 overflow-auto p-4">
+      {/* BOARD – Block 3: display:none statt Unmount */}
+      <div className="flex-1 overflow-auto p-4"
+        style={{ display: tab === "board" ? "block" : "none" }}>
           {/* System-Tabs */}
           <div className="flex items-center gap-2 mb-3">
             {systems.map((sys) => {
@@ -5791,7 +5834,7 @@ aliveState: na, spawnState: ns,
               <SortableContext items={tacticalGroups.map((g) => g.id)} strategy={rectSortingStrategy}>
                 <div className="flex flex-wrap gap-3 flex-1 items-start">
                   {tacticalGroups.map((g) => (
-                    <DroppableColumn key={g.id} group={g} ids={board.columns[g.id] ?? []}
+                    <DroppableColumnMemo key={g.id} group={g} ids={board.columns[g.id] ?? []}
                       playersById={playersById} aliveState={aliveState} currentPlayerId={currentPlayer.id}
                       canWrite={canWrite} onToggleAlive={toggleAlive} onRename={renameGroup}
                       onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
@@ -5815,7 +5858,6 @@ aliveState: na, spawnState: ns,
             </div>
           </DndContext>
           </div>
-        )}
 
       {/* Floating Panels – sichtbar auf Board UND Karte */}
       {notesVisible && (
@@ -5869,9 +5911,9 @@ aliveState: na, spawnState: ns,
         />
       )}
 
-      {/* MAP */}
-      {tab === "map" && (
-        <div className="flex-1 relative flex flex-col">
+      {/* MAP – Block 3: display:none statt Unmount */}
+      <div className="flex-1 relative flex flex-col"
+        style={{ display: tab === "map" ? "flex" : "none" }}>
           {/* System-Tabs auf der Karte */}
           <div className="flex items-center gap-2 px-4 py-2 bg-gray-950 border-b border-gray-800 flex-shrink-0 z-30">
             {systems.map((sys) => {
@@ -5979,7 +6021,6 @@ aliveState: na, spawnState: ns,
 
           </div>
         </div>
-      )}
 
     </div>
   );
