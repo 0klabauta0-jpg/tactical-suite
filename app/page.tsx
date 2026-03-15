@@ -3291,7 +3291,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           return (
             <div key={m.id}
               className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdminProp ? "cursor-move" : "cursor-pointer"}`}
-              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-100%) scale(${1/scale})`, transformOrigin: "center bottom" }}
+              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-100%) scale(${Math.min(1, 1/scale)})`, transformOrigin: "center bottom" }}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 if (isAdminProp) {
@@ -3377,7 +3377,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               className={`absolute z-10 flex flex-col items-center select-none ${
                 canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
               } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
-              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: `translate(-50%,-50%) scale(${1/scale})`, transformOrigin: "center center" }}
+              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: `translate(-50%,-50%) scale(${Math.min(1, 1/scale)})`, transformOrigin: "center center" }}
               onPointerDown={(e) => {
                 if (!canWriteTokens) return;
                 // Kein Drag starten wenn auf ✕ geklickt
@@ -3396,15 +3396,15 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
               {/* Token-Pille */}
               <div className="relative">
-                <div className={`px-3 py-1 rounded-full border-2 shadow-lg whitespace-nowrap`}
+                <div className={`px-2 py-0.5 rounded-full border-2 shadow-lg whitespace-nowrap`}
                   style={{
                     backgroundColor: tokenDrag === tokenKey ? "#eab308" : color,
                     borderColor: tokenDrag === tokenKey ? "#fde047" : "white",
                     color: tokenDrag === tokenKey ? "black" : "white",
                   }}>
-                  {g?.icon && <GroupIconDisplay icon={g.icon} size={16} />}
-                  <span className="font-bold text-sm">{g?.label ?? t.groupId}</span>
-                  <span className="ml-1.5 text-xs font-normal opacity-80">{count}</span>
+                  {g?.icon && <GroupIconDisplay icon={g.icon} size={12} />}
+                  <span className="font-bold text-xs">{g?.label ?? t.groupId}</span>
+                  <span className="ml-1 text-[10px] font-normal opacity-80">{count}</span>
                 </div>
                 {/* ✕ Entfernen-Button – erscheint beim Hovern für Admin/Commander */}
                 {canWriteTokens && isHovered && !tokenDrag && (
@@ -3465,7 +3465,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 className={`absolute z-10 flex flex-col items-center select-none ${
                   canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default"
                 } ${orderMarkerDrag === m.groupId ? "scale-110" : ""}`}
-                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-50%) scale(${1/scale})`, transformOrigin: "center center" }}
+                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-50%) scale(${Math.min(1, 1/scale)})`, transformOrigin: "center center" }}
                 onPointerDown={(e) => {
                   if (!canWriteTokens) return;
                   if ((e.target as HTMLElement).dataset.removeBtn) return;
