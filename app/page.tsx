@@ -3291,7 +3291,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           return (
             <div key={m.id}
               className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdminProp ? "cursor-move" : "cursor-pointer"}`}
-              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%,-100%)" }}
+              style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-100%) scale(${1/scale})`, transformOrigin: "center bottom" }}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 if (isAdminProp) {
@@ -3377,7 +3377,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
               className={`absolute z-10 flex flex-col items-center select-none ${
                 canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"
               } ${tokenDrag === tokenKey ? "scale-110" : ""}`}
-              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: "translate(-50%,-50%)" }}
+              style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%`, transform: `translate(-50%,-50%) scale(${1/scale})`, transformOrigin: "center center" }}
               onPointerDown={(e) => {
                 if (!canWriteTokens) return;
                 // Kein Drag starten wenn auf ✕ geklickt
@@ -3465,7 +3465,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 className={`absolute z-10 flex flex-col items-center select-none ${
                   canWriteTokens ? "cursor-grab active:cursor-grabbing" : "cursor-default"
                 } ${orderMarkerDrag === m.groupId ? "scale-110" : ""}`}
-                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: "translate(-50%, -50%)" }}
+                style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-50%) scale(${1/scale})`, transformOrigin: "center center" }}
                 onPointerDown={(e) => {
                   if (!canWriteTokens) return;
                   if ((e.target as HTMLElement).dataset.removeBtn) return;
