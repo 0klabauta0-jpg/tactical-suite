@@ -4659,36 +4659,32 @@ aliveState: na, spawnState: ns,
   const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const movePanelNotes = useCallback((x: number, y: number) => {
-    setLocalPanelPos(p => {
-      const n = p.notes;
-      const pos = clampPanelPosition(x, y, n.w, n.h);
-      return { ...p, notes: { ...n, ...pos } };
+    setPanelNotes(n => {
+      const pos = clampPanelPosition(x, y, (n as any).w, (n as any).h);
+      return { ...n, ...pos };
     });
   }, []);
 
   const resizePanelNotes = useCallback((w: number, h: number) => {
-    setLocalPanelPos(p => {
-      const n = p.notes;
-      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
-      const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
-      return { ...p, notes: { ...n, ...size, ...pos } };
+    setPanelNotes(n => {
+      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, (n as any).x, (n as any).y);
+      const pos  = clampPanelPosition((n as any).x, (n as any).y, size.w, size.h);
+      return { ...n, ...size, ...pos };
     });
   }, []);
 
   const movePanelLogNotes = useCallback((x: number, y: number) => {
-    setLocalPanelPos(p => {
-      const ln = p.logNotes;
-      const pos = clampPanelPosition(x, y, ln.w, ln.h);
-      return { ...p, logNotes: { ...ln, ...pos } };
+    setPanelLogNotes(ln => {
+      const pos = clampPanelPosition(x, y, (ln as any).w, (ln as any).h);
+      return { ...ln, ...pos };
     });
   }, []);
 
   const resizePanelLogNotes = useCallback((w: number, h: number) => {
-    setLocalPanelPos(p => {
-      const ln = p.logNotes;
-      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
-      const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
-      return { ...p, logNotes: { ...ln, ...size, ...pos } };
+    setPanelLogNotes(ln => {
+      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, (ln as any).x, (ln as any).y);
+      const pos  = clampPanelPosition((ln as any).x, (ln as any).y, size.w, size.h);
+      return { ...ln, ...size, ...pos };
     });
   }, []);
 
@@ -4697,19 +4693,17 @@ aliveState: na, spawnState: ns,
   }
 
   const movePanelOpLog = useCallback((x: number, y: number) => {
-    setLocalPanelPos(p => {
-      const ol = p.opLog;
-      const pos = clampPanelPosition(x, y, ol.w, ol.h);
-      return { ...p, opLog: { ...ol, ...pos } };
+    setPanelOpLog(ol => {
+      const pos = clampPanelPosition(x, y, (ol as any).w, (ol as any).h);
+      return { ...ol, ...pos };
     });
   }, []);
 
   const resizePanelOpLog = useCallback((w: number, h: number) => {
-    setLocalPanelPos(p => {
-      const ol = p.opLog;
-      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, ol.x, ol.y);
-      const pos  = clampPanelPosition(ol.x, ol.y, size.w, size.h);
-      return { ...p, opLog: { ...ol, ...size, ...pos } };
+    setPanelOpLog(ol => {
+      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, (ol as any).x, (ol as any).y);
+      const pos  = clampPanelPosition((ol as any).x, (ol as any).y, size.w, size.h);
+      return { ...ol, ...size, ...pos };
     });
   }, []);
 
