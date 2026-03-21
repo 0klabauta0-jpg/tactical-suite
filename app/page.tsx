@@ -1035,9 +1035,26 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       try {
         await signInWithEmailAndPassword(auth, email, pw);
       } catch (signInErr: any) {
-        if (signInErr?.code === "auth/user-not-found") {
-          await createUserWithEmailAndPassword(auth, email, pw);
-        } else { throw signInErr; }
+        const code: string = signInErr?.code ?? "";
+        const isNoAccount =
+          code === "auth/user-not-found" ||
+          code === "auth/invalid-credential" ||
+          code === "auth/invalid-login-credentials";
+        if (isNoAccount) {
+          try {
+            await createUserWithEmailAndPassword(auth, email, pw);
+          } catch (createErr: any) {
+            if (createErr?.code === "auth/email-already-in-use") {
+              setMsg("Account existiert bereits mit anderem Passwort. Bitte einen Admin kontaktieren.");
+              setLoading(false);
+              return;
+            } else {
+              throw createErr;
+            }
+          }
+        } else {
+          throw signInErr;
+        }
       }
 
       // (kein Self-Registration mehr – newPlayerData ist immer null)
