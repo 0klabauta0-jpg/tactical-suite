@@ -10,9 +10,9 @@ export function buildRockbreakerEntryUpdate(currentMetadata: unknown): Rockbreak
     troopEntry: {
       slots: DEFAULT_ROCKBREAKER_ENTRY.slots.map((slot) => ({
         ...slot,
-        anchor: slot.anchor.kind === "beltPlane"
-          ? { kind: "beltPlane" as const }
-          : { ...slot.anchor, local: [...slot.anchor.local] },
+        anchor: slot.anchor.kind === "asteroid"
+          ? { ...slot.anchor, local: [...slot.anchor.local] }
+          : { ...slot.anchor },
       })),
     },
   };

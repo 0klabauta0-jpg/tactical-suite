@@ -46,10 +46,16 @@ export function clampCanvasPoint(
   };
 }
 
+function isCoordinateRecord(
+  position: Vec3 | Pick<WorldPoint, "x" | "y" | "z">,
+): position is Pick<WorldPoint, "x" | "y" | "z"> {
+  return !Array.isArray(position) && "x" in position && "y" in position && "z" in position;
+}
+
 function vector(position: Vec3 | Pick<WorldPoint, "x" | "y" | "z">): Vec3 {
-  return Array.isArray(position)
-    ? position as Vec3
-    : [position.x, position.y, position.z];
+  return isCoordinateRecord(position)
+    ? [position.x, position.y, position.z]
+    : position;
 }
 
 export function clampRockbreakerPosition(position: Vec3 | Pick<WorldPoint, "x" | "y" | "z">): Vec3 {
