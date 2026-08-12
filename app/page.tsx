@@ -15,6 +15,8 @@ import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { buildRoomTemplateCopy } from "@/lib/rooms/template";
 import { getErrorMessage } from "@/lib/error-details";
 import { loginToRoom } from "@/lib/auth/room-login-client";
+import { changePlayerStatusClient } from "@/lib/player-status/client";
+import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
 import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
 import {
@@ -3726,6 +3728,9 @@ function BoardApp() {
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
   const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
+  const [, setPlayerStatuses] = useState<Record<string, PlayerStatus>>({});
+  const playerStatusesRef = useRef<Record<string, PlayerStatus>>({});
+  const [pendingStatusPlayers, setPendingStatusPlayers] = useState<Set<string>>(() => new Set());
   const [maps, setMaps] = useState<MapEntry[]>(getDefaultMaps("pyro"));
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
@@ -4161,12 +4166,21 @@ poisRef.current = activePois;
 const activeDrawings = drawingsBySystemRef.current[targetSystemId] ?? {};
 drawingsRef.current = activeDrawings;
 
+const legacyAliveState = parseAliveState(data.aliveState);
+const legacySpawnState = parseSpawnState(data.spawnState);
+for (const status of Object.values(playerStatusesRef.current)) {
+  legacyAliveState[status.playerId] = status.aliveStatus;
+  if (status.spawnGroupId) legacySpawnState[status.playerId] = status.spawnGroupId;
+}
+aliveRef.current = legacyAliveState;
+spawnRef.current = legacySpawnState;
+
 // Alle State-Updates gebatcht als niederprioritäre Transition → UI bleibt responsiv
 React.startTransition(() => {
   setTokens(activeTokens);
   setOrderMarkers(activeOM);
-  setAliveState(parseAliveState(data.aliveState));
-  setSpawnState(parseSpawnState(data.spawnState));
+  setAliveState(legacyAliveState);
+  setSpawnState(legacySpawnState);
   setMaps(activeMaps);
   setPois(activePois);
   setDrawings(activeDrawings);
@@ -4206,6 +4220,34 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
     return () => unsub();
   }, [user, roomId]);
 
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(collection(db, "rooms", roomId, "playerStatus"), (snapshot) => {
+      const next: Record<string, PlayerStatus> = {};
+      for (const statusDocument of snapshot.docs) {
+        const status = parsePlayerStatus(statusDocument.data());
+        if (status) next[status.playerId] = status;
+      }
+      playerStatusesRef.current = next;
+      setPlayerStatuses(next);
+      setAliveState((current) => {
+        const merged = { ...current };
+        for (const status of Object.values(next)) merged[status.playerId] = status.aliveStatus;
+        aliveRef.current = merged;
+        return merged;
+      });
+      setSpawnState((current) => {
+        const merged = { ...current };
+        for (const status of Object.values(next)) {
+          if (status.spawnGroupId) merged[status.playerId] = status.spawnGroupId;
+        }
+        spawnRef.current = merged;
+        return merged;
+      });
+    });
+    return () => unsubscribe();
+  }, [user, roomId]);
+
   // writes
 async function pushTokensOnly(nt: Token[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
@@ -4238,6 +4280,8 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
 
   async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
     nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
+    void na;
+    void ns;
     const sysId = visibleSystemIdRef.current;
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), stripUndefined({
@@ -4247,7 +4291,6 @@ mapsBySystem: { ...mapsBySystemRef.current, [sysId]: nm },
 poisBySystem: { ...poisBySystemRef.current, [sysId]: np },
 orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [sysId]: orderMarkersRef.current },
 drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current },
-aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
         systemNotesTexts: systemNotesRef.current,
@@ -4485,16 +4528,6 @@ aliveState: na, spawnState: ns,
     pending[key] = { timer, entry, prevX: startX, prevY: startY, minDist,
       startX, startY };
   }
-
-
-
-  // Immediate (no timer) op-log write – for deaths/respawns
-  function logOpImmediate(entry: OpLogEntry) {
-    if (!opLogActiveRef.current) return;
-    const next = [...opLogRef.current, entry];
-    pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
-  }
-
   function handleClearOpLog() {
     if (!isAdmin) return;
     // Cancel all pending timers
@@ -4564,47 +4597,78 @@ aliveState: na, spawnState: ns,
     setDoc(doc(db, "rooms", roomId, "state", "board"), { systemNotesTexts: next, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
   }
 
-  function toggleAlive(playerId: string) {
-    if (!currentPlayer) return;
+  async function requestPlayerStatusChange(playerId: string, action: PlayerStatusAction) {
+    if (!user || !currentPlayer || pendingStatusPlayers.has(playerId)) return;
     if (playerId !== currentPlayer.id && !canWrite) return;
-    setAliveState((prev) => {
-      const wasDead = prev[playerId] === "dead";
-      const next = { ...prev, [playerId]: wasDead ? "alive" : "dead" } as PlayerAliveState;
-      let nextBoard = boardRef.current;
-      if (!wasDead) {
-        const targetSpawnId = spawnRef.current[playerId];
-        const targetSpawn = targetSpawnId ? nextBoard.groups.find((g) => g.id === targetSpawnId) : nextBoard.groups.find((g) => g.isSpawn);
-        if (targetSpawn) {
-          const newCols = { ...nextBoard.columns };
-          for (const gId of Object.keys(newCols)) newCols[gId] = (newCols[gId] ?? []).filter((id) => id !== playerId);
-          newCols[targetSpawn.id] = [playerId, ...(newCols[targetSpawn.id] ?? [])];
-          nextBoard = { ...nextBoard, columns: newCols };
-          setBoard(nextBoard); boardRef.current = nextBoard;
-        }
+    const previousAlive = aliveRef.current[playerId] ?? "alive";
+    const previousSpawn = spawnRef.current[playerId];
+    setPendingStatusPlayers((current) => new Set(current).add(playerId));
+
+    if (action.type === "LIVE" || action.type === "RESPAWN") {
+      const optimistic = { ...aliveRef.current, [playerId]: "alive" as const };
+      aliveRef.current = optimistic;
+      setAliveState(optimistic);
+    } else if (action.type === "TOT") {
+      const optimistic = { ...aliveRef.current, [playerId]: "dead" as const };
+      aliveRef.current = optimistic;
+      setAliveState(optimistic);
+    }
+    if ("spawnGroupId" in action) {
+      const optimistic = { ...spawnRef.current, [playerId]: action.spawnGroupId };
+      spawnRef.current = optimistic;
+      setSpawnState(optimistic);
+    }
+
+    try {
+      const status = await changePlayerStatusClient({
+        roomId,
+        playerId,
+        action,
+        expectedRevision: playerStatusesRef.current[playerId]?.revision ?? 0,
+        getIdToken: () => user.getIdToken(),
+      });
+      playerStatusesRef.current = { ...playerStatusesRef.current, [playerId]: status };
+      setPlayerStatuses(playerStatusesRef.current);
+      const nextAlive = { ...aliveRef.current, [playerId]: status.aliveStatus };
+      aliveRef.current = nextAlive;
+      setAliveState(nextAlive);
+      if (status.spawnGroupId) {
+        const nextSpawn = { ...spawnRef.current, [playerId]: status.spawnGroupId };
+        spawnRef.current = nextSpawn;
+        setSpawnState(nextSpawn);
       }
-      pushAll(nextBoard, tokensRef.current, next, spawnRef.current, mapsRef.current, poisRef.current);
-      // ── Op-Log: sofort (kein Timer) ──────────────────────────
-      const targetPlayer = playersById[playerId];
-      const playerName = targetPlayer?.name ?? playerId;
-      const actorName = currentPlayer?.name ?? "?";
-      // Find player's current group for system context
-      const playerGroup = nextBoard.groups.find((g) => (nextBoard.columns[g.id] ?? []).includes(playerId));
-      const sysId = playerGroup?.systemId ?? visibleSystemIdRef.current;
-      if (wasDead) {
-        logOpImmediate({ ts: Date.now(), actor: actorName, type: "respawn",
-          text: `${playerName}  ✓ respawnt`, systemId: sysId });
-      } else {
-        logOpImmediate({ ts: Date.now(), actor: actorName, type: "alive",
-          text: `${playerName}  ☠ gefallen`, systemId: sysId });
-      }
-      return next;
-    });
+    } catch (error) {
+      const rollbackAlive = { ...aliveRef.current, [playerId]: previousAlive };
+      aliveRef.current = rollbackAlive;
+      setAliveState(rollbackAlive);
+      const rollbackSpawn = { ...spawnRef.current };
+      if (previousSpawn) rollbackSpawn[playerId] = previousSpawn;
+      else delete rollbackSpawn[playerId];
+      spawnRef.current = rollbackSpawn;
+      setSpawnState(rollbackSpawn);
+      setPlayerToast(getErrorMessage(error, "Status konnte nicht gespeichert werden."));
+    } finally {
+      setPendingStatusPlayers((current) => {
+        const next = new Set(current);
+        next.delete(playerId);
+        return next;
+      });
+    }
+  }
+
+  function toggleAlive(playerId: string) {
+    const wasDead = aliveRef.current[playerId] === "dead";
+    const spawnGroupId = spawnRef.current[playerId];
+    const action: PlayerStatusAction = wasDead && spawnGroupId
+      ? { type: "RESPAWN", spawnGroupId }
+      : wasDead
+        ? { type: "LIVE" }
+        : { type: "TOT" };
+    void requestPlayerStatusChange(playerId, action);
   }
 
   function setSpawn(playerId: string, spawnId: string) {
-    const next = { ...spawnRef.current, [playerId]: spawnId };
-    setSpawnState(next); spawnRef.current = next;
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, next, mapsRef.current, poisRef.current);
+    void requestPlayerStatusChange(playerId, { type: "SET_SPAWN", spawnGroupId: spawnId });
   }
 
   function addGroup(isSpawn = false, systemId = "pyro") {
@@ -5372,9 +5436,10 @@ aliveState: na, spawnState: ns,
                 selfAlive === "dead"
                   ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
                   : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
-              }`}
+              } disabled:cursor-wait disabled:opacity-60`}
+              disabled={pendingStatusPlayers.has(currentPlayer.id)}
               onClick={() => toggleAlive(currentPlayer.id)}>
-              {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
+              {pendingStatusPlayers.has(currentPlayer.id) ? "… SPEICHERT" : selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
             </button>
           </div>
 
