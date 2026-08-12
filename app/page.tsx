@@ -15,6 +15,14 @@ import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { buildRoomTemplateCopy } from "@/lib/rooms/template";
 import { getErrorMessage } from "@/lib/error-details";
 import { loginToRoom } from "@/lib/auth/room-login-client";
+import { MapControlDock } from "@/app/components/map/map-control-dock";
+import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
+import {
+  DEFAULT_MAP_UI_PREFERENCES,
+  loadMapUiPreferences,
+  saveMapUiPreferences,
+  type MapUiPreferences,
+} from "@/lib/map/ui-preferences";
 import { zoomIn, zoomOut } from "@/lib/map/zoom";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
@@ -218,14 +226,7 @@ type DrawText = {
   x: number; y: number;
   text: string; color: string; size: number;
 };
-type DrawMarker = {
-  id: string; type: "marker";
-  kind: "infantry" | "ground" | "air";
-  x: number; y: number;
-  color: string;
-  opacity: number;      // 0.0 – 1.0, startet bei 1.0
-  createdAt: number;    // Date.now()
-};
+type DrawMarker = EnemyMarker;
 type DrawElement = DrawStroke | DrawText | DrawLine | DrawMarker;
 type DrawingsMap = Record<string, DrawElement[]>;
 
@@ -1108,84 +1109,6 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
 }
 
 // ─────────────────────────────────────────────────────────────
-// DRAGGABLE PANEL
-// ─────────────────────────────────────────────────────────────
-
-function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 180, defaultHeight = 0 }: {
-  title: string; tooltip?: string; x: number; y: number; onMove: (x: number, y: number) => void;
-  canDrag: boolean; children: React.ReactNode; minWidth?: number; defaultHeight?: number;
-}) {
-  const dragging = useRef(false);
-  const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-  const resizing = useRef(false);
-  const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
-  const [size, setSize] = useState({ w: minWidth, h: defaultHeight }); // h=0 = auto
-  const [minimized, setMinimized] = useState(false);
-  const MIN_W = minWidth;
-  const MIN_H = 80;
-
-  function onHeaderDown(e: React.PointerEvent) {
-    dragging.current = true;
-    start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault();
-  }
-  function onHeaderMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
-        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
-      );
-  }
-  function onHeaderUp() { dragging.current = false; }
-
-  function onResizeDown(e: React.PointerEvent) {
-    resizing.current = true;
-    resizeStart.current = { mx: e.clientX, my: e.clientY, pw: size.w, ph: size.h || 200 };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.stopPropagation(); e.preventDefault();
-  }
-  function onResizeMove(e: React.PointerEvent) {
-    if (!resizing.current) return;
-    setSize({
-      w: Math.max(MIN_W, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
-      h: Math.max(MIN_H, resizeStart.current.ph + e.clientY - resizeStart.current.my),
-    });
-  }
-  function onResizeUp() { resizing.current = false; }
-
-  return (
-    <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: size.w, height: minimized ? "auto" : (size.h > 0 ? size.h : undefined), minWidth: MIN_W }}>
-      <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none flex-shrink-0 ${canDrag ? "cursor-move" : "cursor-default"}`}
-        onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
-        {canDrag && <span className="text-gray-500 text-xs">⠿</span>}
-        <span className="text-xs font-semibold text-gray-300 flex-1">{title}</span>
-        {tooltip && <HelpTip text={tooltip} />}
-        <button className="text-gray-500 hover:text-gray-300 text-xs px-1 ml-1"
-          onPointerDown={e => e.stopPropagation()}
-          onClick={() => setMinimized(v => !v)}>{minimized ? "□" : "─"}</button>
-      </div>
-      {!minimized && (
-        <div className="p-2 overflow-y-auto overflow-x-hidden flex-1"
-          style={{ scrollbarWidth: "thin", scrollbarColor: "#4B5563 transparent" }}>
-          {children}
-        </div>
-      )}
-      {/* Resize handle */}
-      {!minimized && (
-        <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none flex-shrink-0"
-          onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
-          </svg>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
 // DRAG HANDLE (9-dot SVG)
 // ─────────────────────────────────────────────────────────────
 function DragHandle({ listeners, attributes }: { listeners?: object; attributes?: object }) {
@@ -1979,35 +1902,16 @@ function HelpTip({ text }: { text: string }) {
 
 function DrawingToolbar({
   tool, setTool, color, setColor, width, setWidth, canDraw,
-  onUndo, onClear, x, y, onMove, showGrid, onToggleGrid,
+  onUndo, onClear,
 }: {
   tool: DrawTool; setTool: (t: DrawTool) => void;
   color: string; setColor: (c: string) => void;
   width: number; setWidth: (w: number) => void;
   canDraw: boolean; onUndo: () => void; onClear: () => void;
-  x: number; y: number; onMove: (x: number, y: number) => void;
-  showGrid: boolean; onToggleGrid: () => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
-  const dragging = useRef(false);
-  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
 
   if (!canDraw) return null;
-
-  function onHandleDown(e: React.PointerEvent) {
-    dragging.current = true;
-    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault(); e.stopPropagation();
-  }
-  function onHandleMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
-      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
-    );
-  }
-  function onHandleUp() { dragging.current = false; }
 
   const tools: { id: DrawTool; icon: string; title: string }[] = [
     { id: "pointer",          icon: "↖",  title: "Zeiger (normal)" },
@@ -2025,22 +1929,16 @@ function DrawingToolbar({
 
   return (
     <div
-      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
-      style={{ left: x, top: y, minWidth: 176 }}
+      className="select-none"
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Drag Handle */}
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
-        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
-      >
-        <span className="text-gray-500 text-xs">⠿</span>
-        <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
-        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: Klicken, alle 30s blasser, löscht sich automatisch"} />
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-xs font-semibold text-gray-300">Werkzeuge</span>
+        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: bleibt sichtbar, bis er manuell gelöscht wird"} />
       </div>
 
       <div className="flex flex-col gap-2 p-2">
-        {/* Tools + Grid */}
+        {/* Tools */}
         <div className="flex gap-1 flex-wrap">
           {tools.map((t) => (
             <button key={t.id} title={t.title} onClick={() => setTool(t.id)}
@@ -2050,12 +1948,6 @@ function DrawingToolbar({
               {t.icon}
             </button>
           ))}
-          <button title="Gitternetz ein/aus" onClick={onToggleGrid}
-            className={`w-8 h-8 rounded-lg text-xs font-bold border transition-colors ${
-              showGrid ? "bg-green-700 border-green-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700"
-            }`}>
-            ⊞
-          </button>
         </div>
 
         {/* Farben */}
@@ -2084,7 +1976,7 @@ function DrawingToolbar({
 
         {/* Feindmarker */}
         <div className="border-t border-gray-700 pt-1.5">
-          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (fade)</div>
+          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (dauerhaft)</div>
           <div className="flex gap-1">
             {markerTools.map((m) => (
               <button key={m.id} title={m.title} onClick={() => setTool(m.id)}
@@ -2138,12 +2030,12 @@ function DrawingToolbar({
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements, tool, color, strokeWidth, canDraw, showGrid, markerTick,
+  elements, tool, color, strokeWidth, canDraw, showGrid,
   onAddElement, onRemoveElement, onUpdateElement, onResetTool,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
-  canDraw: boolean; showGrid: boolean; markerTick?: number;
+  canDraw: boolean; showGrid: boolean;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
   onUpdateElement: (el: DrawElement) => void;
@@ -2168,6 +2060,13 @@ function DrawingLayer({
   const [textVal, setTextVal] = useState("");
   const textRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
+  const hasEnemyMarkers = elements.some((element) => element.type === "marker");
+  const [markerNow, setMarkerNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasEnemyMarkers) return;
+    const timer = window.setInterval(() => setMarkerNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasEnemyMarkers]);
 
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
@@ -2248,19 +2147,21 @@ function DrawingLayer({
         ctx.textBaseline = "hanging";
         ctx.fillText(el.text, el.x * W, el.y * H);
       } else if (el.type === "marker") {
-        const cx = el.x * W;
-        const cy = el.y * H;
+        const marker = normalizeEnemyMarker(el);
+        if (!marker) continue;
+        const cx = marker.x * W;
+        const cy = marker.y * H;
         const sz = 18; // Radius des Symbols in px
         ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity));
-        ctx.strokeStyle = el.color;
-        ctx.fillStyle = el.color;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = marker.color;
+        ctx.fillStyle = marker.color;
         ctx.lineWidth = 2.5;
         ctx.font = `bold ${sz}px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        if (el.kind === "infantry") {
+        if (marker.kind === "infantry") {
           // Infantrie: Kreuz (✖) in Kreis
           ctx.beginPath();
           ctx.arc(cx, cy, sz * 0.85, 0, Math.PI * 2);
@@ -2270,7 +2171,7 @@ function DrawingLayer({
           ctx.lineWidth = 2.5;
           ctx.beginPath(); ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d); ctx.stroke();
           ctx.beginPath(); ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d); ctx.stroke();
-        } else if (el.kind === "ground") {
+        } else if (marker.kind === "ground") {
           // Boden: gefülltes Dreieck (▼)
           ctx.beginPath();
           ctx.moveTo(cx, cy + sz * 0.9);
@@ -2280,7 +2181,7 @@ function DrawingLayer({
           ctx.stroke();
           // Querbalken oben
           ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy - sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy - sz * 0.55); ctx.stroke();
-        } else if (el.kind === "air") {
+        } else if (marker.kind === "air") {
           // Luft: Dreieck (^) mit Flügeln (NATO-Luftzeichen)
           ctx.beginPath();
           ctx.moveTo(cx, cy - sz * 0.9);
@@ -2297,10 +2198,8 @@ function DrawingLayer({
         ctx.font = `bold 9px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const kindLabel = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
-        const ageMs = Date.now() - (el.createdAt ?? Date.now());
-        const ageMins = Math.floor(ageMs / 60000);
-        const timeLabel = ageMins < 1 ? "<1m" : ageMins < 60 ? `${ageMins}m` : `${Math.floor(ageMins/60)}h${ageMins%60 > 0 ? ageMins%60+"m" : ""}`;
+        const kindLabel = marker.kind === "infantry" ? "INF" : marker.kind === "ground" ? "BDN" : "LUFT";
+        const timeLabel = enemyMarkerAgeLabel(marker.createdAt, markerNow);
         ctx.fillText(`${kindLabel} ${timeLabel}`, cx, cy + sz + 2);
         ctx.restore();
       }
@@ -2331,7 +2230,7 @@ function DrawingLayer({
   }
 
   // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerNow]);
 
   // Canvas-Größe an Bild anpassen – wir verwenden offsetWidth/offsetHeight
   // (die CSS-Größe des Elements VOR dem äußeren CSS-transform/scale),
@@ -2357,7 +2256,7 @@ function DrawingLayer({
     ro.observe(img);
     syncCanvasSize();
     return () => ro.disconnect();
-  }, [elements, showGrid, markerTick]);
+  }, [elements, showGrid, markerNow]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDraw || tool === "pointer") return;
@@ -2741,7 +2640,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
-  showGrid, onScaleChange, markerTick,
+  showGrid, onScaleChange,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -2764,7 +2663,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onRemoveDrawElement: (id: string) => void;
   onUpdateDrawElement: (el: DrawElement) => void;
   showGrid: boolean;
-  markerTick?: number;
   onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -3066,7 +2964,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           strokeWidth={drawWidth}
           canDraw={canDraw}
           showGrid={showGrid}
-          markerTick={markerTick}
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
           onUpdateElement={onUpdateDrawElement}
@@ -3935,9 +3832,24 @@ function BoardApp() {
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const logEntriesRef = useRef<LogEntry[]>([]);
   const [notesVisible, setNotesVisible] = useState(true);
-  const [showToolbar,  setShowToolbar]  = useState(true);
-  const [showNav,      setShowNav]      = useState(true);
-  const [showPlacer,   setShowPlacer]   = useState(true);
+  const [mapUiPreferences, setMapUiPreferences] = useState<MapUiPreferences>(DEFAULT_MAP_UI_PREFERENCES);
+  const loadedMapUiKey = useRef<string | null>(null);
+  const mapUiStorageKey = currentPlayer ? `klabscom:map-ui:${roomId}:${currentPlayer.id}` : null;
+
+  useEffect(() => {
+    if (!mapUiStorageKey) {
+      loadedMapUiKey.current = null;
+      setMapUiPreferences(DEFAULT_MAP_UI_PREFERENCES);
+      return;
+    }
+    setMapUiPreferences(loadMapUiPreferences(window.localStorage, mapUiStorageKey));
+    loadedMapUiKey.current = mapUiStorageKey;
+  }, [mapUiStorageKey]);
+
+  useEffect(() => {
+    if (!mapUiStorageKey || loadedMapUiKey.current !== mapUiStorageKey) return;
+    saveMapUiPreferences(window.localStorage, mapUiStorageKey, mapUiPreferences);
+  }, [mapUiPreferences, mapUiStorageKey]);
 
   // ── Op-Log state ────────────────────────────────────────────────────
   const [opLogEntries, setOpLogEntries] = useState<OpLogEntry[]>([]);
@@ -3953,7 +3865,7 @@ function BoardApp() {
   const [drawColor, setDrawColor] = useState("#ffffff");
   const [drawWidth, setDrawWidth] = useState(4);
   const drawingsRef = useRef<DrawingsMap>({});
-  const [showGrid, setShowGrid] = useState(false);
+  const showGrid = mapUiPreferences.showGrid;
 
   // Sheet-Refresh state
   const [refreshingPlayers, setRefreshingPlayers] = useState(false);
@@ -4416,18 +4328,6 @@ aliveState: na, spawnState: ns,
   }
 
   // ── Block 2+5: stabile useCallback-Referenzen, direkte Setter ──
-  const movePanelNav = useCallback((x: number, y: number) => {
-    setPanelNav({ x, y });
-  }, []);
-
-  const movePanelPlacer = useCallback((x: number, y: number) => {
-    setPanelPlacer({ x, y });
-  }, []);
-
-  const movePanelToolbar = useCallback((x: number, y: number) => {
-    setPanelToolbar({ x, y });
-  }, []);
-
   // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
   useEffect(() => {
     function reclamp() {
@@ -5130,13 +5030,6 @@ aliveState: na, spawnState: ns,
     }, 300);
   }
 
-  // ── Feindmarker Timestamp-Tick: alle 60s neu rendern (kein Fade, kein Löschen) ──
-  const [markerTick, setMarkerTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setMarkerTick((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
   function addDrawElement(el: DrawElement) {
     if (!canWrite) return;
     setDrawings((prev) => {
@@ -5461,10 +5354,6 @@ aliveState: na, spawnState: ns,
             {[
               { key: "lognotes", icon: "📟", title: "Log-Notizen",   show: localPanelPos.logNotes.visible, toggle: toggleLogNotesVisible,          active: "bg-blue-900 border-blue-600 text-blue-200" },
               { key: "oplog",    icon: "🗒",  title: `Op-Log${opLogActive ? " ▶" : ""}`, show: localPanelPos.opLog.visible, toggle: toggleOpLogVisible, active: "bg-purple-900 border-purple-600 text-purple-200" },
-              { key: "toolbar",  icon: "✏",  title: "Zeichnen",      show: showToolbar,  toggle: () => setShowToolbar(v => !v),  active: "bg-orange-900 border-orange-600 text-orange-200" },
-
-              { key: "nav",      icon: "🗺", title: "Karten",        show: showNav,      toggle: () => setShowNav(v => !v),      active: "bg-teal-900 border-teal-600 text-teal-200" },
-              { key: "placer",   icon: "⬡",  title: "Token setzen",  show: showPlacer,   toggle: () => setShowPlacer(v => !v),   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
             ].map(({ key, icon, title, show, toggle, active }) => (
               <button key={key}
                 className={`w-7 h-7 rounded-full border text-xs flex items-center justify-center transition-colors flex-shrink-0 ${show ? active : "border-gray-700 text-gray-600 hover:text-gray-300 hover:border-gray-500"}`}
@@ -5739,7 +5628,6 @@ aliveState: na, spawnState: ns,
                 onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
                 onScaleChange={handleScaleChange}
-                markerTick={markerTick}
                 onResetDrawTool={() => setDrawTool("pointer")}
               />
             )}
@@ -5755,40 +5643,37 @@ aliveState: na, spawnState: ns,
             </button>
           )}
 
-          {/* Drawing Toolbar – verschiebbar, nur wenn Bild vorhanden */}
-          {activeImage && showToolbar && (
-            <DrawingToolbar
-              tool={drawTool} setTool={setDrawTool}
-              color={drawColor} setColor={setDrawColor}
-              width={drawWidth} setWidth={setDrawWidth}
-              canDraw={canWrite}
-              onUndo={undoDrawElement}
-              onClear={clearDrawings}
-              x={localPanelPos.toolbar.x}
-              y={localPanelPos.toolbar.y}
-              onMove={movePanelToolbar}
-              showGrid={showGrid}
-              onToggleGrid={() => setShowGrid(v => !v)}
-            />
-          )}
-
-          {/* ZoomPanel entfernt – Zoom via Mausrad */}
-
-          {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280} minWidth={360}>
-            <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
-              isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
-              onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
-              onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
-          </DraggablePanel>}
-
-          {canWrite && showPlacer && (
-            <DraggablePanel title={`Token setzen · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
+          <MapControlDock
+            preferences={mapUiPreferences}
+            onPreferencesChange={setMapUiPreferences}
+            maps={(
+              <div>
+                <div className="mb-2 text-xs text-gray-500">
+                  {systems.find((system) => system.id === activeSystemId)?.label ?? activeSystemId}
+                </div>
+                <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+                  isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
+                  onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
+                  onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
+              </div>
+            )}
+            tokens={canWrite ? (
               <TokenPlacerPanel groups={tacticalGroups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
-            </DraggablePanel>
-          )}
+            ) : null}
+            drawing={activeImage && canWrite ? (
+              <DrawingToolbar
+                tool={drawTool} setTool={setDrawTool}
+                color={drawColor} setColor={setDrawColor}
+                width={drawWidth} setWidth={setDrawWidth}
+                canDraw={canWrite}
+                onUndo={undoDrawElement}
+                onClear={clearDrawings}
+              />
+            ) : null}
+          />
 
           </div>
         </div>

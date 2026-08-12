@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:ui-test": "cross-env NEXT_PUBLIC_ENABLE_UI_TEST_ROUTES=1 next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
