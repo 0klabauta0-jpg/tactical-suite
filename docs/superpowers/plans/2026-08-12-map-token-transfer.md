@@ -109,7 +109,7 @@ describe("token transfer command", () => {
 
 - [ ] **Step 2: Run the parser test and verify the missing module failure**
 
-Run: `npm test -- tests/token-transfer.test.ts`  
+Run: `npm test -- tests/token-transfer.test.ts`
 Expected: FAIL because `@/lib/map/token-transfer` does not exist.
 
 - [ ] **Step 3: Implement the exact shared command union and parser**
@@ -202,7 +202,7 @@ Define `DEFAULT_ROCKBREAKER_ENTRY` with 24 belt-plane world points along the out
 
 - [ ] **Step 8: Run the focused unit tests**
 
-Run: `npm test -- tests/token-transfer.test.ts tests/token-placement.test.ts tests/rockbreaker-scene-config.test.ts`  
+Run: `npm test -- tests/token-transfer.test.ts tests/token-placement.test.ts tests/rockbreaker-scene-config.test.ts`
 Expected: PASS.
 
 - [ ] **Step 9: Commit the shared contracts**
@@ -242,7 +242,7 @@ it("distinguishes unplaced, one 2D location, one 3D location, and ambiguity", ()
 
 - [ ] **Step 2: Run the test and verify failure**
 
-Run: `npm test -- tests/token-occupancy.test.ts`  
+Run: `npm test -- tests/token-occupancy.test.ts`
 Expected: FAIL because the occupancy module is missing.
 
 - [ ] **Step 3: Implement occupancy without duplicating stored state**
@@ -255,7 +255,7 @@ Do not add a second Firestore listener. Keep `subscribeSceneObjects(roomId, scen
 
 - [ ] **Step 5: Run and commit**
 
-Run: `npm test -- tests/token-occupancy.test.ts tests/rockbreaker-scene-objects.test.ts`  
+Run: `npm test -- tests/token-occupancy.test.ts tests/rockbreaker-scene-objects.test.ts`
 Expected: PASS.
 
 ```powershell
@@ -313,7 +313,7 @@ Also test 2D entry, 2D move, 2D move-up, remove-to-unplaced, viewer denial, disa
 
 - [ ] **Step 2: Run the store test and verify failure**
 
-Run: `npm test -- tests/token-transfer-store.test.ts`  
+Run: `npm test -- tests/token-transfer-store.test.ts`
 Expected: FAIL because the server store module is missing.
 
 - [ ] **Step 3: Define the transaction boundary**
@@ -379,7 +379,7 @@ Add tests that invoke the same operation twice and assert one destination record
 
 - [ ] **Step 7: Run and commit**
 
-Run: `npm test -- tests/token-transfer-store.test.ts`  
+Run: `npm test -- tests/token-transfer-store.test.ts`
 Expected: PASS with all mutations observed as one fixture transaction.
 
 ```powershell
@@ -425,7 +425,7 @@ Test malformed JSON as 400, viewer/auth failures as 401/403, source and operatio
 
 - [ ] **Step 2: Run route tests and verify failure**
 
-Run: `npm test -- tests/token-transfer-route.test.ts`  
+Run: `npm test -- tests/token-transfer-route.test.ts`
 Expected: FAIL because the route module is missing.
 
 - [ ] **Step 3: Implement the route handler and production composition**
@@ -459,7 +459,7 @@ Send `Authorization: Bearer <token>`, JSON content type, and `cache: "no-store"`
 
 - [ ] **Step 6: Run focused API tests**
 
-Run: `npm test -- tests/token-transfer-route.test.ts tests/token-transfer-client.test.ts tests/map-scene-store.test.ts`  
+Run: `npm test -- tests/token-transfer-route.test.ts tests/token-transfer-client.test.ts tests/map-scene-store.test.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -503,7 +503,7 @@ Also verify old stored preferences without `enemy` parse safely with `enemy: fal
 
 - [ ] **Step 2: Run focused tests and verify expectation failures**
 
-Run: `npm test -- tests/map-ui-preferences.test.ts tests/map-control-dock.test.ts`  
+Run: `npm test -- tests/map-ui-preferences.test.ts tests/map-control-dock.test.ts`
 Expected: FAIL because current sections default open and have no enemy section.
 
 - [ ] **Step 3: Implement right-edge compact styling and persistence**
@@ -521,10 +521,10 @@ The test must assert right anchoring through `await expect(dock).toHaveCSS("righ
 
 - [ ] **Step 5: Build the UI-test bundle and run Playwright**
 
-Run: `npm run build:ui-test`  
+Run: `npm run build:ui-test`
 Expected: successful Next.js build.
 
-Run: `npm run test:ui -- tests/ui/map-control-dock.spec.ts`  
+Run: `npm run test:ui -- tests/ui/map-control-dock.spec.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -574,8 +574,8 @@ Add a second scenario where a simulated 409 resets the optimistic token and show
 
 - [ ] **Step 2: Build and run the UI test to verify failure**
 
-Run: `npm run build:ui-test`  
-Run: `npm run test:ui -- tests/ui/token-transfer.spec.ts`  
+Run: `npm run build:ui-test`
+Run: `npm run test:ui -- tests/ui/token-transfer.spec.ts`
 Expected: FAIL because the test route and drag components do not exist.
 
 - [ ] **Step 3: Implement reusable drag sources and drop targets**
@@ -632,11 +632,11 @@ Subscribe once in `app/page.tsx` when the room member is authenticated and Rockb
 
 - [ ] **Step 8: Run focused unit and UI tests**
 
-Run: `npm test -- tests/token-transfer.test.ts tests/token-occupancy.test.ts`  
+Run: `npm test -- tests/token-transfer.test.ts tests/token-occupancy.test.ts`
 Expected: PASS.
 
-Run: `npm run build:ui-test`  
-Run: `npm run test:ui -- tests/ui/token-transfer.spec.ts`  
+Run: `npm run build:ui-test`
+Run: `npm run test:ui -- tests/ui/token-transfer.spec.ts`
 Expected: PASS for list drag, existing-token drag, badge, parent return, and rollback.
 
 - [ ] **Step 9: Commit**
@@ -674,8 +674,8 @@ Add assertions that:
 
 - [ ] **Step 2: Build and run the test to verify failure**
 
-Run: `npm run build:ui-test`  
-Run: `npm run test:ui -- tests/ui/rockbreaker-map.spec.ts`  
+Run: `npm run build:ui-test`
+Run: `npm run test:ui -- tests/ui/rockbreaker-map.spec.ts`
 Expected: FAIL because Rockbreaker still owns duplicate controls and has no parent drop target.
 
 - [ ] **Step 3: Convert Rockbreaker to controlled scene objects**
@@ -702,11 +702,11 @@ On pointer-up during a group-token drag, call `document.elementFromPoint(event.c
 
 - [ ] **Step 6: Verify shared positions and return behavior**
 
-Run: `npm test -- tests/rockbreaker-coordinates.test.ts tests/rockbreaker-scene-objects.test.ts tests/token-transfer-store.test.ts`  
+Run: `npm test -- tests/rockbreaker-coordinates.test.ts tests/rockbreaker-scene-objects.test.ts tests/token-transfer-store.test.ts`
 Expected: PASS.
 
-Run: `npm run build:ui-test`  
-Run: `npm run test:ui -- tests/ui/rockbreaker-map.spec.ts tests/ui/token-transfer.spec.ts`  
+Run: `npm run build:ui-test`
+Run: `npm run test:ui -- tests/ui/rockbreaker-map.spec.ts tests/ui/token-transfer.spec.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -744,7 +744,7 @@ Also assert that delete/recreate cannot be used to replace protected token field
 
 - [ ] **Step 2: Run the rule test under the emulator and verify failure**
 
-Run: `npx firebase-tools emulators:exec --only firestore "npm test -- tests/firestore-rules/mobile-and-scenes.test.ts"`  
+Run: `npx firebase-tools emulators:exec --only firestore "npm test -- tests/firestore-rules/mobile-and-scenes.test.ts"`
 Expected: FAIL because commanders can currently replace `tokensBySystem`.
 
 - [ ] **Step 3: Protect token fields without blocking unrelated board work**
@@ -765,15 +765,15 @@ Use `allow create: if canWriteBoard(roomId) && createsNoTokenFields()` and `allo
 
 - [ ] **Step 4: Prove no legacy direct token writer remains**
 
-Run: `rg -n "pushTokensOnly|tokensBySystem.*updateDoc|tokensBySystem.*setDoc" app lib`  
+Run: `rg -n "pushTokensOnly|tokensBySystem.*updateDoc|tokensBySystem.*setDoc" app lib`
 Expected: no callable direct token-location writer remains. Remove the obsolete `pushTokensOnly` function after confirming every call site uses `requestTokenTransfer`.
 
 - [ ] **Step 5: Run rules and relevant tests**
 
-Run: `npx firebase-tools emulators:exec --only firestore "npm test -- tests/firestore-rules/mobile-and-scenes.test.ts"`  
+Run: `npx firebase-tools emulators:exec --only firestore "npm test -- tests/firestore-rules/mobile-and-scenes.test.ts"`
 Expected: PASS.
 
-Run: `npm test -- tests/token-transfer-store.test.ts tests/token-transfer-route.test.ts tests/map-scene-store.test.ts`  
+Run: `npm test -- tests/token-transfer-store.test.ts tests/token-transfer-route.test.ts tests/map-scene-store.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -808,9 +808,9 @@ Assert a new storage key shows the grid, saved `{ showGrid: false }` hides it af
 
 - [ ] **Step 3: Run tests and make only evidence-driven fixes**
 
-Run: `npm test -- tests/enemy-markers.test.ts tests/map-ui-preferences.test.ts`  
-Run: `npm run build:ui-test`  
-Run: `npm run test:ui -- tests/ui/map-control-dock.spec.ts tests/ui/rockbreaker-map.spec.ts`  
+Run: `npm test -- tests/enemy-markers.test.ts tests/map-ui-preferences.test.ts`
+Run: `npm run build:ui-test`
+Run: `npm run test:ui -- tests/ui/map-control-dock.spec.ts tests/ui/rockbreaker-map.spec.ts`
 Expected: PASS. If current code already satisfies persistence, commit only strengthened tests; do not rewrite working marker code.
 
 - [ ] **Step 4: Commit**
@@ -886,7 +886,7 @@ The CLI follows the existing `room:features` safety pattern: dry-run by default;
 "room:rockbreaker-entry": "tsx scripts/set-rockbreaker-entry.ts"
 ```
 
-Run: `npm test -- tests/token-location-audit.test.ts tests/rockbreaker-entry-rollout.test.ts tests/rockbreaker-scene-config.test.ts`  
+Run: `npm test -- tests/token-location-audit.test.ts tests/rockbreaker-entry-rollout.test.ts tests/rockbreaker-scene-config.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**

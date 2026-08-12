@@ -1,7 +1,7 @@
 # Map Token Transfer and Compact Controls Design
 
-**Status:** Approved conversational design, pending written-spec review  
-**Date:** 2026-08-12  
+**Status:** Approved conversational design, pending written-spec review
+**Date:** 2026-08-12
 **Target:** KlabsCom web app only
 
 ## Objective
