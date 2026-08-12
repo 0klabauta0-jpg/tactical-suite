@@ -13,7 +13,8 @@ import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { buildRoomTemplateCopy } from "@/lib/rooms/template";
-import { getErrorCode, getErrorMessage } from "@/lib/error-details";
+import { getErrorMessage } from "@/lib/error-details";
+import { loginToRoom } from "@/lib/auth/room-login-client";
 import { zoomIn, zoomOut } from "@/lib/map/zoom";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
@@ -36,8 +37,7 @@ import {
 } from "@/lib/board/members";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
+  signInWithCustomToken,
   onAuthStateChanged,
   signOut,
   User,
@@ -105,7 +105,7 @@ async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
     }
     const cfg = parseRoomConfig(snap.data());
     if (!cfg) {
-      console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt");
+      console.warn("[KlabsCom] loadRoomConfig: sheetUrl fehlt");
       return null;
     }
     roomConfigCache[roomId] = cfg;
@@ -250,12 +250,6 @@ const GROUP_COLORS = [
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function nameToFakeEmail(n: string, roomId = "default") {
-  const safeName = n.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const safeRoom = roomId.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return `${safeName}.${safeRoom}@tcs.internal`;
-}
-
 function ampelColor(a?: string) {
   if (a === "gut") return "#16a34a";
   if (a === "mittel") return "#ca8a04";
@@ -272,15 +266,6 @@ function currentTimestamp(): number {
 
 function applyMapTransform(element: HTMLDivElement, x: number, y: number, scale: number) {
   element.style.transform = `translate(${x}px,${y}px) scale(${scale})`;
-}
-
-// Stabiler deterministischer Hash aus einem String (djb2).
-// Wird als Fallback-PlayerId verwendet solange das Sheet kein PlayerId-Feld hat.
-// Gleicher Name → immer gleiche ID, unabhängig von Zeilenreihenfolge.
-function stableId(str: string): string {
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
-  return "p_" + (h >>> 0).toString(36);
 }
 
 function normalizeImageUrl(url: string): string {
@@ -323,29 +308,6 @@ async function loadFirestoreOverrides(roomId: string): Promise<PlayerOverrides> 
 async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Omit<Player, "id">>) {
   const overrides = await loadFirestoreOverrides(roomId);
   const next: PlayerOverrides = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
-  firestoreOverrideCache[roomId] = next;
-  await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
-}
-
-// The merge behavior is implemented in lib/players/merge-overrides.ts.
-// Beim Login: Sheet-AppRolle in Firestore als lastSheetAppRole tracken
-async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: Role, overrides: PlayerOverrides) {
-  const ov = overrides[playerId] ?? {};
-  // Kein Update nötig wenn Sheet-Wert unverändert
-  if (ov.lastSheetAppRole === sheetAppRole) return;
-  // Prüfen ob appRole manuell (in Firestore) geändert wurde:
-  // Wenn ov.appRole existiert UND sich von lastSheetAppRole unterscheidet → manueller Override → nicht überschreiben
-  const hasManualOverride = ov.appRole !== undefined && ov.appRole !== ov.lastSheetAppRole;
-  const existing = await loadFirestoreOverrides(roomId);
-  const next: PlayerOverrides = {
-    ...existing,
-    [playerId]: {
-      ...(existing[playerId] ?? {}),
-      lastSheetAppRole: sheetAppRole,
-      // appRole nur updaten wenn kein manueller Override vorhanden und Sheet sich geändert hat
-      ...(hasManualOverride ? {} : { appRole: sheetAppRole }),
-    },
-  };
   firestoreOverrideCache[roomId] = next;
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
@@ -563,7 +525,6 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
     loadRoomConfig(roomId).then((cfg) => {
       if (cfg) {
         setSheetUrl(cfg.sheetUrl);
-        setPassword(cfg.password);
         setRoomName(cfg.roomName ?? "");
         setSheetShareUrl(cfg.sheetShareUrl ?? "");
       }
@@ -581,9 +542,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       return;
     }
 
-    const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
-    if (adminKey !== SETUP_KEY) {
-      setMsg({ text: "Falscher Setup-Schlüssel.", ok: false });
+    if (!adminKey.trim() || !adminHandle.trim()) {
+      setMsg({ text: "Setup-Schlüssel und Admin-Handle sind erforderlich.", ok: false });
       return;
     }
 
@@ -591,46 +551,27 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
     setMsg(null);
 
     try {
-      // Technischer Setup-User, getrennt vom echten Admin-Handle
-      const authHandle = "__setup__";
-      const email = nameToFakeEmail(authHandle, roomId);
-      const pw = adminKey.trim() + "_tcs_internal";
+      const setupResponse = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          setupSecret: adminKey,
+          sheetUrl: sheetUrl.trim(),
+          sheetShareUrl: sheetShareUrl.trim(),
+          password,
+          roomName: roomName.trim() || roomId,
+          adminHandle: adminHandle.trim(),
+        }),
+      });
+      const setupBody = await setupResponse.json().catch(() => null) as { error?: string } | null;
+      if (!setupResponse.ok) throw new Error(setupBody?.error ?? "Setup fehlgeschlagen.");
 
-      try {
-        await signInWithEmailAndPassword(auth, email, pw);
-      } catch (authErr: unknown) {
-        // "auth/user-not-found" is deprecated in Firebase ≥ v9.12 – now returns
-        // "auth/invalid-credential". We also handle "auth/invalid-login-credentials"
-        // (some SDK versions). For the setup user we always try to create it when
-        // any sign-in error suggests the account doesn't exist yet.
-        const code = getErrorCode(authErr);
-        const isNoAccount =
-          code === "auth/user-not-found" ||
-          code === "auth/invalid-credential" ||
-          code === "auth/invalid-login-credentials" ||
-          code === "auth/user-disabled";
-        if (isNoAccount) {
-          try {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: unknown) {
-            // If it already exists (race-condition) just retry sign-in once
-            if (getErrorCode(createErr) === "auth/email-already-in-use") {
-              await signInWithEmailAndPassword(auth, email, pw);
-            } else {
-              throw createErr;
-            }
-          }
-        } else {
-          throw authErr;
-        }
-      }
-
-      await setDoc(doc(db, "rooms", roomId, "config", "main"), {
-        sheetUrl: sheetUrl.trim(),
-        sheetShareUrl: sheetShareUrl.trim(),
-        password: password.trim(),
-        roomName: roomName.trim() || roomId,
-        updatedAt: serverTimestamp(),
+      const login = await loginToRoom({
+        roomId,
+        handle: adminHandle.trim(),
+        password,
+        signIn: (token) => signInWithCustomToken(auth, token),
       });
 
       let templateWarning = "";
@@ -654,42 +595,20 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         }
       }
 
-      if (adminHandle.trim()) {
-        const adminId = stableId(adminHandle.trim());
-        const existing = await loadFirestoreOverrides(roomId);
-        const next: PlayerOverrides = {
-          ...existing,
-          [adminId]: {
-            ...(existing[adminId] ?? {}),
-            name: adminHandle.trim(),
-            appRole: "admin",
-            lastSheetAppRole: "admin",
-          },
-        };
-        firestoreOverrideCache[roomId] = next;
-        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
-      }
-
       invalidateRoomConfig(roomId);
 
-      if (onDone && adminHandle.trim()) {
-        const adminId = stableId(adminHandle.trim());
+      const cfg = await loadRoomConfig(roomId);
+      if (onDone && cfg) {
         const adminPlayer: Player = {
-          id: adminId,
-          name: adminHandle.trim(),
+          id: login.player.id,
+          name: login.player.name,
           area: "",
           role: "",
           squadron: "",
           status: "",
           ampel: "",
-          appRole: "admin",
+          appRole: login.player.role,
           homeLocation: "",
-        };
-        const cfg: RoomConfig = {
-          sheetUrl: sheetUrl.trim(),
-          password: password.trim(),
-          roomName: roomName.trim() || roomId,
-          sheetShareUrl: sheetShareUrl.trim(),
         };
         onDone(adminPlayer, cfg);
         return;
@@ -812,8 +731,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
                 Firestore-Pfad: <span className="font-mono text-gray-500">rooms/{roomId}/config/main</span>
               </p>
               <p>
-                Felder: <span className="font-mono text-gray-500">sheetUrl</span>,{" "}
-                <span className="font-mono text-gray-500">password</span>
+                Öffentliche Felder: <span className="font-mono text-gray-500">sheetUrl</span>,{" "}
+                <span className="font-mono text-gray-500">roomName</span>, Features
               </p>
               <p>
                 Nach dem Speichern → Seite ohne <span className="font-mono">?setup=1</span> aufrufen.
@@ -934,8 +853,6 @@ function RoomPickerView({ onPick, onSetup }: {
 function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void; onBack?: () => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password, setPassword] = useState("");
-  const [setupKey, setSetupKey] = useState("");
-  const [showSetupKey, setShowSetupKey] = useState(false);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -952,74 +869,25 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
     try {
       const cfg = await loadRoomConfig(roomId);
       if (!cfg) { setMsg("Dieser Raum hat noch keine Konfiguration."); setLoading(false); return; }
-      if (password !== cfg.password) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
-
-      // Spieler aus Sheet laden + Firestore-Overrides mergen
-      const sheetLoad = await loadPlayersForRoom(roomId);
-      const sheetPlayers = sheetLoad.players;
-      const overrides = await loadFirestoreOverrides(roomId);
-      const players = mergeWithOverrides(sheetPlayers, overrides);
-
-      let found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
-
-      // Sheet-AppRolle tracken (für last-set-wins Logik)
-      if (found) {
-        await syncSheetAppRole(roomId, found.id, found.appRole ?? "viewer", overrides);
-        // Overrides neu laden nach eventuellem Update
-        const freshOverrides = await loadFirestoreOverrides(roomId);
-        const freshPlayers = mergeWithOverrides(sheetPlayers, freshOverrides);
-        found = freshPlayers.find((p) => p.id === found!.id) ?? found;
-      }
-
-      // ── Kein Sheet-Eintrag → Anmeldung verweigern ────────────────────────
-      if (!found) {
-        setMsg(sheetLoad.warning ?? `"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
-        setLoading(false);
-        return;
-      }
-
-      // Firebase Auth ZUERST – danach erst Firestore schreiben
-      const email = nameToFakeEmail(found.name, roomId);
-      const pw = cfg.password + "_tcs_internal";
-      try {
-        await signInWithEmailAndPassword(auth, email, pw);
-      } catch (signInErr: unknown) {
-        const code = getErrorCode(signInErr);
-        const isNoAccount =
-          code === "auth/user-not-found" ||
-          code === "auth/invalid-credential" ||
-          code === "auth/invalid-login-credentials";
-        if (isNoAccount) {
-          try {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: unknown) {
-            if (getErrorCode(createErr) === "auth/email-already-in-use") {
-              setMsg("Account existiert bereits mit anderem Passwort. Bitte einen Admin kontaktieren.");
-              setLoading(false);
-              return;
-            } else {
-              throw createErr;
-            }
-          }
-        } else {
-          throw signInErr;
-        }
-      }
-
-      // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
-      const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
-      if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
-        const existing = await loadFirestoreOverrides(roomId);
-        const next: PlayerOverrides = {
-          ...existing,
-          [found.id]: { ...(existing[found.id] ?? {}), appRole: "admin", lastSheetAppRole: "admin" },
-        };
-        firestoreOverrideCache[roomId] = next;
-        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
-        found = { ...found, appRole: "admin" };
-      }
-
-      onLogin(found, cfg);
+      const login = await loginToRoom({
+        roomId,
+        handle: playerName,
+        password,
+        signIn: (token) => signInWithCustomToken(auth, token),
+      });
+      const player: Player = {
+        id: login.player.id,
+        name: login.player.name,
+        appRole: login.player.role,
+        area: "",
+        role: "",
+        squadron: "",
+        status: "",
+        ampel: "",
+        homeLocation: "",
+      };
+      setPassword("");
+      onLogin(player, cfg);
     } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler.")); }
     setLoading(false);
   }
@@ -1059,7 +927,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
         {cfgMissing && (
           <div className="mb-4 mt-3 bg-yellow-950 border border-yellow-700 rounded-lg px-3 py-2 text-yellow-300 text-xs">
             ⚠ Dieser Raum hat noch keine Konfiguration.<br />
-            Ein Admin muss unter <span className="font-mono">rooms/{roomId}/config/main</span> die Felder <span className="font-mono">sheetUrl</span> und <span className="font-mono">password</span> in Firestore anlegen.
+            Ein Admin muss den Raum über „Neuen Raum erstellen“ serverseitig einrichten.
           </div>
         )}
 
@@ -1074,23 +942,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
             <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
               type="password" placeholder="Team-Passwort" value={password} onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-
-            {/* Setup-Schlüssel – optional, für Admin-Rechte */}
-            <button
-              className="text-xs text-gray-600 hover:text-gray-400 mb-2 flex items-center gap-1"
-              onClick={() => setShowSetupKey(v => !v)}>
-              {showSetupKey ? "▾" : "▸"} Setup-Schlüssel (optional, für Admin)
-            </button>
-            {showSetupKey && (
-              <input
-                className="w-full bg-gray-800 border border-orange-700 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-orange-500"
-                type="password"
-                placeholder="Setup-Schlüssel → Admin-Rechte"
-                value={setupKey}
-                onChange={(e) => setSetupKey(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              />
-            )}
 
             <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               onClick={handleLogin} disabled={loading || !playerName || !password}>
@@ -4301,7 +4152,6 @@ useEffect(() => {
     if (!user || !currentPlayer) return;
     const sheetRole = parseRole(currentPlayer.appRole);
     setRole(sheetRole);
-    setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
   // Beim Logout: Room-Config-Cache invalidieren damit nächster Login frisch lädt
@@ -4512,13 +4362,16 @@ aliveState: na, spawnState: ns,
   }
 
   async function setPlayerAppRole(playerId: string, newRole: Role) {
-    const existing = await loadFirestoreOverrides(roomId);
-    const next: PlayerOverrides = {
-      ...existing,
-      [playerId]: { ...(existing[playerId] ?? {}), appRole: newRole, lastSheetAppRole: newRole },
-    };
-    firestoreOverrideCache[roomId] = next;
-    await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+    if (!user || !isAdmin) return;
+    const token = await user.getIdToken(true);
+    const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/roles/${encodeURIComponent(playerId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      body: JSON.stringify({ role: newRole }),
+    });
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) throw new Error(result?.error ?? "Rolle konnte nicht gespeichert werden.");
     setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, appRole: newRole } : p));
   }
 
