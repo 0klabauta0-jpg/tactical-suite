@@ -1,20 +1,56 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
-import { createPortal } from "react-dom";
-import Papa from "papaparse";
-import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, DragEndEvent, PointerSensor, type DraggableAttributes, type DraggableSyntheticListeners, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
+import { canAdministerRoom, canWriteBoard, parseRole, type Role } from "@/lib/domain/roles";
+import type { EditablePlayerField, Player, PlayerOverrides } from "@/lib/domain/player";
+import { mergeWithOverrides } from "@/lib/players/merge-overrides";
+import { parsePlayerOverrides } from "@/lib/players/overrides";
+import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
+import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
+import { buildRoomTemplateCopy } from "@/lib/rooms/template";
+import { getErrorMessage } from "@/lib/error-details";
+import { loginToRoom } from "@/lib/auth/room-login-client";
+import { changePlayerStatusClient } from "@/lib/player-status/client";
+import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
+import { MapControlDock } from "@/app/components/map/map-control-dock";
+import { MobileLinkDialog } from "@/app/components/mobile/mobile-link-dialog";
+import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
+import {
+  DEFAULT_MAP_UI_PREFERENCES,
+  loadMapUiPreferences,
+  saveMapUiPreferences,
+  type MapUiPreferences,
+} from "@/lib/map/ui-preferences";
+import { zoomIn, zoomOut } from "@/lib/map/zoom";
+import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
+import {
+  parseMapEntries,
+  parseOrderMarkers,
+  parsePois,
+  parseTokens,
+  type BoardMapEntry as MapEntry,
+  type BoardOrderMarker as OrderMarker,
+  type BoardPoi as POI,
+  type BoardToken as Token,
+} from "@/lib/board/collections";
+import {
+  parseAliveState,
+  parseGroupRoles,
+  parseSpawnState,
+  type BoardGroupRoles as GroupRoles,
+  type BoardPlayerAliveState as PlayerAliveState,
+  type BoardPlayerSpawnState as PlayerSpawnState,
+} from "@/lib/board/members";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
+  signInWithCustomToken,
   onAuthStateChanged,
   signOut,
-  updatePassword,
   User,
 } from "firebase/auth";
 
@@ -27,36 +63,11 @@ const APP_VERSION = "1.010";
 // TYPES
 // ─────────────────────────────────────────────────────────────
 
-type Player = {
-  id: string;
-  name: string;
-  area?: string;
-  role?: string;
-  squadron?: string;
-  status?: string;
-  ampel?: string;
-  appRole?: string;
-  homeLocation?: string;
-  icon?: string;   // emoji oder URL – wie bei Gruppen
-};
-
-// color: optional hex ohne #, z.B. "e63946"
-type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string; systemId?: string };
-type BoardState = { groups: Group[]; columns: Record<string, string[]> };
-
 // GroupRoles: leader/deputy pro Gruppe
-type GroupRoles = Record<string, { leader?: string; deputy?: string }>;
 
-type Token = { groupId: string; x: number; y: number; mapId?: string };
-type OrderMarker = { groupId: string; x: number; y: number; mapId: string };
-type MapEntry = { id: string; label: string; image: string; x?: number; y?: number };
-type POI = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
 
 // ── Star Citizen Systeme ──────────────────────────────────────────────────
 type StarSystem = { id: string; label: string; x: number; y: number }; // Position auf Galaxie-Karte
-type PlayerAliveState = Record<string, "alive" | "dead">;
-type PlayerSpawnState = Record<string, string>;
-type Role = "admin" | "commander" | "viewer";
 type PanelLayout = {
   nav:      { x: number; y: number };
   placer:   { x: number; y: number };
@@ -75,10 +86,24 @@ type OpLogEntry = {
   text: string;        // Human-readable
   systemId?: string;   // zugeordnetes System für System-Filter
 };
+type ScheduledOpLogEntry = OpLogEntry & {
+  newX?: number;
+  newY?: number;
+  _groupLabel?: string;
+  _mapLabel?: string;
+};
+type PendingOpLogEntry = {
+  timer: ReturnType<typeof setTimeout>;
+  entry: ScheduledOpLogEntry;
+  prevX?: number;
+  prevY?: number;
+  startX?: number;
+  startY?: number;
+  minDist?: number;
+};
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
-type RoomConfig = { sheetUrl: string; password: string; roomName?: string; sheetShareUrl?: string };
 const roomConfigCache: Record<string, RoomConfig> = {};
 
 async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
@@ -89,13 +114,11 @@ async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
       console.warn("[KlabsCom] loadRoomConfig: Dokument nicht gefunden:", `rooms/${roomId}/config/main`);
       return null;
     }
-    const d = snap.data() as any;
-    console.log("[KlabsCom] loadRoomConfig: Felder geladen:", Object.keys(d));
-    if (!d.sheetUrl || !d.password) {
-      console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt", d);
+    const cfg = parseRoomConfig(snap.data());
+    if (!cfg) {
+      console.warn("[KlabsCom] loadRoomConfig: sheetUrl fehlt");
       return null;
     }
-    const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password, roomName: d.roomName, sheetShareUrl: d.sheetShareUrl };
     roomConfigCache[roomId] = cfg;
     return cfg;
   } catch (e) {
@@ -115,8 +138,6 @@ const DEFAULT_GROUPS: Group[] = [
   { id: "g3", label: "Subradar", systemId: "pyro" },
   { id: "spawn1", label: "Spawn", isSpawn: true, systemId: "pyro" },
 ];
-
-const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -208,14 +229,7 @@ type DrawText = {
   x: number; y: number;
   text: string; color: string; size: number;
 };
-type DrawMarker = {
-  id: string; type: "marker";
-  kind: "infantry" | "ground" | "air";
-  x: number; y: number;
-  color: string;
-  opacity: number;      // 0.0 – 1.0, startet bei 1.0
-  createdAt: number;    // Date.now()
-};
+type DrawMarker = EnemyMarker;
 type DrawElement = DrawStroke | DrawText | DrawLine | DrawMarker;
 type DrawingsMap = Record<string, DrawElement[]>;
 
@@ -240,12 +254,6 @@ const GROUP_COLORS = [
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function nameToFakeEmail(n: string, roomId = "default") {
-  const safeName = n.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const safeRoom = roomId.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return `${safeName}.${safeRoom}@tcs.internal`;
-}
-
 function ampelColor(a?: string) {
   if (a === "gut") return "#16a34a";
   if (a === "mittel") return "#ca8a04";
@@ -256,23 +264,12 @@ function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
-// Stabiler deterministischer Hash aus einem String (djb2).
-// Wird als Fallback-PlayerId verwendet solange das Sheet kein PlayerId-Feld hat.
-// Gleicher Name → immer gleiche ID, unabhängig von Zeilenreihenfolge.
-function stableId(str: string): string {
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
-  return "p_" + (h >>> 0).toString(36);
+function currentTimestamp(): number {
+  return Date.now();
 }
 
-function safeBoard(data: any, groups: Group[]): BoardState {
-  const cols: Record<string, string[]> = {};
-  for (const g of groups) cols[g.id] = Array.isArray(data?.columns?.[g.id]) ? data.columns[g.id] : [];
-  return { groups, columns: cols };
-}
-
-function normalizeToken(t: Token): Token {
-  return { ...t, mapId: (t.mapId ?? "main") };
+function applyMapTransform(element: HTMLDivElement, x: number, y: number, scale: number) {
+  element.style.transform = `translate(${x}px,${y}px) scale(${scale})`;
 }
 
 function normalizeImageUrl(url: string): string {
@@ -299,120 +296,34 @@ const cachedPlayersByRoom: Record<string, Player[]> = {};
 
 // Firestore-Override-Cache: roomId → { playerId → Partial<Player> }
 // Wird bei Login geladen. Enthält nur Felder die Firestore überschreibt (z.B. appRole).
-const firestoreOverrideCache: Record<string, Record<string, Partial<Player>>> = {};
+const firestoreOverrideCache: Record<string, PlayerOverrides> = {};
 
-async function loadFirestoreOverrides(roomId: string): Promise<Record<string, Partial<Player>>> {
+async function loadFirestoreOverrides(roomId: string): Promise<PlayerOverrides> {
   if (firestoreOverrideCache[roomId]) return firestoreOverrideCache[roomId];
   try {
     const snap = await getDoc(doc(db, "rooms", roomId, "config", "playerOverrides"));
     if (!snap.exists()) { firestoreOverrideCache[roomId] = {}; return {}; }
-    const data = snap.data() as Record<string, Partial<Player>>;
+    const data = parsePlayerOverrides(snap.data());
     firestoreOverrideCache[roomId] = data;
     return data;
   } catch { return {}; }
 }
 
-async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Player>) {
+async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Omit<Player, "id">>) {
   const overrides = await loadFirestoreOverrides(roomId);
-  const next = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
+  const next: PlayerOverrides = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
   firestoreOverrideCache[roomId] = next;
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
-// Spieler aus Sheet mit Firestore-Overrides mergen.
-// Regel für appRole: "zuletzt gesetzte gewinnt"
-// - Firestore speichert "lastSheetAppRole" = der zuletzt vom Sheet gelesene Wert.
-// - Wenn Sheet-AppRolle sich geändert hat (Sheet != lastSheetAppRole) → Sheet gewinnt.
-// - Wenn kein Sheet-Change → Firestore-Override appRole gewinnt (manuell gesetzt).
-function mergeWithOverrides(players: Player[], overrides: Record<string, Partial<Player> & { lastSheetAppRole?: string }>): Player[] {
-  return players.map((p) => {
-    const ov = overrides[p.id];
-    if (!ov) return p;
-    // appRole-Speziallogik: Sheet-Change erkennen
-    let resolvedAppRole = ov.appRole ?? p.appRole;
-    const sheetAppRole = p.appRole ?? "viewer";
-    const lastSheetAppRole = ov.lastSheetAppRole;
-    if (lastSheetAppRole !== undefined && sheetAppRole !== lastSheetAppRole) {
-      // Sheet hat sich geändert → Sheet-Wert gewinnt
-      resolvedAppRole = sheetAppRole;
-    }
-    return { ...p, ...ov, appRole: resolvedAppRole };
-  });
-}
-
-// Beim Login: Sheet-AppRolle in Firestore als lastSheetAppRole tracken
-async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: string, overrides: Record<string, any>) {
-  const ov = overrides[playerId] ?? {};
-  // Kein Update nötig wenn Sheet-Wert unverändert
-  if (ov.lastSheetAppRole === sheetAppRole) return;
-  // Prüfen ob appRole manuell (in Firestore) geändert wurde:
-  // Wenn ov.appRole existiert UND sich von lastSheetAppRole unterscheidet → manueller Override → nicht überschreiben
-  const hasManualOverride = ov.appRole !== undefined && ov.appRole !== ov.lastSheetAppRole;
-  const existing = await loadFirestoreOverrides(roomId);
-  const next = {
-    ...existing,
-    [playerId]: {
-      ...(existing[playerId] ?? {}),
-      lastSheetAppRole: sheetAppRole,
-      // appRole nur updaten wenn kein manueller Override vorhanden und Sheet sich geändert hat
-      ...(hasManualOverride ? {} : { appRole: sheetAppRole }),
-    },
-  };
-  firestoreOverrideCache[roomId] = next;
-  await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
-}
-
-function parsePlayersFromCsv(text: string): Player[] {
-  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-  const list: Player[] = [];
-  (parsed.data as any[]).forEach((row) => {
-    const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
-    if (!name) return;
-    // PlayerId: Pflichtfeld aus Sheet, Fallback: stabiler Hash des Namens
-    const explicitId = row["PlayerId"]?.toString().trim();
-    const id = explicitId || stableId(name);
-    list.push({
-      id,
-      name,
-      area:         (row["Bereich"]    ?? "").toString(),
-      role:         (row["Rolle"]      ?? "").toString(),
-      squadron:     (row["Staffel"]    ?? "").toString(),
-      status:       (row["Status"]     ?? "").toString(),
-      ampel:        (row["Ampel"]      ?? "").toString(),
-      appRole:      (row["AppRolle"]   ?? "viewer").toString().toLowerCase(),
-      homeLocation: (row["Heimatort"]  ?? "").toString(),
-    });
-  });
-  return list;
-}
-
-// Startzeile für Spielerdaten (Zeile 10 = Header, Zeile 11 = erste Datenzeile).
-// Für Google Sheets: range=A10:Z10000 liefert CSV ab Zeile 10.
-// Der erste CSV-Row wird dann automatisch als Header interpretiert (Papa.parse header:true).
-const SHEET_HEADER_ROW = 10; // 1-basiert, wie im Sheet sichtbar
-
-async function loadPlayersForRoom(roomId: string, force = false): Promise<Player[]> {
-  if (!force && cachedPlayersByRoom[roomId]?.length) return cachedPlayersByRoom[roomId];
-  const cfg = await loadRoomConfig(roomId);
-  if (!cfg?.sheetUrl.startsWith("http")) return cachedPlayersByRoom[roomId] ?? [];
-  try {
-    // Range-Parameter: Ab Zeile SHEET_HEADER_ROW bis Zeile 10000, alle Spalten A-Z
-    let url = cfg.sheetUrl;
-    // Nur anhängen wenn noch kein range-Parameter gesetzt ist
-    if (!url.includes("range=")) {
-      const sep = url.includes("?") ? "&" : "?";
-      url += sep + "range=A" + SHEET_HEADER_ROW + ":Z10000";
-    }
-    const sep2 = url.includes("?") ? "&" : "?";
-    url += sep2 + "_t=" + Date.now();
-    const res = await fetch(url, { cache: "no-store" });
-    const text = await res.text();
-    const list = parsePlayersFromCsv(text);
-    cachedPlayersByRoom[roomId] = list;
-    return list;
-  } catch {
-    return cachedPlayersByRoom[roomId] ?? []; // Netzfehler → alten Cache behalten
+async function loadPlayersForRoom(roomId: string, force = false): Promise<PlayerLoadResult> {
+  if (!force && cachedPlayersByRoom[roomId]?.length) {
+    return { players: cachedPlayersByRoom[roomId], source: "cache" };
   }
+  const cfg = await loadRoomConfig(roomId);
+  const result = await loadPlayersFromSheet(cfg?.sheetUrl ?? "", cachedPlayersByRoom[roomId] ?? []);
+  if (result.source === "sheet") cachedPlayersByRoom[roomId] = result.players;
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -430,6 +341,29 @@ const PROFILE_ORTE     = [
   "Orison (Crusader)", "Area18 (ArcCorp)", "Lorville (Hurston)",
   "New Babbage (microTech)", "Levski (Nyx)",
 ];
+
+function ProfileSelect({ label, value, onChange, options, placeholder }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-gray-400 text-xs mb-1 block">{label}</label>
+      <select
+        className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none cursor-pointer"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>{option === "" ? (placeholder ?? "----") : option}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // PROFIL-MODAL – Spieler kann eigene Daten bearbeiten (außer AppRolle)
@@ -467,29 +401,12 @@ function ProfileModal({
         homeLocation: home, ampel,
       });
       onSave(updated);
-    } catch (e: any) { setMsg(e?.message ?? "Fehler beim Speichern."); }
+    } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler beim Speichern.")); }
     setSaving(false);
   }
 
-  const selectCls = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none cursor-pointer";
   const inputCls  = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500";
   const labelCls  = "text-gray-400 text-xs mb-1 block";
-
-  function Sel({ label, value, onChange, opts, placeholder }: {
-    label: string; value: string; onChange: (v: string) => void;
-    opts: string[]; placeholder?: string;
-  }) {
-    return (
-      <div>
-        <label className={labelCls}>{label}</label>
-        <select className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
-          {opts.map((o) => (
-            <option key={o} value={o}>{o === "" ? (placeholder ?? "----") : o}</option>
-          ))}
-        </select>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black bg-opacity-70 px-4">
@@ -514,24 +431,24 @@ function ProfileModal({
         <div className="flex flex-col gap-3">
           {/* Name – einziges Freitext-Feld */}
           <div>
-            <label className={labelCls}>Handle / Name *</label>
+            <label className="text-gray-400 text-xs mb-1 block">Handle / Name *</label>
             <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="KRT_Bjoern" />
           </div>
 
           {/* Bereich + Rolle */}
           <div className="grid grid-cols-2 gap-3">
-            <Sel label="Bereich" value={area} onChange={setArea}
-              opts={PROFILE_BEREICHE} placeholder="----" />
-            <Sel label="Rolle / Job" value={role} onChange={setRole}
-              opts={PROFILE_ROLLEN} placeholder="----" />
+            <ProfileSelect label="Bereich" value={area} onChange={setArea}
+              options={PROFILE_BEREICHE} placeholder="----" />
+            <ProfileSelect label="Rolle / Job" value={role} onChange={setRole}
+              options={PROFILE_ROLLEN} placeholder="----" />
           </div>
 
           {/* Staffel + Heimatort */}
           <div className="grid grid-cols-2 gap-3">
-            <Sel label="Staffel" value={squadron} onChange={setSquadron}
-              opts={PROFILE_STAFFELN} placeholder="----" />
-            <Sel label="Heimatort" value={home} onChange={setHome}
-              opts={PROFILE_ORTE} placeholder="----" />
+            <ProfileSelect label="Staffel" value={squadron} onChange={setSquadron}
+              options={PROFILE_STAFFELN} placeholder="----" />
+            <ProfileSelect label="Heimatort" value={home} onChange={setHome}
+              options={PROFILE_ORTE} placeholder="----" />
           </div>
 
           {/* Ampel */}
@@ -612,7 +529,6 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
     loadRoomConfig(roomId).then((cfg) => {
       if (cfg) {
         setSheetUrl(cfg.sheetUrl);
-        setPassword(cfg.password);
         setRoomName(cfg.roomName ?? "");
         setSheetShareUrl(cfg.sheetShareUrl ?? "");
       }
@@ -630,9 +546,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       return;
     }
 
-    const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
-    if (adminKey !== SETUP_KEY) {
-      setMsg({ text: "Falscher Setup-Schlüssel.", ok: false });
+    if (!adminKey.trim() || !adminHandle.trim()) {
+      setMsg({ text: "Setup-Schlüssel und Admin-Handle sind erforderlich.", ok: false });
       return;
     }
 
@@ -640,59 +555,35 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
     setMsg(null);
 
     try {
-      // Technischer Setup-User, getrennt vom echten Admin-Handle
-      const authHandle = "__setup__";
-      const email = nameToFakeEmail(authHandle, roomId);
-      const pw = adminKey.trim() + "_tcs_internal";
+      const setupResponse = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          setupSecret: adminKey,
+          sheetUrl: sheetUrl.trim(),
+          sheetShareUrl: sheetShareUrl.trim(),
+          password,
+          roomName: roomName.trim() || roomId,
+          adminHandle: adminHandle.trim(),
+        }),
+      });
+      const setupBody = await setupResponse.json().catch(() => null) as { error?: string } | null;
+      if (!setupResponse.ok) throw new Error(setupBody?.error ?? "Setup fehlgeschlagen.");
 
-      try {
-        await signInWithEmailAndPassword(auth, email, pw);
-      } catch (authErr: any) {
-        // "auth/user-not-found" is deprecated in Firebase ≥ v9.12 – now returns
-        // "auth/invalid-credential". We also handle "auth/invalid-login-credentials"
-        // (some SDK versions). For the setup user we always try to create it when
-        // any sign-in error suggests the account doesn't exist yet.
-        const code: string = authErr?.code ?? "";
-        const isNoAccount =
-          code === "auth/user-not-found" ||
-          code === "auth/invalid-credential" ||
-          code === "auth/invalid-login-credentials" ||
-          code === "auth/user-disabled";
-        if (isNoAccount) {
-          try {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: any) {
-            // If it already exists (race-condition) just retry sign-in once
-            if (createErr?.code === "auth/email-already-in-use") {
-              await signInWithEmailAndPassword(auth, email, pw);
-            } else {
-              throw createErr;
-            }
-          }
-        } else {
-          throw authErr;
-        }
-      }
-
-      await setDoc(doc(db, "rooms", roomId, "config", "main"), {
-        sheetUrl: sheetUrl.trim(),
-        sheetShareUrl: sheetShareUrl.trim(),
-        password: password.trim(),
-        roomName: roomName.trim() || roomId,
-        updatedAt: serverTimestamp(),
+      const login = await loginToRoom({
+        roomId,
+        handle: adminHandle.trim(),
+        password,
+        signIn: (token) => signInWithCustomToken(auth, token),
       });
 
+      let templateWarning = "";
       if (templateRoomId && templateRoomId !== roomId) {
         try {
           const templateSnap = await getDoc(doc(db, "rooms", templateRoomId, "state", "board"));
           if (templateSnap.exists()) {
-            const td = templateSnap.data() as any;
-            const templateData: Record<string, any> = {};
-
-            if (Array.isArray(td.groups) && td.groups.length > 0) templateData.groups = td.groups;
-            if (td.columns && Object.keys(td.columns).length > 0) templateData.columns = td.columns;
-            if (Array.isArray(td.maps) && td.maps.length > 0) templateData.maps = td.maps;
-            if (Array.isArray(td.pois) && td.pois.length > 0) templateData.pois = td.pois;
+            const templateData = buildRoomTemplateCopy(templateSnap.data());
 
             if (Object.keys(templateData).length > 0) {
               await setDoc(
@@ -702,53 +593,34 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
               );
             }
           }
-        } catch (_) {}
-      }
-
-      if (adminHandle.trim()) {
-        const adminId = stableId(adminHandle.trim());
-        const existing = await loadFirestoreOverrides(roomId);
-        const next = {
-          ...existing,
-          [adminId]: {
-            ...(existing[adminId] ?? {}),
-            name: adminHandle.trim(),
-            appRole: "admin",
-            lastSheetAppRole: "admin",
-          },
-        };
-        firestoreOverrideCache[roomId] = next;
-        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+        } catch (error: unknown) {
+          templateWarning = ` Vorlage konnte nicht übernommen werden: ${getErrorMessage(error, "unbekannter Fehler")}`;
+          console.error("[KlabsCom] Vorlage konnte nicht übernommen werden", error);
+        }
       }
 
       invalidateRoomConfig(roomId);
 
-      if (onDone && adminHandle.trim()) {
-        const adminId = stableId(adminHandle.trim());
+      const cfg = await loadRoomConfig(roomId);
+      if (onDone && cfg) {
         const adminPlayer: Player = {
-          id: adminId,
-          name: adminHandle.trim(),
+          id: login.player.id,
+          name: login.player.name,
           area: "",
           role: "",
           squadron: "",
           status: "",
           ampel: "",
-          appRole: "admin",
+          appRole: login.player.role,
           homeLocation: "",
-        };
-        const cfg: RoomConfig = {
-          sheetUrl: sheetUrl.trim(),
-          password: password.trim(),
-          roomName: roomName.trim() || roomId,
-          sheetShareUrl: sheetShareUrl.trim(),
         };
         onDone(adminPlayer, cfg);
         return;
       }
 
-      setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
-    } catch (e: any) {
-      setMsg({ text: `Fehler: ${e?.message ?? "Unbekannt"}`, ok: false });
+      setMsg({ text: `✓ Konfiguration gespeichert. Raum ist jetzt aktiv.${templateWarning}`, ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: `Fehler: ${getErrorMessage(e, "Unbekannt")}`, ok: false });
     } finally {
       setSaving(false);
     }
@@ -863,8 +735,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
                 Firestore-Pfad: <span className="font-mono text-gray-500">rooms/{roomId}/config/main</span>
               </p>
               <p>
-                Felder: <span className="font-mono text-gray-500">sheetUrl</span>,{" "}
-                <span className="font-mono text-gray-500">password</span>
+                Öffentliche Felder: <span className="font-mono text-gray-500">sheetUrl</span>,{" "}
+                <span className="font-mono text-gray-500">roomName</span>, Features
               </p>
               <p>
                 Nach dem Speichern → Seite ohne <span className="font-mono">?setup=1</span> aufrufen.
@@ -985,8 +857,6 @@ function RoomPickerView({ onPick, onSetup }: {
 function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: Player, cfg: RoomConfig) => void; onBack?: () => void }) {
   const [playerName, setPlayerName] = useState("");
   const [password, setPassword] = useState("");
-  const [setupKey, setSetupKey] = useState("");
-  const [showSetupKey, setShowSetupKey] = useState(false);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1003,76 +873,26 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
     try {
       const cfg = await loadRoomConfig(roomId);
       if (!cfg) { setMsg("Dieser Raum hat noch keine Konfiguration."); setLoading(false); return; }
-      if (password !== cfg.password) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
-
-      // Spieler aus Sheet laden + Firestore-Overrides mergen
-      const sheetPlayers = await loadPlayersForRoom(roomId);
-      const overrides = await loadFirestoreOverrides(roomId);
-      const players = mergeWithOverrides(sheetPlayers, overrides);
-
-      let found = players.find((p) => p.name.toLowerCase() === playerName.trim().toLowerCase());
-
-      // Sheet-AppRolle tracken (für last-set-wins Logik)
-      if (found) {
-        await syncSheetAppRole(roomId, found.id, found.appRole ?? "viewer", overrides);
-        // Overrides neu laden nach eventuellem Update
-        const freshOverrides = await loadFirestoreOverrides(roomId);
-        const freshPlayers = mergeWithOverrides(sheetPlayers, freshOverrides);
-        found = freshPlayers.find((p) => p.id === found!.id) ?? found;
-      }
-
-      // ── Kein Sheet-Eintrag → Anmeldung verweigern ────────────────────────
-      let newPlayerData: Player | null = null;
-      if (!found) {
-        setMsg(`"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
-        setLoading(false);
-        return;
-      }
-
-      // Firebase Auth ZUERST – danach erst Firestore schreiben
-      const email = nameToFakeEmail(found.name, roomId);
-      const pw = cfg.password + "_tcs_internal";
-      try {
-        await signInWithEmailAndPassword(auth, email, pw);
-      } catch (signInErr: any) {
-        const code: string = signInErr?.code ?? "";
-        const isNoAccount =
-          code === "auth/user-not-found" ||
-          code === "auth/invalid-credential" ||
-          code === "auth/invalid-login-credentials";
-        if (isNoAccount) {
-          try {
-            await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: any) {
-            if (createErr?.code === "auth/email-already-in-use") {
-              setMsg("Account existiert bereits mit anderem Passwort. Bitte einen Admin kontaktieren.");
-              setLoading(false);
-              return;
-            } else {
-              throw createErr;
-            }
-          }
-        } else {
-          throw signInErr;
-        }
-      }
-
-      // (kein Self-Registration mehr – newPlayerData ist immer null)
-      // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
-      const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
-      if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
-        const existing = await loadFirestoreOverrides(roomId);
-        const next = {
-          ...existing,
-          [found.id]: { ...(existing[found.id] ?? {}), appRole: "admin", lastSheetAppRole: "admin" },
-        };
-        firestoreOverrideCache[roomId] = next;
-        await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
-        found = { ...found, appRole: "admin" };
-      }
-
-      onLogin(found, cfg);
-    } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
+      const login = await loginToRoom({
+        roomId,
+        handle: playerName,
+        password,
+        signIn: (token) => signInWithCustomToken(auth, token),
+      });
+      const player: Player = {
+        id: login.player.id,
+        name: login.player.name,
+        appRole: login.player.role,
+        area: "",
+        role: "",
+        squadron: "",
+        status: "",
+        ampel: "",
+        homeLocation: "",
+      };
+      setPassword("");
+      onLogin(player, cfg);
+    } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler.")); }
     setLoading(false);
   }
 
@@ -1084,9 +904,9 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       const cfg = await loadRoomConfig(roomId);
       setRoomCfg(cfg ?? false);
       if (!cfg) { setMsg("Keine Raum-Konfiguration gefunden."); setRefreshing(false); return; }
-      const list = await loadPlayersForRoom(roomId, true);
+      const result = await loadPlayersForRoom(roomId, true);
       const now = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-      setMsg(`✓ ${list.length} Spieler geladen (${now})`);
+      setMsg(result.warning ?? `✓ ${result.players.length} Spieler geladen (${now})`);
     } catch {
       setMsg("Fehler beim Laden der Spielerliste.");
     }
@@ -1111,7 +931,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
         {cfgMissing && (
           <div className="mb-4 mt-3 bg-yellow-950 border border-yellow-700 rounded-lg px-3 py-2 text-yellow-300 text-xs">
             ⚠ Dieser Raum hat noch keine Konfiguration.<br />
-            Ein Admin muss unter <span className="font-mono">rooms/{roomId}/config/main</span> die Felder <span className="font-mono">sheetUrl</span> und <span className="font-mono">password</span> in Firestore anlegen.
+            Ein Admin muss den Raum über „Neuen Raum erstellen“ serverseitig einrichten.
           </div>
         )}
 
@@ -1126,23 +946,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
             <input className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-blue-500"
               type="password" placeholder="Team-Passwort" value={password} onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-
-            {/* Setup-Schlüssel – optional, für Admin-Rechte */}
-            <button
-              className="text-xs text-gray-600 hover:text-gray-400 mb-2 flex items-center gap-1"
-              onClick={() => setShowSetupKey(v => !v)}>
-              {showSetupKey ? "▾" : "▸"} Setup-Schlüssel (optional, für Admin)
-            </button>
-            {showSetupKey && (
-              <input
-                className="w-full bg-gray-800 border border-orange-700 text-white rounded-lg px-3 py-2 mb-3 text-sm focus:outline-none focus:border-orange-500"
-                type="password"
-                placeholder="Setup-Schlüssel → Admin-Rechte"
-                value={setupKey}
-                onChange={(e) => setSetupKey(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              />
-            )}
 
             <button className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
               onClick={handleLogin} disabled={loading || !playerName || !password}>
@@ -1171,7 +974,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
 function InlineEdit({ value, onSave, className = "" }: { value: string; onSave: (v: string) => void; className?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  useEffect(() => { if (!editing) setDraft(value); }, [value, editing]);
   function commit() { if (draft.trim()) onSave(draft.trim()); setEditing(false); }
   if (editing) return (
     <input className={`bg-gray-700 border border-gray-500 text-white rounded px-1 text-sm focus:outline-none ${className}`}
@@ -1196,6 +998,8 @@ function GroupIconDisplay({ icon, size = 20 }: { icon?: string; size?: number })
     const src = icon.includes("drive.google.com/file/d/")
       ? icon.replace(/drive\.google\.com\/file\/d\/([^/]+).*/, "drive.google.com/uc?export=view&id=$1")
       : icon;
+    // User-provided icons may be arbitrary external URLs, so Next image optimization cannot be configured safely here.
+    // eslint-disable-next-line @next/next/no-img-element
     return <img src={src} style={{ width: size, height: size, borderRadius: 3, objectFit: "cover", flexShrink: 0 }} alt="icon" />;
   }
   return <span style={{ fontSize: size * 0.85, lineHeight: 1, flexShrink: 0 }}>{icon}</span>;
@@ -1234,7 +1038,9 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
   const isUrl = current && (current.startsWith("http") || current.startsWith("/"));
   const preview = current
     ? isUrl
-      ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(e) => { (e.target as any).style.display="none"; }} />
+      // User-provided icons may be arbitrary external URLs, so keep this preview unoptimized.
+      // eslint-disable-next-line @next/next/no-img-element
+      ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(event: React.SyntheticEvent<HTMLImageElement>) => { event.currentTarget.style.display = "none"; }} />
       : <span className="text-base leading-none">{current}</span>
     : <span className="text-gray-500 text-xs">🖼</span>;
 
@@ -1303,84 +1109,6 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
               ✕ Icon entfernen
             </button>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// DRAGGABLE PANEL
-// ─────────────────────────────────────────────────────────────
-
-function DraggablePanel({ title, tooltip, x, y, onMove, canDrag, children, minWidth = 180, defaultHeight = 0 }: {
-  title: string; tooltip?: string; x: number; y: number; onMove: (x: number, y: number) => void;
-  canDrag: boolean; children: React.ReactNode; minWidth?: number; defaultHeight?: number;
-}) {
-  const dragging = useRef(false);
-  const start = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-  const resizing = useRef(false);
-  const resizeStart = useRef({ mx: 0, my: 0, pw: 0, ph: 0 });
-  const [size, setSize] = useState({ w: minWidth, h: defaultHeight }); // h=0 = auto
-  const [minimized, setMinimized] = useState(false);
-  const MIN_W = minWidth;
-  const MIN_H = 80;
-
-  function onHeaderDown(e: React.PointerEvent) {
-    dragging.current = true;
-    start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault();
-  }
-  function onHeaderMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-        Math.max(0, Math.min(window.innerWidth  - 80, start.current.px + e.clientX - start.current.mx)),
-        Math.max(0, Math.min(window.innerHeight - 40, start.current.py + e.clientY - start.current.my))
-      );
-  }
-  function onHeaderUp() { dragging.current = false; }
-
-  function onResizeDown(e: React.PointerEvent) {
-    resizing.current = true;
-    resizeStart.current = { mx: e.clientX, my: e.clientY, pw: size.w, ph: size.h || 200 };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.stopPropagation(); e.preventDefault();
-  }
-  function onResizeMove(e: React.PointerEvent) {
-    if (!resizing.current) return;
-    setSize({
-      w: Math.max(MIN_W, resizeStart.current.pw + e.clientX - resizeStart.current.mx),
-      h: Math.max(MIN_H, resizeStart.current.ph + e.clientY - resizeStart.current.my),
-    });
-  }
-  function onResizeUp() { resizing.current = false; }
-
-  return (
-    <div className="absolute z-20 rounded-xl border border-gray-700 bg-gray-900 bg-opacity-95 shadow-xl flex flex-col overflow-hidden"
-      style={{ left: x, top: y, width: size.w, height: minimized ? "auto" : (size.h > 0 ? size.h : undefined), minWidth: MIN_W }}>
-      <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800 select-none flex-shrink-0 ${canDrag ? "cursor-move" : "cursor-default"}`}
-        onPointerDown={onHeaderDown} onPointerMove={onHeaderMove} onPointerUp={onHeaderUp}>
-        {canDrag && <span className="text-gray-500 text-xs">⠿</span>}
-        <span className="text-xs font-semibold text-gray-300 flex-1">{title}</span>
-        {tooltip && <HelpTip text={tooltip} />}
-        <button className="text-gray-500 hover:text-gray-300 text-xs px-1 ml-1"
-          onPointerDown={e => e.stopPropagation()}
-          onClick={() => setMinimized(v => !v)}>{minimized ? "□" : "─"}</button>
-      </div>
-      {!minimized && (
-        <div className="p-2 overflow-y-auto overflow-x-hidden flex-1"
-          style={{ scrollbarWidth: "thin", scrollbarColor: "#4B5563 transparent" }}>
-          {children}
-        </div>
-      )}
-      {/* Resize handle */}
-      {!minimized && (
-        <div className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-center justify-center text-gray-600 hover:text-gray-400 select-none flex-shrink-0"
-          onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp} title="Größe ändern">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <path d="M10 0L0 10h2L10 2V0zm0 4L4 10h2l4-4V4zm0 4l-2 2h2V8z"/>
-          </svg>
         </div>
       )}
     </div>
@@ -1463,15 +1191,14 @@ function SystemChip({ systemId, systems, canChange, onChange }: {
 // ─────────────────────────────────────────────────────────────
 
 function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive, spawnGroups, spawnState, onSetSpawn,
-  groupRoles, groupId, onSetRole, onSetAppRole, onSetPlayerField, groupColor: gColor,
+  groupRoles, groupId, onSetRole, onSetAppRole, onSetPlayerField,
 }: {
   player: Player; aliveState: PlayerAliveState; currentPlayerId: string; canWrite: boolean; isAdmin: boolean;
   onToggleAlive: (id: string) => void; spawnGroups: Group[]; spawnState: PlayerSpawnState;
   onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; groupId: string; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
-  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
-  groupColor: string;
+  onSetPlayerField: (pid: string, field: EditablePlayerField, value: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
   const isDead = aliveState[player.id] === "dead";
@@ -1602,8 +1329,7 @@ const CardMemo = React.memo(Card, (prev, next) =>
   prev.groupRoles[prev.groupId] === next.groupRoles[next.groupId] &&
   prev.canWrite === next.canWrite &&
   prev.currentPlayerId === next.currentPlayerId &&
-  prev.spawnState[prev.player.id] === next.spawnState[next.player.id] &&
-  prev.groupColor === next.groupColor
+  prev.spawnState[prev.player.id] === next.spawnState[next.player.id]
 );
 
 // ─────────────────────────────────────────────────────────────
@@ -1729,7 +1455,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   spawnGroups: Group[]; spawnState: PlayerSpawnState; onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   isAdmin: boolean; onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
-  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
+  onSetPlayerField: (pid: string, field: EditablePlayerField, value: string) => void;
   onSetColor: (id: string, hex: string) => void;
   onSetIcon: (id: string, icon: string) => void;
   systems?: StarSystem[]; onSetSystem?: (sysId: string) => void;
@@ -1819,8 +1545,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                   canWrite={canWrite} onToggleAlive={onToggleAlive} spawnGroups={spawnGroups}
                   spawnState={spawnState} onSetSpawn={onSetSpawn}
                   groupRoles={groupRoles} groupId={group.id} onSetRole={onSetRole}
-                  isAdmin={isAdmin} onSetAppRole={onSetAppRole} onSetPlayerField={onSetPlayerField}
-                  groupColor={gColor} />
+                  isAdmin={isAdmin} onSetAppRole={onSetAppRole} onSetPlayerField={onSetPlayerField} />
               ) : null
             )}
           </SortableContext>
@@ -1862,12 +1587,12 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
   const togglePois = (id: string) => setPoisOpen(p => ({ ...p, [id]: !(p[id] ?? true) }));
   const navSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  function handleSubmapDragEnd(e: any) {
+  function handleSubmapDragEnd(e: DragEndEvent) {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = submaps.map((m) => m.id);
-    const oldIdx = ids.indexOf(active.id);
-    const newIdx = ids.indexOf(over.id);
+    const oldIdx = ids.indexOf(String(active.id));
+    const newIdx = ids.indexOf(String(over.id));
     onReorderMaps(arrayMove(ids, oldIdx, newIdx));
   }
 
@@ -1917,11 +1642,11 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
                         </div>
                         {pOpen && smPois.length > 0 && (
                           <DndContext sensors={navSensors}
-                            onDragEnd={(e: any) => {
+                            onDragEnd={(e: DragEndEvent) => {
                               const { active, over } = e;
                               if (!over || active.id === over.id) return;
                               const ids = smPois.map((p) => p.id);
-                              onReorderPOIs(sm.id, arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id)));
+                              onReorderPOIs(sm.id, arrayMove(ids, ids.indexOf(String(active.id)), ids.indexOf(String(over.id))));
                             }}>
                             <SortableContext items={smPois.map((p) => p.id)} strategy={rectSortingStrategy}>
                               {smPois.map((poi) => (
@@ -1955,12 +1680,11 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
   map: { id: string; label: string; image: string }; activeMapId: string;
   setActiveMapId: (id: string) => void; isAdmin: boolean; canDelete: boolean;
   onRename: (v: string) => void; onDelete: () => void; onSetImage: (img: string) => void;
-  indent: number; isPOI?: boolean; dragListeners?: object; dragAttributes?: object;
+  indent: number; isPOI?: boolean; dragListeners?: DraggableSyntheticListeners; dragAttributes?: DraggableAttributes;
 }) {
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  useEffect(() => setUrlDraft(map.image), [map.image]);
 
   const isActive = activeMapId === map.id;
   const icon = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
@@ -2001,9 +1725,9 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
         >
           <span className="flex items-center gap-1">
             {dragListeners && (
-              <span {...(dragListeners as any)} {...(dragAttributes as any)}
+              <span {...dragListeners} {...dragAttributes}
                 className="cursor-grab active:cursor-grabbing flex-shrink-0 touch-none select-none"
-                onPointerDown={(e) => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); (dragListeners as any).onPointerDown?.(e); }}>
+                onPointerDown={(event) => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); dragListeners.onPointerDown?.(event); }}>
                 <svg width="10" height="7" viewBox="0 0 10 7" fill="currentColor" className="text-gray-500 opacity-60">
                   <circle cx="2" cy="1.5" r="1.2"/><circle cx="5" cy="1.5" r="1.2"/><circle cx="8" cy="1.5" r="1.2"/>
                   <circle cx="2" cy="5.5" r="1.2"/><circle cx="5" cy="5.5" r="1.2"/><circle cx="8" cy="5.5" r="1.2"/>
@@ -2018,7 +1742,7 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
         </button>
         {isAdmin && (
           <button className={`text-xs px-1 flex-shrink-0 ${showUrl ? "text-blue-400" : "text-gray-600 hover:text-blue-400"}`}
-            onClick={() => setShowUrl((v) => !v)} title="Bild-URL">🖼</button>
+            onClick={() => { setUrlDraft(map.image); setShowUrl((value) => !value); }} title="Bild-URL">🖼</button>
         )}
         {canDelete && !confirmDelete && (
           <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0"
@@ -2185,35 +1909,16 @@ function HelpTip({ text }: { text: string }) {
 
 function DrawingToolbar({
   tool, setTool, color, setColor, width, setWidth, canDraw,
-  onUndo, onClear, x, y, onMove, showGrid, onToggleGrid,
+  onUndo, onClear,
 }: {
   tool: DrawTool; setTool: (t: DrawTool) => void;
   color: string; setColor: (c: string) => void;
   width: number; setWidth: (w: number) => void;
   canDraw: boolean; onUndo: () => void; onClear: () => void;
-  x: number; y: number; onMove: (x: number, y: number) => void;
-  showGrid: boolean; onToggleGrid: () => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
-  const dragging = useRef(false);
-  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
 
   if (!canDraw) return null;
-
-  function onHandleDown(e: React.PointerEvent) {
-    dragging.current = true;
-    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault(); e.stopPropagation();
-  }
-  function onHandleMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
-      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
-    );
-  }
-  function onHandleUp() { dragging.current = false; }
 
   const tools: { id: DrawTool; icon: string; title: string }[] = [
     { id: "pointer",          icon: "↖",  title: "Zeiger (normal)" },
@@ -2231,22 +1936,16 @@ function DrawingToolbar({
 
   return (
     <div
-      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
-      style={{ left: x, top: y, minWidth: 176 }}
+      className="select-none"
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Drag Handle */}
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
-        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
-      >
-        <span className="text-gray-500 text-xs">⠿</span>
-        <span className="text-xs font-semibold text-gray-300">✏ Zeichnen</span>
-        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: Klicken, alle 30s blasser, löscht sich automatisch"} />
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-xs font-semibold text-gray-300">Werkzeuge</span>
+        <HelpTip text={"Zeichenwerkzeuge:\n↖ Zeiger – normal bewegen\n✏ Freihand – Linie zeichnen\n╱ Linie – gerade Linie\n⌫ Radierer – Element löschen\nT Text – Text platzieren\n✥ Verschieben – Element anfassen & ziehen\nFeindmarker: bleibt sichtbar, bis er manuell gelöscht wird"} />
       </div>
 
       <div className="flex flex-col gap-2 p-2">
-        {/* Tools + Grid */}
+        {/* Tools */}
         <div className="flex gap-1 flex-wrap">
           {tools.map((t) => (
             <button key={t.id} title={t.title} onClick={() => setTool(t.id)}
@@ -2256,12 +1955,6 @@ function DrawingToolbar({
               {t.icon}
             </button>
           ))}
-          <button title="Gitternetz ein/aus" onClick={onToggleGrid}
-            className={`w-8 h-8 rounded-lg text-xs font-bold border transition-colors ${
-              showGrid ? "bg-green-700 border-green-500 text-white" : "bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700"
-            }`}>
-            ⊞
-          </button>
         </div>
 
         {/* Farben */}
@@ -2290,7 +1983,7 @@ function DrawingToolbar({
 
         {/* Feindmarker */}
         <div className="border-t border-gray-700 pt-1.5">
-          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (fade)</div>
+          <div className="text-xs text-gray-500 mb-1">Feind ⚠ (dauerhaft)</div>
           <div className="flex gap-1">
             {markerTools.map((m) => (
               <button key={m.id} title={m.title} onClick={() => setTool(m.id)}
@@ -2344,12 +2037,12 @@ function DrawingToolbar({
 // ─────────────────────────────────────────────────────────────
 
 function DrawingLayer({
-  elements, tool, color, strokeWidth, canDraw, showGrid, markerTick,
+  elements, tool, color, strokeWidth, canDraw, showGrid,
   onAddElement, onRemoveElement, onUpdateElement, onResetTool,
 }: {
   elements: DrawElement[];
   tool: DrawTool; color: string; strokeWidth: number;
-  canDraw: boolean; showGrid: boolean; markerTick?: number;
+  canDraw: boolean; showGrid: boolean;
   onAddElement: (el: DrawElement) => void;
   onRemoveElement: (id: string) => void;
   onUpdateElement: (el: DrawElement) => void;
@@ -2374,9 +2067,13 @@ function DrawingLayer({
   const [textVal, setTextVal] = useState("");
   const textRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
-
-  // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
+  const hasEnemyMarkers = elements.some((element) => element.type === "marker");
+  const [markerNow, setMarkerNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasEnemyMarkers) return;
+    const timer = window.setInterval(() => setMarkerNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasEnemyMarkers]);
 
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
@@ -2393,16 +2090,7 @@ function DrawingLayer({
     };
   }
 
-  function toPixel(rel: { x: number; y: number }, rect: DOMRect): { x: number; y: number } {
-    // Canvas hat dieselbe Größe wie das Bild, Ursprung = Bild-Top-Left
-    const canvas = canvasRef.current!;
-    return {
-      x: rel.x * canvas.width,
-      y: rel.y * canvas.height,
-    };
-  }
-
-  function redraw(extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) {
+  const redraw = useCallback((extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -2466,19 +2154,21 @@ function DrawingLayer({
         ctx.textBaseline = "hanging";
         ctx.fillText(el.text, el.x * W, el.y * H);
       } else if (el.type === "marker") {
-        const cx = el.x * W;
-        const cy = el.y * H;
+        const marker = normalizeEnemyMarker(el);
+        if (!marker) continue;
+        const cx = marker.x * W;
+        const cy = marker.y * H;
         const sz = 18; // Radius des Symbols in px
         ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, el.opacity));
-        ctx.strokeStyle = el.color;
-        ctx.fillStyle = el.color;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = marker.color;
+        ctx.fillStyle = marker.color;
         ctx.lineWidth = 2.5;
         ctx.font = `bold ${sz}px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        if (el.kind === "infantry") {
+        if (marker.kind === "infantry") {
           // Infantrie: Kreuz (✖) in Kreis
           ctx.beginPath();
           ctx.arc(cx, cy, sz * 0.85, 0, Math.PI * 2);
@@ -2488,7 +2178,7 @@ function DrawingLayer({
           ctx.lineWidth = 2.5;
           ctx.beginPath(); ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d); ctx.stroke();
           ctx.beginPath(); ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d); ctx.stroke();
-        } else if (el.kind === "ground") {
+        } else if (marker.kind === "ground") {
           // Boden: gefülltes Dreieck (▼)
           ctx.beginPath();
           ctx.moveTo(cx, cy + sz * 0.9);
@@ -2498,7 +2188,7 @@ function DrawingLayer({
           ctx.stroke();
           // Querbalken oben
           ctx.beginPath(); ctx.moveTo(cx - sz * 0.85, cy - sz * 0.55); ctx.lineTo(cx + sz * 0.85, cy - sz * 0.55); ctx.stroke();
-        } else if (el.kind === "air") {
+        } else if (marker.kind === "air") {
           // Luft: Dreieck (^) mit Flügeln (NATO-Luftzeichen)
           ctx.beginPath();
           ctx.moveTo(cx, cy - sz * 0.9);
@@ -2515,10 +2205,8 @@ function DrawingLayer({
         ctx.font = `bold 9px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const kindLabel = el.kind === "infantry" ? "INF" : el.kind === "ground" ? "BDN" : "LUFT";
-        const ageMs = Date.now() - (el.createdAt ?? Date.now());
-        const ageMins = Math.floor(ageMs / 60000);
-        const timeLabel = ageMins < 1 ? "<1m" : ageMins < 60 ? `${ageMins}m` : `${Math.floor(ageMins/60)}h${ageMins%60 > 0 ? ageMins%60+"m" : ""}`;
+        const kindLabel = marker.kind === "infantry" ? "INF" : marker.kind === "ground" ? "BDN" : "LUFT";
+        const timeLabel = enemyMarkerAgeLabel(marker.createdAt, markerNow);
         ctx.fillText(`${kindLabel} ${timeLabel}`, cx, cy + sz + 2);
         ctx.restore();
       }
@@ -2546,12 +2234,15 @@ function DrawingLayer({
       ctx.lineCap = "round";
       ctx.stroke();
     }
-  }
+  }, [color, elements, markerNow, showGrid, strokeWidth]);
+
+  // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
+  useEffect(() => { redraw(); }, [movingEl, redraw, tool]);
 
   // Canvas-Größe an Bild anpassen – wir verwenden offsetWidth/offsetHeight
   // (die CSS-Größe des Elements VOR dem äußeren CSS-transform/scale),
   // damit canvas.width/height in natürlichen Pixeln bleibt und nicht zoom-skaliert wird.
-  function syncCanvasSize() {
+  const syncCanvasSize = useCallback(() => {
     const canvas = canvasRef.current;
     const img = document.getElementById("map-img") as HTMLImageElement | null;
     if (!canvas || !img) return;
@@ -2562,7 +2253,7 @@ function DrawingLayer({
       canvas.height = h;
       redraw();
     }
-  }
+  }, [redraw]);
 
   // ResizeObserver: Canvas neu skalieren wenn Bild sich verändert (Fenstergröße)
   useEffect(() => {
@@ -2572,7 +2263,7 @@ function DrawingLayer({
     ro.observe(img);
     syncCanvasSize();
     return () => ro.disconnect();
-  }, [elements, showGrid, markerTick]);
+  }, [syncCanvasSize]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDraw || tool === "pointer") return;
@@ -2593,7 +2284,7 @@ function DrawingLayer({
     shiftHeld.current = e.shiftKey;
     if (tool === "marker_infantry" || tool === "marker_ground" || tool === "marker_air") {
       const kind = tool.replace("marker_", "") as "infantry" | "ground" | "air";
-      onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: Date.now() });
+      onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: currentTimestamp() });
       if (!e.shiftKey) onResetTool?.();
       return;
     }
@@ -2664,18 +2355,8 @@ function DrawingLayer({
       const dy = p.y - movingEl.startRel.y;
       const moved = applyDelta(movingEl.origEl, dx, dy);
       setMovingEl((prev) => prev ? { ...prev, el: moved } : null);
-      // Live preview: temporarily replace in elements for redraw
-      const previewEls = elements.map((el) => el.id === moved.id ? moved : el);
-      // Trigger redraw via direct call (we pass the preview elements)
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          // Minimal redraw with preview – we store moved el in a ref for render
-          movingPreviewRef.current = moved;
-          redraw();
-        }
-      }
+      movingPreviewRef.current = moved;
+      redraw();
       return;
     }
 
@@ -2909,55 +2590,6 @@ function DrawingLayer({
 // ZOOMABLE MAP
 // BUGFIX: Mausrad = nur Scrollen/Panning, kein Zoom. Zoom nur über Buttons.
 // ─────────────────────────────────────────────────────────────
-// ZOOM PANEL – verschiebbares Fenster für Zoom-Steuerung
-// ─────────────────────────────────────────────────────────────
-
-function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
-  x: number; y: number; onMove: (x: number, y: number) => void;
-  onZoomIn: () => void; onZoomOut: () => void; onReset: () => void;
-  scale: number;
-}) {
-  const dragging = useRef(false);
-  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-
-  function onHandleDown(e: React.PointerEvent) {
-    dragging.current = true;
-    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault(); e.stopPropagation();
-  }
-  function onHandleMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
-      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
-    );
-  }
-  function onHandleUp() { dragging.current = false; }
-
-  return (
-    <div
-      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
-      style={{ left: x, top: y, minWidth: 90 }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
-        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
-      >
-        <span className="text-gray-500 text-xs">⠿</span>
-        <span className="text-xs font-semibold text-gray-300">🔍</span>
-        <span className="text-xs text-gray-500 ml-auto">{Math.round(scale * 100)}%</span>
-      </div>
-      <div className="flex flex-col gap-1 p-2">
-        <button onClick={onZoomIn}  onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">＋</button>
-        <button onClick={onZoomOut} onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">－</button>
-        <button onClick={onReset}   onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-xs border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">⊙ Reset</button>
-      </div>
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
@@ -2966,7 +2598,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
   drawElements, drawTool, drawColor, drawWidth, canDraw, onAddDrawElement, onRemoveDrawElement, onUpdateDrawElement,
-  showGrid, onScaleChange, markerTick,
+  showGrid, onScaleChange,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
@@ -2989,7 +2621,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   onRemoveDrawElement: (id: string) => void;
   onUpdateDrawElement: (el: DrawElement) => void;
   showGrid: boolean;
-  markerTick?: number;
   onScaleChange: (scale: number, setScale: (fn: (s: number) => number) => void, resetView: () => void) => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -3006,7 +2637,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   // expose scale control to parent (for ZoomPanel)
   useEffect(() => {
     onScaleChange(scale, setScale, resetView);
-  }, [scale]);
+  }, [scale, onScaleChange]);
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [openGroupMenu, setOpenGroupMenu] = useState<string | null>(null); // markerId
@@ -3121,7 +2752,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         const ny = Math.max(-maxY, Math.min(maxY, panStart.current.oy + e.clientY - panStart.current.y));
         offsetRef.current = { x: nx, y: ny };
         // Direkt per DOM – kein React re-render, kein Frame-Delay
-        transformDivRef.current.style.transform = `translate(${nx}px,${ny}px) scale(${scale})`;
+        applyMapTransform(transformDivRef.current, nx, ny, scale);
       }
     }
     if (tokenDrag && canWriteTokens) {
@@ -3173,7 +2804,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     setOrderMarkerDrag(null); lastOrderMarkerPos.current = null;
   }
 
-  const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
+  const visibleTokens = parseTokens(tokens).filter((t) => t.mapId === activeMapId);
   const visibleOrderMarkers = orderMarkers.filter((m) => m.mapId === activeMapId);
   const [orderMarkerDrag, setOrderMarkerDrag] = useState<string | null>(null);
   const lastOrderMarkerPos = useRef<{ x: number; y: number } | null>(null);
@@ -3242,7 +2873,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         }
         if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgMove(e);
       }}
-      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
+      onPointerUp={() => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
       onPointerLeave={() => { setGridCoord(null); setGridPixel(null); }}>
 
       {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
@@ -3263,6 +2894,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         transition: (tokenDrag || markerDrag || panning) ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
       }}>
+        {/* Exact canvas/image alignment is required here; optimization would change that rendering contract. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img id="map-img" src={imageSrc} alt="Map"
           className="w-full h-full object-contain block select-none"
           draggable={false}
@@ -3291,7 +2924,6 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           strokeWidth={drawWidth}
           canDraw={canDraw}
           showGrid={showGrid}
-          markerTick={markerTick}
           onAddElement={onAddDrawElement}
           onRemoveElement={onRemoveDrawElement}
           onUpdateElement={onUpdateDrawElement}
@@ -3358,7 +2990,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                             className="text-xs text-gray-600 hover:text-orange-400 px-1"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onMoveTokenUp ? onMoveTokenUp(g.groupId, m.id) : onRemoveToken?.(g.groupId, m.id);
+                              if (onMoveTokenUp) onMoveTokenUp(g.groupId, m.id);
+                              else onRemoveToken?.(g.groupId, m.id);
                               setOpenGroupMenu(null);
                             }}
                             title="Gruppe auf übergeordnete Ebene verschieben">↑</button>
@@ -3618,16 +3251,14 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite,
 // LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
 // ─────────────────────────────────────────────────────────────
 
-function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime, minimized, onToggleMinimize }: {
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, canWrite, minimized, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: LogEntry[];
   onAdd: (text: string) => void;
   onClear: () => void;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
-  onToggleVisible: () => void;
   canWrite: boolean;
-  useRelTime: boolean;
   minimized?: boolean; onToggleMinimize?: () => void;
 }) {
   const dragging = useRef(false);
@@ -3638,7 +3269,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
   const [confirmClear, setConfirmClear] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const firstTs = entries[0]?.ts ?? 0;
-  const [useRelTimeLocal, setUseRelTimeLocal] = useState(useRelTime);
+  const [useRelTimeLocal, setUseRelTimeLocal] = useState(false);
 
   function onHeaderDown(e: React.PointerEvent) {
     dragging.current = true; start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
@@ -3773,8 +3404,8 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
 // OP LOG PANEL
 // ─────────────────────────────────────────────────────────────
 
-function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isActive, canWrite, onMove, onResize, onToggleVisible,
-  isAdmin, activeSystemId, systems, minimized, onToggleMinimize }: {
+function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isActive, canWrite, onMove, onResize,
+  isAdmin, systems, minimized, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: OpLogEntry[];
   onClear: () => void;
@@ -3783,9 +3414,7 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
   canWrite: boolean;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
-  onToggleVisible: () => void;
   isAdmin: boolean;
-  activeSystemId: string;
   systems: StarSystem[];
   minimized?: boolean;
   onToggleMinimize?: () => void;
@@ -4057,10 +3686,14 @@ function BoardApp() {
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
   const [spawnState, setSpawnState] = useState<PlayerSpawnState>({});
+  const [, setPlayerStatuses] = useState<Record<string, PlayerStatus>>({});
+  const playerStatusesRef = useRef<Record<string, PlayerStatus>>({});
+  const [pendingStatusPlayers, setPendingStatusPlayers] = useState<Set<string>>(() => new Set());
   const [maps, setMaps] = useState<MapEntry[]>(getDefaultMaps("pyro"));
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
   const [showProfile, setShowProfile] = useState(false);
+  const [showMobileLink, setShowMobileLink] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
@@ -4069,13 +3702,13 @@ function BoardApp() {
   const toggleMinPanel = useCallback((key: string) => { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }, []);
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
-  const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
+  const [, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
   // ── Block 5: Panel-State isoliert – jede Position eigener State ──
   const [panelNav,      setPanelNav]      = useState({ x: DEFAULT_PANEL_LAYOUT.nav.x,    y: DEFAULT_PANEL_LAYOUT.nav.y    });
   const [panelPlacer,   setPanelPlacer]   = useState({ x: DEFAULT_PANEL_LAYOUT.placer.x, y: DEFAULT_PANEL_LAYOUT.placer.y });
   const [panelToolbar,  setPanelToolbar]  = useState({ x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 });
-  const [panelZoom,     setPanelZoom]     = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  });
+  const [panelZoom, setPanelZoom] = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16, y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600 });
   const [panelNotes,    setPanelNotes]    = useState({ x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    });
   const [panelLogNotes, setPanelLogNotes] = useState({ x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false });
   const [panelOpLog,    setPanelOpLog]    = useState({ x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false });
@@ -4086,15 +3719,15 @@ function BoardApp() {
   }), [panelNav, panelPlacer, panelToolbar, panelZoom, panelNotes, panelLogNotes, panelOpLog]);
   const setLocalPanelPos = (updater: (p: PanelLayout) => PanelLayout) => {
     // Shim für alle Stellen die noch setLocalPanelPos nutzen (clamp-Effects etc.)
-    const cur: PanelLayout = { nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom, notes: panelNotes as any, logNotes: panelLogNotes as any, opLog: panelOpLog as any };
+    const cur: PanelLayout = { nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom, notes: panelNotes, logNotes: panelLogNotes, opLog: panelOpLog };
     const next = updater(cur);
     if (next.nav !== cur.nav) setPanelNav(next.nav);
     if (next.placer !== cur.placer) setPanelPlacer(next.placer);
     if (next.toolbar !== cur.toolbar) setPanelToolbar(next.toolbar);
     if (next.zoom !== cur.zoom) setPanelZoom(next.zoom);
-    if (next.notes !== cur.notes) setPanelNotes(next.notes as any);
-    if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes as any);
-    if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog as any);
+    if (next.notes !== cur.notes) setPanelNotes(next.notes);
+    if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes);
+    if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog);
   };
 
   // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
@@ -4109,47 +3742,32 @@ function BoardApp() {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 
-      setLocalPanelPos((p) => {
-        const navW = 340, navH = 300;
-        const placerW = 280, placerH = 220;
-        const toolbarW = 260, toolbarH = 160;
-        const zoomW = 160, zoomH = 110;
-
-        const notesW = p.notes.w ?? 420;
-        const notesH = p.notes.h ?? 260;
-        const logW = p.logNotes.w ?? 520;
-        const logH = p.logNotes.h ?? 360;
-
-        return {
-          ...p,
-          nav: {
-            x: clamp(Number(p.nav.x) || 0, pad, Math.max(pad, vw - navW - pad)),
-            y: clamp(Number(p.nav.y) || 0, pad, Math.max(pad, vh - navH - pad)),
-          },
-          placer: {
-            x: clamp(Number(p.placer.x) || 0, pad, Math.max(pad, vw - placerW - pad)),
-            y: clamp(Number(p.placer.y) || 0, pad, Math.max(pad, vh - placerH - pad)),
-          },
-          toolbar: {
-            x: clamp(Number(p.toolbar.x) || 0, pad, Math.max(pad, vw - toolbarW - pad)),
-            y: clamp(Number(p.toolbar.y) || 0, pad, Math.max(pad, vh - toolbarH - pad)),
-          },
-          zoom: {
-            x: clamp(Number(p.zoom.x) || 0, pad, Math.max(pad, vw - zoomW - pad)),
-            y: clamp(Number(p.zoom.y) || 0, pad, Math.max(pad, vh - zoomH - pad)),
-          },
-          notes: {
-            ...p.notes,
-            x: clamp(Number(p.notes.x) || 0, pad, Math.max(pad, vw - notesW - pad)),
-            y: clamp(Number(p.notes.y) || 0, pad, Math.max(pad, vh - notesH - pad)),
-          },
-          logNotes: {
-            ...p.logNotes,
-            x: clamp(Number(p.logNotes.x) || 0, pad, Math.max(pad, vw - logW - pad)),
-            y: clamp(Number(p.logNotes.y) || 0, pad, Math.max(pad, vh - logH - pad)),
-          },
-        };
-      });
+      setPanelNav((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 340 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 300 - pad)),
+      }));
+      setPanelPlacer((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 280 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 220 - pad)),
+      }));
+      setPanelToolbar((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 260 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 160 - pad)),
+      }));
+      setPanelZoom((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 160 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 110 - pad)),
+      }));
+      setPanelNotes((panel) => ({
+        ...panel,
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - (panel.w ?? 420) - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - (panel.h ?? 260) - pad)),
+      }));
+      setPanelLogNotes((panel) => ({
+        ...panel,
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - (panel.w ?? 520) - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - (panel.h ?? 360) - pad)),
+      }));
     };
 
     applyClamp();
@@ -4161,13 +3779,26 @@ function BoardApp() {
   const [systemNotesTexts, setSystemNotesTexts] = useState<Record<string,string>>({});
   const systemNotesRef = React.useRef<Record<string,string>>({});
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
-  const [useRelTime, setUseRelTime] = useState(false);
   const logEntriesRef = useRef<LogEntry[]>([]);
   const [notesVisible, setNotesVisible] = useState(true);
-  const [showToolbar,  setShowToolbar]  = useState(true);
-  const [showZoom,     setShowZoom]     = useState(true);
-  const [showNav,      setShowNav]      = useState(true);
-  const [showPlacer,   setShowPlacer]   = useState(true);
+  const [mapUiPreferences, setMapUiPreferences] = useState<MapUiPreferences>(DEFAULT_MAP_UI_PREFERENCES);
+  const loadedMapUiKey = useRef<string | null>(null);
+  const mapUiStorageKey = currentPlayer ? `klabscom:map-ui:${roomId}:${currentPlayer.id}` : null;
+
+  useEffect(() => {
+    if (!mapUiStorageKey) {
+      loadedMapUiKey.current = null;
+      setMapUiPreferences(DEFAULT_MAP_UI_PREFERENCES);
+      return;
+    }
+    setMapUiPreferences(loadMapUiPreferences(window.localStorage, mapUiStorageKey));
+    loadedMapUiKey.current = mapUiStorageKey;
+  }, [mapUiStorageKey]);
+
+  useEffect(() => {
+    if (!mapUiStorageKey || loadedMapUiKey.current !== mapUiStorageKey) return;
+    saveMapUiPreferences(window.localStorage, mapUiStorageKey, mapUiPreferences);
+  }, [mapUiPreferences, mapUiStorageKey]);
 
   // ── Op-Log state ────────────────────────────────────────────────────
   const [opLogEntries, setOpLogEntries] = useState<OpLogEntry[]>([]);
@@ -4175,7 +3806,7 @@ function BoardApp() {
   const [opLogActive, setOpLogActive] = useState(false); // Standard: gestoppt
   const opLogActiveRef = useRef(false);
   // Pending timers: key → { timer, entry, prevPos? }
-  const opLogPending = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; entry: OpLogEntry; prevX?: number; prevY?: number }>>({});
+  const opLogPending = useRef<Record<string, PendingOpLogEntry>>({});
 
   // Drawing state
   const [drawings, setDrawings] = useState<DrawingsMap>({});
@@ -4183,7 +3814,7 @@ function BoardApp() {
   const [drawColor, setDrawColor] = useState("#ffffff");
   const [drawWidth, setDrawWidth] = useState(4);
   const drawingsRef = useRef<DrawingsMap>({});
-  const [showGrid, setShowGrid] = useState(false);
+  const showGrid = mapUiPreferences.showGrid;
 
   // Sheet-Refresh state
   const [refreshingPlayers, setRefreshingPlayers] = useState(false);
@@ -4196,24 +3827,24 @@ function BoardApp() {
   const resetViewRef = useRef<() => void>(() => {});
   const [mapScale, setMapScale] = useState(1);
 
-  function handleScaleChange(
+  const handleScaleChange = useCallback((
     scale: number,
     setScaleFn: (fn: (s: number) => number) => void,
     resetFn: () => void,
-  ) {
+  ) => {
     setMapScale(scale);
-    zoomInRef.current  = () => setScaleFn((s) => Math.min(8, s * 1.3));
-    zoomOutRef.current = () => setScaleFn((s) => Math.max(0.3, s / 1.3));
+    zoomInRef.current  = () => setScaleFn(zoomIn);
+    zoomOutRef.current = () => setScaleFn(zoomOut);
     resetViewRef.current = resetFn;
-  }
+  }, []);
 
   const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | "aliveStatus" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
 
   const playersById = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p])), [players]);
-  const canWrite = role === "admin" || role === "commander";
-  const isAdmin = role === "admin";
+  const canWrite = canWriteBoard(role);
+  const isAdmin = canAdministerRoom(role);
 
   // refs
   const boardRef = useRef(board);
@@ -4264,7 +3895,7 @@ useEffect(() => {
   mapsBySystemRef.current[prevSystemId] = normalizeMapsForSystem(prevSystemId, mapsRef.current);
   poisBySystemRef.current[prevSystemId] = poisRef.current;
   drawingsBySystemRef.current[prevSystemId] = drawingsRef.current;
-  activeMapIdBySystemRef.current[prevSystemId] = activeMapId;
+  activeMapIdBySystemRef.current[prevSystemId] = activeMapIdBySystemRef.current[prevSystemId] ?? "main";
 
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
@@ -4318,16 +3949,21 @@ useEffect(() => {
   useEffect(() => {
     if (!roomCfg) return;
     // Initialer Load
-    loadPlayersForRoom(roomId).then((sheetList) => {
+    loadPlayersForRoom(roomId).then((sheetLoad) => {
       loadFirestoreOverrides(roomId).then((ov) => {
-        applyPlayerList(mergeWithOverrides(sheetList, ov), false);
+        applyPlayerList(mergeWithOverrides(sheetLoad.players, ov), false);
+        if (sheetLoad.warning) {
+          setPlayerToast(sheetLoad.warning);
+          if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+          playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+        }
       });
     });
     // Echtzeit-Listener auf playerOverrides
     const overridesRef = doc(db, "rooms", roomId, "config", "playerOverrides");
     const unsub = onSnapshot(overridesRef, (snap) => {
       if (!snap.exists()) return;
-      const ov = snap.data() as Record<string, Partial<Player>>;
+      const ov = parsePlayerOverrides(snap.data());
       firestoreOverrideCache[roomId] = ov;
       const sheetList = cachedPlayersByRoom[roomId] ?? [];
       applyPlayerList(mergeWithOverrides(sheetList, ov), false);
@@ -4339,8 +3975,13 @@ useEffect(() => {
   useEffect(() => {
     if (!roomCfg) return;
     const id = setInterval(async () => {
-      const list = await loadPlayersForRoom(roomId, true);
-      applyPlayerList(list, true);
+      const result = await loadPlayersForRoom(roomId, true);
+      applyPlayerList(result.players, true);
+      if (result.warning) {
+        setPlayerToast(result.warning);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+      }
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [roomId, roomCfg]);
@@ -4350,9 +3991,14 @@ useEffect(() => {
     if (refreshingPlayers) return;
     setRefreshingPlayers(true);
     try {
-      const list = await loadPlayersForRoom(roomId, true);
+      const result = await loadPlayersForRoom(roomId, true);
+      const list = result.players;
       applyPlayerList(list, true);
-      if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
+      if (result.warning) {
+        setPlayerToast(result.warning);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+      } else if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
         setPlayerToast(`✓ ${list.length} Spieler – keine neuen`);
         if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
         playerToastTimer.current = setTimeout(() => setPlayerToast(null), 3000);
@@ -4365,9 +4011,8 @@ useEffect(() => {
   // role
   useEffect(() => {
     if (!user || !currentPlayer) return;
-    const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
+    const sheetRole = parseRole(currentPlayer.appRole);
     setRole(sheetRole);
-    setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
 
   // Beim Logout: Room-Config-Cache invalidieren damit nächster Login frisch lädt
@@ -4384,23 +4029,22 @@ useEffect(() => {
     if (!user) return;
     const ref = doc(db, "rooms", roomId, "state", "board");
     const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as any;
-      if (!data) return;
-      const rawGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const parsedBoard = parseBoardState(data, DEFAULT_GROUPS);
       // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "pyro" als Default
-      const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
-      setBoard(safeBoard(data, loadedGroups));
+      const loadedGroups: Group[] = parsedBoard.groups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
+      setBoard({ ...parsedBoard, groups: loadedGroups });
       
 // ── Map data: prefer per-system fields, fallback legacy → LEGACY_DEFAULT_SYSTEM
 let didMigrate = false;
 
-const normalizeTokensArr = (arr: any[]): Token[] => arr.map(normalizeToken);
-const normalizeOrderMarkersArr = (arr: any[]): OrderMarker[] =>
-  arr.map((m: any) => ({ groupId: m.groupId, x: m.x, y: m.y, mapId: m.mapId ?? "main" }));
+const normalizeTokensArr = (arr: unknown): Token[] => parseTokens(arr);
+const normalizeOrderMarkersArr = (arr: unknown): OrderMarker[] => parseOrderMarkers(arr);
 
 const tokensBySystem: Record<string, Token[]> =
   data.tokensBySystem && typeof data.tokensBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.tokensBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeTokensArr(v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.tokensBySystem).map(([k, v]) => [k, normalizeTokensArr(v)]))
     : (() => {
         didMigrate = Array.isArray(data.tokens);
         return Array.isArray(data.tokens) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeTokensArr(data.tokens) } as Record<string, Token[]> : {} as Record<string, Token[]>;
@@ -4408,7 +4052,7 @@ const tokensBySystem: Record<string, Token[]> =
 
 const orderMarkersBySystem: Record<string, OrderMarker[]> =
   data.orderMarkersBySystem && typeof data.orderMarkersBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.orderMarkersBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeOrderMarkersArr(v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.orderMarkersBySystem).map(([k, v]) => [k, normalizeOrderMarkersArr(v)]))
     : (() => {
         didMigrate = didMigrate || Array.isArray(data.orderMarkers);
         return Array.isArray(data.orderMarkers) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeOrderMarkersArr(data.orderMarkers) } as Record<string, OrderMarker[]> : {} as Record<string, OrderMarker[]>;
@@ -4416,18 +4060,21 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k)]))
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => {
+        const parsedMaps = parseMapEntries(v);
+        return [k, parsedMaps.length > 0 ? parsedMaps : getDefaultMaps(k)];
+      }))
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
-        return legacyHas ? { [LEGACY_DEFAULT_SYSTEM]: data.maps } as Record<string, MapEntry[]> : {} as Record<string, MapEntry[]>;
+        return legacyHas ? { [LEGACY_DEFAULT_SYSTEM]: parseMapEntries(data.maps) } as Record<string, MapEntry[]> : {} as Record<string, MapEntry[]>;
       })();
 
 const poisBySystem: Record<string, POI[]> =
   data.poisBySystem && typeof data.poisBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.poisBySystem).map(([k, v]) => [k, Array.isArray(v) ? (v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.poisBySystem).map(([k, v]) => [k, parsePois(v)]))
     : (() => {
-        const legacyPois = Array.isArray(data.pois) ? data.pois : (data.pois ?? []);
+        const legacyPois = parsePois(data.pois);
         didMigrate = didMigrate || !!data.pois;
         return { [LEGACY_DEFAULT_SYSTEM]: legacyPois } as Record<string, POI[]>;
       })();
@@ -4446,7 +4093,7 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const targetSystemId = activeSystemIdRef.current || activeSystemId;
+const targetSystemId = activeSystemIdRef.current;
 // ── Block 4: Refs sofort setzen (kein Re-render), dann State als Transition ──
 const activeTokens = tokensBySystemRef.current[targetSystemId] ?? [];
 tokensRef.current = activeTokens;
@@ -4463,12 +4110,21 @@ poisRef.current = activePois;
 const activeDrawings = drawingsBySystemRef.current[targetSystemId] ?? {};
 drawingsRef.current = activeDrawings;
 
+const legacyAliveState = parseAliveState(data.aliveState);
+const legacySpawnState = parseSpawnState(data.spawnState);
+for (const status of Object.values(playerStatusesRef.current)) {
+  legacyAliveState[status.playerId] = status.aliveStatus;
+  if (status.spawnGroupId) legacySpawnState[status.playerId] = status.spawnGroupId;
+}
+aliveRef.current = legacyAliveState;
+spawnRef.current = legacySpawnState;
+
 // Alle State-Updates gebatcht als niederprioritäre Transition → UI bleibt responsiv
 React.startTransition(() => {
   setTokens(activeTokens);
   setOrderMarkers(activeOM);
-  setAliveState(data.aliveState ?? {});
-  setSpawnState(data.spawnState ?? {});
+  setAliveState(legacyAliveState);
+  setSpawnState(legacySpawnState);
   setMaps(activeMaps);
   setPois(activePois);
   setDrawings(activeDrawings);
@@ -4498,7 +4154,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (Array.isArray(data.opLogEntries)) { setOpLogEntries(data.opLogEntries); opLogRef.current = data.opLogEntries; }
-      if (data.groupRoles) setGroupRoles(data.groupRoles);
+      if (data.groupRoles) setGroupRoles(parseGroupRoles(data.groupRoles));
       if (data.drawings) setDrawings(data.drawings);
       // Systeme (rückwärtskompatibel)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
@@ -4506,6 +4162,34 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       }
     });
     return () => unsub();
+  }, [user, roomId]);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(collection(db, "rooms", roomId, "playerStatus"), (snapshot) => {
+      const next: Record<string, PlayerStatus> = {};
+      for (const statusDocument of snapshot.docs) {
+        const status = parsePlayerStatus(statusDocument.data());
+        if (status) next[status.playerId] = status;
+      }
+      playerStatusesRef.current = next;
+      setPlayerStatuses(next);
+      setAliveState((current) => {
+        const merged = { ...current };
+        for (const status of Object.values(next)) merged[status.playerId] = status.aliveStatus;
+        aliveRef.current = merged;
+        return merged;
+      });
+      setSpawnState((current) => {
+        const merged = { ...current };
+        for (const status of Object.values(next)) {
+          if (status.spawnGroupId) merged[status.playerId] = status.spawnGroupId;
+        }
+        spawnRef.current = merged;
+        return merged;
+      });
+    });
+    return () => unsubscribe();
   }, [user, roomId]);
 
   // writes
@@ -4540,6 +4224,8 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
 
   async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
     nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
+    void na;
+    void ns;
     const sysId = visibleSystemIdRef.current;
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), stripUndefined({
@@ -4549,7 +4235,6 @@ mapsBySystem: { ...mapsBySystemRef.current, [sysId]: nm },
 poisBySystem: { ...poisBySystemRef.current, [sysId]: np },
 orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [sysId]: orderMarkersRef.current },
 drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current },
-aliveState: na, spawnState: ns,
         ...(nl ? { panelLayout: nl } : {}),
         notesText: notesRef.current,
         systemNotesTexts: systemNotesRef.current,
@@ -4562,12 +4247,12 @@ aliveState: na, spawnState: ns,
   }
 
   // GroupRoles
-  async function setPlayerField(playerId: string, field: keyof Player, value: string) {
+  async function setPlayerField(playerId: string, field: EditablePlayerField, value: string) {
     // Lokal updaten
     setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, [field]: value } : p));
     // Firestore-Override speichern
     const existing = await loadFirestoreOverrides(roomId);
-    const next = {
+    const next: PlayerOverrides = {
       ...existing,
       [playerId]: { ...(existing[playerId] ?? {}), [field]: value },
     };
@@ -4575,14 +4260,17 @@ aliveState: na, spawnState: ns,
     await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
   }
 
-  async function setPlayerAppRole(playerId: string, newRole: "admin" | "commander" | "viewer") {
-    const existing = await loadFirestoreOverrides(roomId);
-    const next = {
-      ...existing,
-      [playerId]: { ...(existing[playerId] ?? {}), appRole: newRole, lastSheetAppRole: newRole },
-    };
-    firestoreOverrideCache[roomId] = next;
-    await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
+  async function setPlayerAppRole(playerId: string, newRole: Role) {
+    if (!user || !isAdmin) return;
+    const token = await user.getIdToken(true);
+    const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/roles/${encodeURIComponent(playerId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      body: JSON.stringify({ role: newRole }),
+    });
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) throw new Error(result?.error ?? "Rolle konnte nicht gespeichert werden.");
     setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, appRole: newRole } : p));
   }
 
@@ -4627,22 +4315,6 @@ aliveState: na, spawnState: ns,
   }
 
   // ── Block 2+5: stabile useCallback-Referenzen, direkte Setter ──
-  const movePanelNav = useCallback((x: number, y: number) => {
-    setPanelNav({ x, y });
-  }, []);
-
-  const movePanelPlacer = useCallback((x: number, y: number) => {
-    setPanelPlacer({ x, y });
-  }, []);
-
-  const movePanelToolbar = useCallback((x: number, y: number) => {
-    setPanelToolbar({ x, y });
-  }, []);
-
-  const movePanelZoom = useCallback((x: number, y: number) => {
-    setPanelZoom({ x, y });
-  }, []);
-
   // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
   useEffect(() => {
     function reclamp() {
@@ -4672,35 +4344,32 @@ aliveState: na, spawnState: ns,
     return () => window.removeEventListener("resize", reclamp);
   }, []);
 
-  const notesMoveDebounce   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const movePanelNotes = useCallback((x: number, y: number) => {
     setPanelNotes(n => {
-      const pos = clampPanelPosition(x, y, (n as any).w, (n as any).h);
+      const pos = clampPanelPosition(x, y, n.w, n.h);
       return { ...n, ...pos };
     });
   }, []);
 
   const resizePanelNotes = useCallback((w: number, h: number) => {
     setPanelNotes(n => {
-      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, (n as any).x, (n as any).y);
-      const pos  = clampPanelPosition((n as any).x, (n as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
+      const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
       return { ...n, ...size, ...pos };
     });
   }, []);
 
   const movePanelLogNotes = useCallback((x: number, y: number) => {
     setPanelLogNotes(ln => {
-      const pos = clampPanelPosition(x, y, (ln as any).w, (ln as any).h);
+      const pos = clampPanelPosition(x, y, ln.w, ln.h);
       return { ...ln, ...pos };
     });
   }, []);
 
   const resizePanelLogNotes = useCallback((w: number, h: number) => {
     setPanelLogNotes(ln => {
-      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, (ln as any).x, (ln as any).y);
-      const pos  = clampPanelPosition((ln as any).x, (ln as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
+      const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
       return { ...ln, ...size, ...pos };
     });
   }, []);
@@ -4711,15 +4380,15 @@ aliveState: na, spawnState: ns,
 
   const movePanelOpLog = useCallback((x: number, y: number) => {
     setPanelOpLog(ol => {
-      const pos = clampPanelPosition(x, y, (ol as any).w, (ol as any).h);
+      const pos = clampPanelPosition(x, y, ol.w, ol.h);
       return { ...ol, ...pos };
     });
   }, []);
 
   const resizePanelOpLog = useCallback((w: number, h: number) => {
     setPanelOpLog(ol => {
-      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, (ol as any).x, (ol as any).y);
-      const pos  = clampPanelPosition((ol as any).x, (ol as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, ol.x, ol.y);
+      const pos  = clampPanelPosition(ol.x, ol.y, size.w, size.h);
       return { ...ol, ...size, ...pos };
     });
   }, []);
@@ -4755,14 +4424,14 @@ aliveState: na, spawnState: ns,
 
   function scheduleOpLog(
     key: string,
-    entry: OpLogEntry,
+    entry: ScheduledOpLogEntry,
     opts?: { minDist?: number; prevX?: number; prevY?: number }
   ) {
     if (!opLogActiveRef.current) return;
     const pending = opLogPending.current;
 
     // Startposition vom allerersten Aufruf dieser Bewegungssequenz beibehalten
-    const existing  = pending[key] as any;
+    const existing = pending[key];
     const startX    = existing?.startX ?? existing?.prevX ?? opts?.prevX;
     const startY    = existing?.startY ?? existing?.prevY ?? opts?.prevY;
     const minDist   = existing?.minDist ?? opts?.minDist;
@@ -4775,10 +4444,10 @@ aliveState: na, spawnState: ns,
       delete opLogPending.current[key];
 
       // Distanz-Check: Startposition vs. finale newX/Y im entry
-      const md = (p as any).minDist as number | undefined;
+      const md = p.minDist;
       if (md !== undefined && p.prevX !== undefined && p.prevY !== undefined) {
-        const finalX = (p.entry as any).newX as number | undefined;
-        const finalY = (p.entry as any).newY as number | undefined;
+        const finalX = p.entry.newX;
+        const finalY = p.entry.newY;
         if (finalX !== undefined && finalY !== undefined) {
           const dist = Math.sqrt((finalX - p.prevX) ** 2 + (finalY - p.prevY) ** 2);
           if (dist < md) return;
@@ -4787,32 +4456,22 @@ aliveState: na, spawnState: ns,
 
       // Text neu generieren mit gespeicherter Startposition und finaler Position
       const finalEntry = { ...p.entry };
-      const sx = (p as any).startX as number | undefined;
-      const sy = (p as any).startY as number | undefined;
-      const fx = (p.entry as any).newX as number | undefined;
-      const fy = (p.entry as any).newY as number | undefined;
+      const sx = p.startX;
+      const sy = p.startY;
+      const fx = p.entry.newX;
+      const fy = p.entry.newY;
       if (sx !== undefined && sy !== undefined && fx !== undefined && fy !== undefined
-          && (p.entry as any)._groupLabel) {
-        finalEntry.text = `${(p.entry as any)._groupLabel}  ⬡ Token bewegt  (${(p.entry as any)._mapLabel} · ${coordLabel(sx, sy)} → ${coordLabel(fx, fy)})`;
+          && p.entry._groupLabel) {
+        finalEntry.text = `${p.entry._groupLabel}  ⬡ Token bewegt  (${p.entry._mapLabel} · ${coordLabel(sx, sy)} → ${coordLabel(fx, fy)})`;
       }
 
       const next = [...opLogRef.current, finalEntry];
       pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
     }, 30_000); // 30s Debounce
 
-    (pending[key] as any) = { timer, entry, prevX: startX, prevY: startY, minDist,
+    pending[key] = { timer, entry, prevX: startX, prevY: startY, minDist,
       startX, startY };
   }
-
-
-
-  // Immediate (no timer) op-log write – for deaths/respawns
-  function logOpImmediate(entry: OpLogEntry) {
-    if (!opLogActiveRef.current) return;
-    const next = [...opLogRef.current, entry];
-    pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
-  }
-
   function handleClearOpLog() {
     if (!isAdmin) return;
     // Cancel all pending timers
@@ -4882,47 +4541,78 @@ aliveState: na, spawnState: ns,
     setDoc(doc(db, "rooms", roomId, "state", "board"), { systemNotesTexts: next, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
   }
 
-  function toggleAlive(playerId: string) {
-    if (!currentPlayer) return;
+  async function requestPlayerStatusChange(playerId: string, action: PlayerStatusAction) {
+    if (!user || !currentPlayer || pendingStatusPlayers.has(playerId)) return;
     if (playerId !== currentPlayer.id && !canWrite) return;
-    setAliveState((prev) => {
-      const wasDead = prev[playerId] === "dead";
-      const next = { ...prev, [playerId]: wasDead ? "alive" : "dead" } as PlayerAliveState;
-      let nextBoard = boardRef.current;
-      if (!wasDead) {
-        const targetSpawnId = spawnRef.current[playerId];
-        const targetSpawn = targetSpawnId ? nextBoard.groups.find((g) => g.id === targetSpawnId) : nextBoard.groups.find((g) => g.isSpawn);
-        if (targetSpawn) {
-          const newCols = { ...nextBoard.columns };
-          for (const gId of Object.keys(newCols)) newCols[gId] = (newCols[gId] ?? []).filter((id) => id !== playerId);
-          newCols[targetSpawn.id] = [playerId, ...(newCols[targetSpawn.id] ?? [])];
-          nextBoard = { ...nextBoard, columns: newCols };
-          setBoard(nextBoard); boardRef.current = nextBoard;
-        }
+    const previousAlive = aliveRef.current[playerId] ?? "alive";
+    const previousSpawn = spawnRef.current[playerId];
+    setPendingStatusPlayers((current) => new Set(current).add(playerId));
+
+    if (action.type === "LIVE" || action.type === "RESPAWN") {
+      const optimistic = { ...aliveRef.current, [playerId]: "alive" as const };
+      aliveRef.current = optimistic;
+      setAliveState(optimistic);
+    } else if (action.type === "TOT") {
+      const optimistic = { ...aliveRef.current, [playerId]: "dead" as const };
+      aliveRef.current = optimistic;
+      setAliveState(optimistic);
+    }
+    if ("spawnGroupId" in action) {
+      const optimistic = { ...spawnRef.current, [playerId]: action.spawnGroupId };
+      spawnRef.current = optimistic;
+      setSpawnState(optimistic);
+    }
+
+    try {
+      const status = await changePlayerStatusClient({
+        roomId,
+        playerId,
+        action,
+        expectedRevision: playerStatusesRef.current[playerId]?.revision ?? 0,
+        getIdToken: () => user.getIdToken(),
+      });
+      playerStatusesRef.current = { ...playerStatusesRef.current, [playerId]: status };
+      setPlayerStatuses(playerStatusesRef.current);
+      const nextAlive = { ...aliveRef.current, [playerId]: status.aliveStatus };
+      aliveRef.current = nextAlive;
+      setAliveState(nextAlive);
+      if (status.spawnGroupId) {
+        const nextSpawn = { ...spawnRef.current, [playerId]: status.spawnGroupId };
+        spawnRef.current = nextSpawn;
+        setSpawnState(nextSpawn);
       }
-      pushAll(nextBoard, tokensRef.current, next, spawnRef.current, mapsRef.current, poisRef.current);
-      // ── Op-Log: sofort (kein Timer) ──────────────────────────
-      const targetPlayer = playersById[playerId];
-      const playerName = targetPlayer?.name ?? playerId;
-      const actorName = currentPlayer?.name ?? "?";
-      // Find player's current group for system context
-      const playerGroup = nextBoard.groups.find((g) => (nextBoard.columns[g.id] ?? []).includes(playerId));
-      const sysId = playerGroup?.systemId ?? visibleSystemIdRef.current;
-      if (wasDead) {
-        logOpImmediate({ ts: Date.now(), actor: actorName, type: "respawn",
-          text: `${playerName}  ✓ respawnt`, systemId: sysId });
-      } else {
-        logOpImmediate({ ts: Date.now(), actor: actorName, type: "alive",
-          text: `${playerName}  ☠ gefallen`, systemId: sysId });
-      }
-      return next;
-    });
+    } catch (error) {
+      const rollbackAlive = { ...aliveRef.current, [playerId]: previousAlive };
+      aliveRef.current = rollbackAlive;
+      setAliveState(rollbackAlive);
+      const rollbackSpawn = { ...spawnRef.current };
+      if (previousSpawn) rollbackSpawn[playerId] = previousSpawn;
+      else delete rollbackSpawn[playerId];
+      spawnRef.current = rollbackSpawn;
+      setSpawnState(rollbackSpawn);
+      setPlayerToast(getErrorMessage(error, "Status konnte nicht gespeichert werden."));
+    } finally {
+      setPendingStatusPlayers((current) => {
+        const next = new Set(current);
+        next.delete(playerId);
+        return next;
+      });
+    }
+  }
+
+  function toggleAlive(playerId: string) {
+    const wasDead = aliveRef.current[playerId] === "dead";
+    const spawnGroupId = spawnRef.current[playerId];
+    const action: PlayerStatusAction = wasDead && spawnGroupId
+      ? { type: "RESPAWN", spawnGroupId }
+      : wasDead
+        ? { type: "LIVE" }
+        : { type: "TOT" };
+    void requestPlayerStatusChange(playerId, action);
   }
 
   function setSpawn(playerId: string, spawnId: string) {
-    const next = { ...spawnRef.current, [playerId]: spawnId };
-    setSpawnState(next); spawnRef.current = next;
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, next, mapsRef.current, poisRef.current);
+    void requestPlayerStatusChange(playerId, { type: "SET_SPAWN", spawnGroupId: spawnId });
   }
 
   function addGroup(isSpawn = false, systemId = "pyro") {
@@ -5098,20 +4788,8 @@ aliveState: na, spawnState: ns,
     return ancestors;
   }
 
-  // Gibt alle Nachfahren-Map-IDs zurück (alle POIs + Unterkarten unterhalb von mapId)
-  function getDescendantMapIds(mapId: string): Set<string> {
-    const result = new Set<string>();
-    const queue = [mapId];
-    while (queue.length) {
-      const cur = queue.shift()!;
-      poisRef.current.forEach((p) => { if (p.parentMapId === cur) { result.add(p.id); queue.push(p.id); } });
-      mapsRef.current.forEach((m) => { if (m.id !== "main" && m.id !== cur) {/* handled via POIs */} });
-    }
-    return result;
-  }
-
   function commitToken(gId: string, x: number, y: number, mapId: string) {
-    const prev = tokensRef.current.map(normalizeToken);
+    const prev = parseTokens(tokensRef.current);
     const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
     const isNew = i === -1;
     const oldToken = isNew ? null : prev[i];
@@ -5164,8 +4842,9 @@ aliveState: na, spawnState: ns,
             const parts: string[] = [];
             let cur = id;
             while (cur && cur !== "main") {
-              const poi = allMaps.find((m) => m.id === cur);
-              if (poi) { parts.unshift(poi.label); cur = (poi as any).parentMapId ?? "main"; }
+              const entry = allMaps.find((m) => m.id === cur);
+              const poi = poisRef.current.find((p) => p.id === cur);
+              if (entry) { parts.unshift(entry.label); cur = poi?.parentMapId ?? "main"; }
               else break;
             }
             parts.unshift(sysLabel); // System immer an erster Stelle
@@ -5193,7 +4872,7 @@ aliveState: na, spawnState: ns,
         });
         // Alle laufenden Move-Timer dieser Gruppe canceln – frischer Start auf neuer Ebene
         const pendingKeys = Object.keys(opLogPending.current).filter(k => k.startsWith(`token_move:${gId}:`));
-        pendingKeys.forEach(k => { clearTimeout((opLogPending.current[k] as any).timer); delete opLogPending.current[k]; });
+        pendingKeys.forEach(k => { clearTimeout(opLogPending.current[k].timer); delete opLogPending.current[k]; });
       } else if (isNew) {
         // ── Token neu gesetzt ──
         scheduleOpLog(`token_set:${gId}:${mapId}`, {
@@ -5322,13 +5001,6 @@ aliveState: na, spawnState: ns,
   }
 
 
-  function moveSystem(id: string, x: number, y: number) {
-    if (!isAdmin) return;
-    const next = systemsRef.current.map((s) => s.id === id ? { ...s, x, y } : s);
-    setSystems(next); systemsRef.current = next;
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
-  }
-
   function upsertOrderMarker(gId: string, x: number, y: number, mapId: string) {
     if (!canWrite) return;
     const prev = orderMarkersRef.current;
@@ -5365,13 +5037,6 @@ aliveState: na, spawnState: ns,
       ).catch(console.error);
     }, 300);
   }
-
-  // ── Feindmarker Timestamp-Tick: alle 60s neu rendern (kein Fade, kein Löschen) ──
-  const [markerTick, setMarkerTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setMarkerTick((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, []);
 
   function addDrawElement(el: DrawElement) {
     if (!canWrite) return;
@@ -5664,6 +5329,12 @@ aliveState: na, spawnState: ns,
               className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
               ✎ Profil
             </button>
+            {roomCfg?.features.mobileStatus && (
+              <button title="Persönlichen QR-Code fürs Handy erstellen" onClick={() => setShowMobileLink(true)}
+                className="text-xs px-2 py-1 rounded border border-blue-800 bg-blue-950 text-blue-300 hover:bg-blue-900">
+                📱 Handy verbinden
+              </button>
+            )}
             <button
               title="Spielerliste aus Sheet neu laden"
               onClick={refreshPlayers}
@@ -5697,10 +5368,6 @@ aliveState: na, spawnState: ns,
             {[
               { key: "lognotes", icon: "📟", title: "Log-Notizen",   show: localPanelPos.logNotes.visible, toggle: toggleLogNotesVisible,          active: "bg-blue-900 border-blue-600 text-blue-200" },
               { key: "oplog",    icon: "🗒",  title: `Op-Log${opLogActive ? " ▶" : ""}`, show: localPanelPos.opLog.visible, toggle: toggleOpLogVisible, active: "bg-purple-900 border-purple-600 text-purple-200" },
-              { key: "toolbar",  icon: "✏",  title: "Zeichnen",      show: showToolbar,  toggle: () => setShowToolbar(v => !v),  active: "bg-orange-900 border-orange-600 text-orange-200" },
-
-              { key: "nav",      icon: "🗺", title: "Karten",        show: showNav,      toggle: () => setShowNav(v => !v),      active: "bg-teal-900 border-teal-600 text-teal-200" },
-              { key: "placer",   icon: "⬡",  title: "Token setzen",  show: showPlacer,   toggle: () => setShowPlacer(v => !v),   active: "bg-indigo-900 border-indigo-600 text-indigo-200" },
             ].map(({ key, icon, title, show, toggle, active }) => (
               <button key={key}
                 className={`w-7 h-7 rounded-full border text-xs flex items-center justify-center transition-colors flex-shrink-0 ${show ? active : "border-gray-700 text-gray-600 hover:text-gray-300 hover:border-gray-500"}`}
@@ -5719,9 +5386,10 @@ aliveState: na, spawnState: ns,
                 selfAlive === "dead"
                   ? "bg-red-900 border-red-600 text-red-200 hover:bg-red-800"
                   : "bg-green-900 border-green-600 text-green-200 hover:bg-green-800"
-              }`}
+              } disabled:cursor-wait disabled:opacity-60`}
+              disabled={pendingStatusPlayers.has(currentPlayer.id)}
               onClick={() => toggleAlive(currentPlayer.id)}>
-              {selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
+              {pendingStatusPlayers.has(currentPlayer.id) ? "… SPEICHERT" : selfAlive === "dead" ? "☠ TOT" : "✓ LEBT"}
             </button>
           </div>
 
@@ -5758,6 +5426,15 @@ aliveState: na, spawnState: ns,
             );
           }}
           onClose={() => { if (!isNewPlayer) setShowProfile(false); }}
+        />
+      )}
+
+      {showMobileLink && currentPlayer && user && roomCfg?.features.mobileStatus && (
+        <MobileLinkDialog
+          roomId={roomId}
+          playerName={currentPlayer.name}
+          getIdToken={() => user.getIdToken()}
+          onClose={() => setShowMobileLink(false)}
         />
       )}
 
@@ -5831,9 +5508,9 @@ aliveState: na, spawnState: ns,
                             currentPlayerId={currentPlayer.id} canWrite={canWrite} onToggleAlive={toggleAlive}
                             spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                             groupRoles={groupRoles} groupId="unassigned" onSetRole={setGroupRole}
-                            isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                            isAdmin={isAdmin} onSetAppRole={setPlayerAppRole}
                             onSetPlayerField={setPlayerField}
-                            groupColor="#6b7280" />
+                            />
                         ) : null
                       )}
                     </UnassignedDrop>
@@ -5851,7 +5528,7 @@ aliveState: na, spawnState: ns,
                       onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
                       spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                       groupRoles={groupRoles} onSetRole={setGroupRole}
-                      isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                      isAdmin={isAdmin} onSetAppRole={setPlayerAppRole}
                       onSetPlayerField={setPlayerField}
                       onSetColor={setGroupColor} onSetIcon={setGroupIcon}
                       systems={systems}
@@ -5893,9 +5570,7 @@ aliveState: na, spawnState: ns,
           onClear={handleClearLogEntries}
           onMove={movePanelLogNotes}
           onResize={resizePanelLogNotes}
-          onToggleVisible={toggleLogNotesVisible}
           canWrite={canWrite}
-          useRelTime={useRelTime}
           minimized={minimizedPanels["log"]}
           onToggleMinimize={() => toggleMinPanel("log")}
         />
@@ -5913,9 +5588,7 @@ aliveState: na, spawnState: ns,
           canWrite={canWrite}
           onMove={movePanelOpLog}
           onResize={resizePanelOpLog}
-          onToggleVisible={toggleOpLogVisible}
           isAdmin={isAdmin}
-          activeSystemId={activeSystemId}
           systems={systems}
           minimized={minimizedPanels["oplog"]}
           onToggleMinimize={() => toggleMinPanel("oplog")}
@@ -5942,7 +5615,7 @@ aliveState: na, spawnState: ns,
             })}
             {/* Breadcrumb */}
             <div className="ml-3 flex items-center gap-1 text-sm">
-              {breadcrumb.map((b: any, i: number) => (
+              {breadcrumb.map((b, i) => (
                 <React.Fragment key={b.id}>
                   {i > 0 && <span className="text-gray-600">›</span>}
                   <button className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`} onClick={() => setActiveMapId(b.id)}>
@@ -5966,7 +5639,7 @@ aliveState: na, spawnState: ns,
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
                 activeMapId={activeMapId} onRemoveToken={removeToken} onMoveTokenUp={moveTokenUp}
                 getActiveGroupsForMarker={getActiveGroupsForMarker}
-                    isAdmin={role === "admin"}
+                    isAdmin={isAdmin}
                     orderMarkers={orderMarkers}
                 onMoveOrderMarkerLocal={moveOrderMarkerLocal}
                 onCommitOrderMarker={upsertOrderMarker}
@@ -5979,7 +5652,6 @@ aliveState: na, spawnState: ns,
                 onUpdateDrawElement={updateDrawElement}
                 showGrid={showGrid}
                 onScaleChange={handleScaleChange}
-                markerTick={markerTick}
                 onResetDrawTool={() => setDrawTool("pointer")}
               />
             )}
@@ -5995,40 +5667,37 @@ aliveState: na, spawnState: ns,
             </button>
           )}
 
-          {/* Drawing Toolbar – verschiebbar, nur wenn Bild vorhanden */}
-          {activeImage && showToolbar && (
-            <DrawingToolbar
-              tool={drawTool} setTool={setDrawTool}
-              color={drawColor} setColor={setDrawColor}
-              width={drawWidth} setWidth={setDrawWidth}
-              canDraw={canWrite}
-              onUndo={undoDrawElement}
-              onClear={clearDrawings}
-              x={localPanelPos.toolbar.x}
-              y={localPanelPos.toolbar.y}
-              onMove={movePanelToolbar}
-              showGrid={showGrid}
-              onToggleGrid={() => setShowGrid(v => !v)}
-            />
-          )}
-
-          {/* ZoomPanel entfernt – Zoom via Mausrad */}
-
-          {showNav && <DraggablePanel title={`Karten · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Wechsel zwischen Haupt- und Unterkarten. Klick auf einen Kartenmarker öffnet die zugehörige Unterkarte." canDrag={true} x={localPanelPos.nav.x} y={localPanelPos.nav.y} onMove={movePanelNav} defaultHeight={280} minWidth={360}>
-            <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
-              isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
-              onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
-              onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
-          </DraggablePanel>}
-
-          {canWrite && showPlacer && (
-            <DraggablePanel title={`Token setzen · ${systems.find((s) => s.id === activeSystemId)?.label ?? activeSystemId}`} tooltip="Gruppe anklicken, dann auf die Karte klicken um den Token zu platzieren. ⚑ setzt einen Auftragsmarker mit gestrichelter Linie zum Token." canDrag={true} x={localPanelPos.placer.x} y={localPanelPos.placer.y} onMove={movePanelPlacer}>
+          <MapControlDock
+            preferences={mapUiPreferences}
+            onPreferencesChange={setMapUiPreferences}
+            maps={(
+              <div>
+                <div className="mb-2 text-xs text-gray-500">
+                  {systems.find((system) => system.id === activeSystemId)?.label ?? activeSystemId}
+                </div>
+                <MapNavPanel maps={displayMaps} pois={pois} activeMapId={activeMapId} setActiveMapId={setActiveMapId}
+                  isAdmin={isAdmin} onRenameMap={renameMap} onDeleteMap={deleteMap} onAddSubmap={addSubmap}
+                  onRenamePOI={renamePOI} onDeletePOI={deletePOI} onAddPOI={addPOI} onSetMapImage={setMapImage}
+                  onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
+              </div>
+            )}
+            tokens={canWrite ? (
               <TokenPlacerPanel groups={tacticalGroups}
                 onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
-            </DraggablePanel>
-          )}
+            ) : null}
+            drawing={activeImage && canWrite ? (
+              <DrawingToolbar
+                tool={drawTool} setTool={setDrawTool}
+                color={drawColor} setColor={setDrawColor}
+                width={drawWidth} setWidth={setDrawWidth}
+                canDraw={canWrite}
+                onUndo={undoDrawElement}
+                onClear={clearDrawings}
+              />
+            ) : null}
+          />
 
           </div>
         </div>

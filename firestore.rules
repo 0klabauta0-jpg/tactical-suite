@@ -1,0 +1,86 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function hasRoomClaim(roomId) {
+      return request.auth != null
+        && request.auth.token.authVersion == 1
+        && request.auth.token.roomId == roomId
+        && request.auth.token.playerId is string;
+    }
+
+    function memberPath(roomId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid);
+    }
+
+    function isRoomMember(roomId) {
+      return hasRoomClaim(roomId)
+        && exists(memberPath(roomId))
+        && get(memberPath(roomId)).data.playerId == request.auth.token.playerId
+        && get(memberPath(roomId)).data.authVersion == 1;
+    }
+
+    function canWriteBoard(roomId) {
+      return isRoomMember(roomId)
+        && get(memberPath(roomId)).data.role in ['admin', 'commander'];
+    }
+
+    match /rooms/{roomId} {
+      allow list: if true;
+      allow create, update, delete: if false;
+
+      match /config/main {
+        allow get: if true;
+        allow list, create, update, delete: if false;
+      }
+
+      match /config/playerOverrides {
+        allow read: if isRoomMember(roomId);
+        allow create, update: if canWriteBoard(roomId);
+        allow delete: if false;
+      }
+
+      match /members/{uid} {
+        allow read: if isRoomMember(roomId) && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      match /roles/{playerId} {
+        allow read, write: if false;
+      }
+
+      match /private/{document=**} {
+        allow read, write: if false;
+      }
+
+      match /state/board {
+        allow read: if isRoomMember(roomId);
+        allow create, update: if canWriteBoard(roomId);
+        allow delete: if false;
+      }
+
+      match /playerStatus/{playerId} {
+        allow read: if isRoomMember(roomId);
+        allow write: if false;
+      }
+
+      match /mobileLinks/{playerId} {
+        allow read, write: if false;
+      }
+
+      match /mapScenes/{sceneId} {
+        allow read: if isRoomMember(roomId);
+        allow write: if false;
+
+        match /objects/{objectId} {
+          allow read: if isRoomMember(roomId);
+          allow write: if false;
+        }
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+  }
+}
