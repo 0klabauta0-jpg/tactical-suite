@@ -30,7 +30,12 @@ export async function PATCH(request: Request, context: Context) {
     }));
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
-    if (error instanceof MapSceneStoreError) return json({ error: error.code, object: error.currentObject }, error.code === "OBJECT_LOCKED" || error.code === "REVISION_CONFLICT" || error.code === "LOCK_MISMATCH" ? 409 : 404);
+    if (error instanceof MapSceneStoreError) {
+      const status = error.code === "OBJECT_LOCKED" || error.code === "REVISION_CONFLICT" || error.code === "LOCK_MISMATCH"
+        ? 409
+        : error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 404;
+      return json({ error: error.code, object: error.currentObject }, status);
+    }
     return json({ error: "Objekt konnte nicht verschoben werden." }, 500);
   }
 }
@@ -43,7 +48,7 @@ export async function DELETE(request: Request, context: Context) {
     return json({ deleted: true });
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
-    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" ? 403 : 404);
+    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 404);
     return json({ error: "Objekt konnte nicht gelöscht werden." }, 500);
   }
 }

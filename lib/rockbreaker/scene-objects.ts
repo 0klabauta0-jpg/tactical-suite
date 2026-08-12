@@ -94,3 +94,8 @@ export function parseSceneObject(value: unknown): SceneObject | null {
 
 export const groupTokenObjectId = (groupId: string) => `groupToken--${encodeURIComponent(groupId)}`;
 export const orderMarkerObjectId = (groupId: string) => `orderMarker--${encodeURIComponent(groupId)}`;
+
+export function confirmedObjectPosition(objects: readonly SceneObject[], objectId: string, fallback: WorldPoint): WorldPoint {
+  const object = objects.find((candidate) => candidate.id === objectId);
+  return object && "position" in object ? object.position : fallback;
+}

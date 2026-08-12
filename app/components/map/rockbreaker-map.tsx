@@ -6,9 +6,10 @@ import type { BoardGroup } from "@/lib/board/state";
 import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject, subscribeSceneObjects } from "@/lib/map-scene/client";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
 import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type WorldPoint } from "@/lib/rockbreaker/coordinates";
-import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { confirmedObjectPosition, type SceneObject } from "@/lib/rockbreaker/scene-objects";
 
 type Placement = { type: "groupToken"; groupId: string } | { type: "enemyMarker"; kind: "infantry" | "ground" | "air" } | null;
+type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
 
 export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, getIdToken, onBack, objectsOverride, initialCameraAzimuth = 0.7 }: {
   roomId: string;
@@ -137,7 +138,7 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
       };
 
       const orbit = { active: false, x: 0, y: 0, azimuth: 0, elevation: 0 };
-      let drag: { object: SceneObject; mesh: Three.Object3D; lockRevision: number; point: WorldPoint } | null = null;
+      let drag: { object: PositionedSceneObject; mesh: Three.Object3D; lockRevision: number; point: WorldPoint } | null = null;
       const down = (event: PointerEvent) => {
         setRay(event);
         const objectHit = raycaster.intersectObjects([...objectMeshes.values()], true).find((hit) => hit.object.userData.objectId || hit.object.parent?.userData.objectId);
@@ -171,7 +172,11 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
           const current = drag; drag = null;
           void moveMapSceneObject(roomId, sceneId, current.object, current.point, current.lockRevision, () => getIdTokenRef.current())
             .then(() => setMessage(`Gespeichert: ${current.point.x.toFixed(2)} / ${current.point.y.toFixed(2)} / ${current.point.z.toFixed(2)} km`))
-            .catch((reason) => setMessage(reason instanceof Error ? reason.message : "Positionskonflikt – Serverstand übernommen."));
+            .catch((reason) => {
+              const confirmed = confirmedObjectPosition(objectsRef.current, current.object.id, current.object.position);
+              current.mesh.position.set(confirmed.x, confirmed.y, confirmed.z);
+              setMessage(reason instanceof Error ? reason.message : "Positionskonflikt – Serverstand übernommen.");
+            });
           return;
         }
         const selected = placementRef.current;

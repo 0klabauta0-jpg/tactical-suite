@@ -17,7 +17,10 @@ export async function POST(request: Request, context: Context) {
     }));
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
-    if (error instanceof MapSceneStoreError) return json({ error: error.code, object: error.currentObject }, error.code === "OBJECT_LOCKED" ? 409 : 404);
+    if (error instanceof MapSceneStoreError) {
+      const status = error.code === "OBJECT_LOCKED" ? 409 : error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 404;
+      return json({ error: error.code, object: error.currentObject }, status);
+    }
     return json({ error: "Sperre konnte nicht gesetzt werden." }, 500);
   }
 }

@@ -4,11 +4,11 @@ import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
 
 const point = (x: number) => ({ x, y: 0, z: 0, sceneVersion: 1 as const, anchor: { kind: "beltPlane" as const } });
 
-function createStore() {
+function createStore(rockbreakerEnabled = true) {
   const objects = new Map<string, SceneObject>();
   const store: MapSceneTransactionStore = {
     runObjectTransaction: async (_roomId, _sceneId, objectId, operation) => {
-      const result = await operation({ object: objects.get(objectId) ?? null, groupIds: new Set(["g1"]) });
+      const result = await operation({ object: objects.get(objectId) ?? null, groupIds: new Set(["g1"]), rockbreakerEnabled });
       if (result === null) objects.delete(objectId); else objects.set(objectId, result);
       return result;
     },
@@ -44,5 +44,28 @@ describe("map scene store", () => {
     const locked = await acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, nowMs: 2 });
     const moved = await commitSceneObjectMove(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, expectedRevision: first.revision, expectedLockRevision: locked.lockRevision!, position: point(4), nowMs: 3 });
     expect(moved).toMatchObject({ revision: 1, position: point(4) });
+  });
+
+  it("rejects scene writes while Rockbreaker is disabled for the room", async () => {
+    const { store } = createStore(false);
+    await expect(createSceneObject(store, {
+      roomId: "room",
+      sceneId: "nyx--rockbreaker",
+      actor: { uid: "u1", role: "admin" },
+      draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) },
+      nowMs: 1,
+    })).rejects.toMatchObject({ code: "FEATURE_DISABLED" });
+  });
+
+  it("rejects viewer writes before touching scene state", async () => {
+    const { objects, store } = createStore();
+    await expect(createSceneObject(store, {
+      roomId: "room",
+      sceneId: "nyx--rockbreaker",
+      actor: { uid: "viewer", role: "viewer" },
+      draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) },
+      nowMs: 1,
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(objects.size).toBe(0);
   });
 });
