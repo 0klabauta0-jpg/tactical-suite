@@ -95,7 +95,20 @@ export async function authenticateRoomPlayer(
 
   return {
     customToken,
-    player: { id: player.id, name: player.name, role: resolved.role },
+    player: {
+      id: player.id,
+      name: player.name,
+      role: resolved.role,
+      profile: {
+        area: player.area ?? "",
+        role: player.role ?? "",
+        squadron: player.squadron ?? "",
+        status: player.status ?? "",
+        ampel: player.ampel ?? "",
+        homeLocation: player.homeLocation ?? "",
+        ...(player.icon ? { icon: player.icon } : {}),
+      },
+    },
     room: { name: config.roomName ?? input.roomId, features: config.features },
     legacyAuth: secret === null,
   };

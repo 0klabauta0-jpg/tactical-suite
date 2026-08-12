@@ -1,12 +1,37 @@
 import type { RoomFeatures } from "@/lib/rooms/config";
 import type { Role } from "@/lib/domain/roles";
+import type { Player } from "@/lib/domain/player";
+
+export type RoomLoginPlayer = {
+  id: string;
+  name: string;
+  role: Role;
+  profile: {
+    area: string;
+    role: string;
+    squadron: string;
+    status: string;
+    ampel: string;
+    homeLocation: string;
+    icon?: string;
+  };
+};
 
 type LoginResponse = {
   customToken: string;
-  player: { id: string; name: string; role: Role };
+  player: RoomLoginPlayer;
   room: { name: string; features: RoomFeatures };
   legacyAuth: boolean;
 };
+
+export function roomLoginPlayerToDomain(player: RoomLoginPlayer): Player {
+  return {
+    id: player.id,
+    name: player.name,
+    appRole: player.role,
+    ...player.profile,
+  };
+}
 
 type LoginInput = {
   roomId: string;

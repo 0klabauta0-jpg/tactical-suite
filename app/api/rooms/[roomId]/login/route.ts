@@ -3,7 +3,20 @@ import { RoomLoginError } from "@/lib/server/room-login";
 
 type LoginResult = {
   customToken: string;
-  player: { id: string; name: string; role: "admin" | "commander" | "viewer" };
+  player: {
+    id: string;
+    name: string;
+    role: "admin" | "commander" | "viewer";
+    profile: {
+      area: string;
+      role: string;
+      squadron: string;
+      status: string;
+      ampel: string;
+      homeLocation: string;
+      icon?: string;
+    };
+  };
   room: { name: string; features: { mobileStatus: boolean; rockbreaker3d: boolean } };
   legacyAuth: boolean;
 };

@@ -14,7 +14,7 @@ import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { buildRoomTemplateCopy } from "@/lib/rooms/template";
 import { getErrorMessage } from "@/lib/error-details";
-import { loginToRoom } from "@/lib/auth/room-login-client";
+import { loginToRoom, roomLoginPlayerToDomain } from "@/lib/auth/room-login-client";
 import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
@@ -603,17 +603,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
 
       const cfg = await loadRoomConfig(roomId);
       if (onDone && cfg) {
-        const adminPlayer: Player = {
-          id: login.player.id,
-          name: login.player.name,
-          area: "",
-          role: "",
-          squadron: "",
-          status: "",
-          ampel: "",
-          appRole: login.player.role,
-          homeLocation: "",
-        };
+        const adminPlayer = roomLoginPlayerToDomain(login.player);
         onDone(adminPlayer, cfg);
         return;
       }
@@ -879,17 +869,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
         password,
         signIn: (token) => signInWithCustomToken(auth, token),
       });
-      const player: Player = {
-        id: login.player.id,
-        name: login.player.name,
-        appRole: login.player.role,
-        area: "",
-        role: "",
-        squadron: "",
-        status: "",
-        ampel: "",
-        homeLocation: "",
-      };
+      const player = roomLoginPlayerToDomain(login.player);
       setPassword("");
       onLogin(player, cfg);
     } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler.")); }

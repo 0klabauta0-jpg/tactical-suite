@@ -8,7 +8,8 @@ describe("room login route", () => {
   it("returns a no-store login response", async () => {
     let reset = false;
     const handler = createRoomLoginHandler({
-      authenticate: async () => ({ customToken: "token", player: { id: "p1", name: "Ada", role: "viewer" as const },
+      authenticate: async () => ({ customToken: "token", player: { id: "p1", name: "Ada", role: "viewer" as const,
+        profile: { area: "", role: "", squadron: "", status: "", ampel: "", homeLocation: "" } },
         room: { name: "Alpha", features: { mobileStatus: false, rockbreaker3d: false } }, legacyAuth: false }),
       consumeAttempt: async () => true,
       resetAttempts: async () => { reset = true; },

@@ -9,7 +9,10 @@ async function dependencies(overrides: Partial<RoomLoginDependencies> = {}): Pro
       features: { mobileStatus: false, rockbreaker3d: false } }),
     getSecret: async () => secret,
     getLegacyPassword: async () => null,
-    loadPlayers: async () => [{ id: "p1", name: "Ada", appRole: "viewer" }],
+    loadPlayers: async () => [{
+      id: "p1", name: "Ada", appRole: "viewer", area: "Air", role: "Flight",
+      squadron: "CER", status: "ready", ampel: "green", homeLocation: "Checkmate", icon: "pilot",
+    }],
     getProtectedRole: async () => ({ role: "commander", lastSheetRole: "viewer" }),
     saveRoleTracking: async () => undefined,
     createCustomToken: async (uid, claims) => `token:${uid}:${claims.roomId}:${claims.playerId}`,
@@ -27,7 +30,13 @@ describe("room login", () => {
     });
 
     expect(result).toMatchObject({
-      player: { id: "p1", name: "Ada", role: "commander" },
+      player: {
+        id: "p1", name: "Ada", role: "commander",
+        profile: {
+          area: "Air", role: "Flight", squadron: "CER", status: "ready",
+          ampel: "green", homeLocation: "Checkmate", icon: "pilot",
+        },
+      },
       room: { name: "Test Room", features: { mobileStatus: false, rockbreaker3d: false } },
       legacyAuth: false,
     });
