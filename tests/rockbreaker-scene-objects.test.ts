@@ -21,6 +21,23 @@ describe("Rockbreaker scene objects", () => {
     expect(parseSceneObject({ id: "bad", type: "groupToken", groupId: "g1", position, ...common, systemId: "pyro" })).toBeNull();
   });
 
+  it("accepts free-space positions and rejects unknown anchors", () => {
+    expect(parseSceneObject({
+      id: "groupToken--g1",
+      type: "groupToken",
+      groupId: "g1",
+      position: { x: 1, y: 2, z: 3, sceneVersion: 1, anchor: { kind: "freeSpace" } },
+      ...common,
+    })).toMatchObject({ position: { y: 2, anchor: { kind: "freeSpace" } } });
+    expect(parseSceneObject({
+      id: "groupToken--g1",
+      type: "groupToken",
+      groupId: "g1",
+      position: { x: 1, y: 2, z: 3, sceneVersion: 1, anchor: { kind: "unknown" } },
+      ...common,
+    })).toBeNull();
+  });
+
   it("restores the latest confirmed position after a rejected drag", () => {
     const confirmed = parseSceneObject({
       id: "groupToken--g1", type: "groupToken", groupId: "g1", systemId: "nyx", mapId: "rockbreaker",

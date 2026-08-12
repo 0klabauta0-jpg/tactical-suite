@@ -3,6 +3,7 @@ import type { Role } from "@/lib/domain/roles";
 import type { WorldPoint } from "@/lib/rockbreaker/coordinates";
 import { parseWorldPoint, type SceneObject } from "@/lib/rockbreaker/scene-objects";
 import { orderMarkerObjectId } from "@/lib/rockbreaker/scene-objects";
+import { isRockbreakerPositionWithinBounds } from "@/lib/rockbreaker/drag";
 
 export type MapSceneActor = { uid: string; role: Role };
 export type SceneObjectDraft =
@@ -26,7 +27,7 @@ export type MapSceneTransactionStore = {
 
 export class MapSceneStoreError extends Error {
   constructor(
-    public readonly code: "FORBIDDEN" | "FEATURE_DISABLED" | "INVALID_SCENE" | "INVALID_OBJECT" | "PROTECTED_OBJECT" | "OBJECT_NOT_FOUND" | "OBJECT_LOCKED" | "REVISION_CONFLICT" | "LOCK_MISMATCH",
+    public readonly code: "FORBIDDEN" | "FEATURE_DISABLED" | "INVALID_SCENE" | "INVALID_OBJECT" | "OUT_OF_BOUNDS" | "PROTECTED_OBJECT" | "OBJECT_NOT_FOUND" | "OBJECT_LOCKED" | "REVISION_CONFLICT" | "LOCK_MISMATCH",
     public readonly currentObject?: SceneObject | null,
   ) { super(code); }
 }
@@ -112,6 +113,9 @@ export async function commitSceneObjectMove(store: MapSceneTransactionStore, inp
       throw new MapSceneStoreError("LOCK_MISMATCH", object);
     }
     if (!("position" in object)) throw new MapSceneStoreError("INVALID_OBJECT", object);
+    if (object.type === "groupToken" && !isRockbreakerPositionWithinBounds(input.position)) {
+      throw new MapSceneStoreError("OUT_OF_BOUNDS", object);
+    }
     return { ...object, position: input.position, revision: object.revision + 1, updatedBy: input.actor.uid, updatedAtMs: input.nowMs };
   });
   if (!result) throw new MapSceneStoreError("OBJECT_NOT_FOUND");

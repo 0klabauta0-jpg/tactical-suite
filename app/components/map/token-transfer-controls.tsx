@@ -198,6 +198,29 @@ export function DraggableTroopChip({
   );
 }
 
+export function RockbreakerRecoveryButton({
+  label,
+  disabled,
+  onRecover,
+}: {
+  label: string;
+  disabled: boolean;
+  onRecover: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`${label} nach Nyx zurückholen`}
+      title="Trupp nach Nyx zurückholen"
+      disabled={disabled}
+      className={`rounded-lg border border-cyan-800 bg-cyan-950 px-2 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-900 ${disabled ? "cursor-wait opacity-50" : ""}`}
+      onClick={onRecover}
+    >
+      ↑ Nyx
+    </button>
+  );
+}
+
 function dropAttribute(data: TokenDropData) {
   if (data.type === "child") return `child:${data.childId}`;
   if (data.type === "map2d") return `map2d:${data.mapId}`;

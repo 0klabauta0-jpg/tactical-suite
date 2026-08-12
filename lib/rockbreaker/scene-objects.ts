@@ -33,6 +33,7 @@ function parseVec3(value: unknown): Vec3 | null {
 function parseAnchor(value: unknown): WorldAnchor | null {
   if (!isRecord(value)) return null;
   if (value.kind === "beltPlane") return { kind: "beltPlane" };
+  if (value.kind === "freeSpace") return { kind: "freeSpace" };
   const local = parseVec3(value.local);
   if (value.kind === "asteroid" && typeof value.asteroidId === "string" && value.asteroidId && local) {
     return { kind: "asteroid", asteroidId: value.asteroidId, local };
