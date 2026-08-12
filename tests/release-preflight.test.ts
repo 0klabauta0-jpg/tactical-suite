@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import { evaluateReleasePreflight } from "@/lib/release/preflight";
 
 const strong = "x".repeat(32);
@@ -53,5 +54,18 @@ describe("release preflight", () => {
     });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
+  });
+
+  it("accepts the documented Rockbreaker approval for the public release", async () => {
+    const noticeText = await readFile(new URL("../lib/rockbreaker/NOTICE.md", import.meta.url), "utf8");
+    const result = evaluateReleasePreflight({
+      env: completeEnv,
+      requestedFeatures: ["rockbreaker3d"],
+      noticeText,
+      expectedOrigin: "https://klabscom.vercel.app",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.presence.rockbreakerPermission).toBe(true);
   });
 });
