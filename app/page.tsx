@@ -4151,7 +4151,6 @@ React.startTransition(() => {
 
 if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySystem && !data.orderMarkersBySystem && !data.drawingsBySystem) {
   setDoc(ref, {
-    tokensBySystem,
     orderMarkersBySystem,
     mapsBySystem,
     poisBySystem,
@@ -4247,13 +4246,13 @@ async function pushOrderMarkersOnly(nm: OrderMarker[]) {
 
   async function pushAll(nb: BoardState, nt: Token[], na: PlayerAliveState, ns: PlayerSpawnState,
     nm: MapEntry[], np: POI[], nl?: PanelLayout, ngr?: GroupRoles) {
+    void nt;
     void na;
     void ns;
     const sysId = visibleSystemIdRef.current;
     try {
       await setDoc(doc(db, "rooms", roomId, "state", "board"), stripUndefined({
         groups: nb.groups, columns: nb.columns,
-tokensBySystem: { ...tokensBySystemRef.current, [sysId]: nt },
 mapsBySystem: { ...mapsBySystemRef.current, [sysId]: nm },
 poisBySystem: { ...poisBySystemRef.current, [sysId]: np },
 orderMarkersBySystem: { ...orderMarkersBySystemRef.current, [sysId]: orderMarkersRef.current },

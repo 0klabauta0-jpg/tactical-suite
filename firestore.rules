@@ -25,6 +25,14 @@ service cloud.firestore {
         && get(memberPath(roomId)).data.role in ['admin', 'commander'];
     }
 
+    function createsNoTokenFields() {
+      return !request.resource.data.keys().hasAny(['tokens', 'tokensBySystem']);
+    }
+
+    function keepsTokenFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['tokens', 'tokensBySystem']);
+    }
+
     match /rooms/{roomId} {
       allow list: if true;
       allow create, update, delete: if false;
@@ -55,8 +63,13 @@ service cloud.firestore {
 
       match /state/board {
         allow read: if isRoomMember(roomId);
-        allow create, update: if canWriteBoard(roomId);
+        allow create: if canWriteBoard(roomId) && createsNoTokenFields();
+        allow update: if canWriteBoard(roomId) && keepsTokenFieldsUnchanged();
         allow delete: if false;
+      }
+
+      match /tokenTransferOperations/{operationId} {
+        allow read, write: if false;
       }
 
       match /playerStatus/{playerId} {

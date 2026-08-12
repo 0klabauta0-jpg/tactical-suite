@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 
 const emulatorAvailable = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 
@@ -19,7 +19,11 @@ describe.skipIf(!emulatorAvailable)("Firestore mobile and scene rules", () => {
       await setDoc(doc(database, "rooms/alpha/config/main"), { sheetUrl: "https://example.test", features: { mobileStatus: true, rockbreaker3d: false } });
       await setDoc(doc(database, "rooms/alpha/members/viewer-uid"), { playerId: "p1", role: "viewer", authVersion: 1 });
       await setDoc(doc(database, "rooms/alpha/members/commander-uid"), { playerId: "p2", role: "commander", authVersion: 1 });
-      await setDoc(doc(database, "rooms/alpha/state/board"), { groups: [], columns: {} });
+      await setDoc(doc(database, "rooms/alpha/state/board"), {
+        groups: [],
+        columns: {},
+        tokensBySystem: { nyx: [{ groupId: "g1", mapId: "main", x: 0.4, y: 0.6 }] },
+      });
       await setDoc(doc(database, "rooms/alpha/playerStatus/p1"), { aliveStatus: "alive" });
       await setDoc(doc(database, "rooms/alpha/config/playerOverrides"), { p1: { area: "A" } });
       await setDoc(doc(database, "rooms/alpha/mobileLinks/p1"), { tokenHash: "secret" });
@@ -46,9 +50,28 @@ describe.skipIf(!emulatorAvailable)("Firestore mobile and scene rules", () => {
 
   it("keeps board writes for commanders and admins", async () => {
     await assertFails(setDoc(doc(auth("viewer-uid", "p1"), "rooms/alpha/state/board"), { groups: [], columns: {} }));
-    await assertSucceeds(setDoc(doc(auth("commander-uid", "p2"), "rooms/alpha/state/board"), { groups: [], columns: {} }));
+    await assertSucceeds(updateDoc(doc(auth("commander-uid", "p2"), "rooms/alpha/state/board"), { notesText: "command note" }));
     await assertFails(setDoc(doc(auth("viewer-uid", "p1"), "rooms/alpha/config/playerOverrides"), { p1: { area: "B" } }));
     await assertSucceeds(setDoc(doc(auth("commander-uid", "p2"), "rooms/alpha/config/playerOverrides"), { p1: { area: "B" } }));
     expect(true).toBe(true);
+  });
+
+  it("reserves troop locations and transfer receipts for the server", async () => {
+    const commander = auth("commander-uid", "p2");
+    const board = doc(commander, "rooms/alpha/state/board");
+
+    await assertFails(updateDoc(board, {
+      tokensBySystem: { nyx: [{ groupId: "g1", mapId: "main", x: 0.9, y: 0.9 }] },
+    }));
+    await assertFails(updateDoc(board, {
+      tokens: [{ groupId: "g1", mapId: "main", x: 0.9, y: 0.9 }],
+    }));
+    await assertSucceeds(updateDoc(board, { notesText: "authorized non-token update" }));
+
+    await assertFails(setDoc(board, { groups: [], columns: {} }));
+    await assertFails(deleteDoc(board));
+    await assertFails(setDoc(doc(commander, "rooms/alpha/tokenTransferOperations/fake-operation"), {
+      operationId: "fake-operation",
+    }));
   });
 });
