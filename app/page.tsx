@@ -76,6 +76,21 @@ type OpLogEntry = {
   text: string;        // Human-readable
   systemId?: string;   // zugeordnetes System für System-Filter
 };
+type ScheduledOpLogEntry = OpLogEntry & {
+  newX?: number;
+  newY?: number;
+  _groupLabel?: string;
+  _mapLabel?: string;
+};
+type PendingOpLogEntry = {
+  timer: ReturnType<typeof setTimeout>;
+  entry: ScheduledOpLogEntry;
+  prevX?: number;
+  prevY?: number;
+  startX?: number;
+  startY?: number;
+  minDist?: number;
+};
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
@@ -4099,7 +4114,7 @@ function BoardApp() {
   const [opLogActive, setOpLogActive] = useState(false); // Standard: gestoppt
   const opLogActiveRef = useRef(false);
   // Pending timers: key → { timer, entry, prevPos? }
-  const opLogPending = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; entry: OpLogEntry; prevX?: number; prevY?: number }>>({});
+  const opLogPending = useRef<Record<string, PendingOpLogEntry>>({});
 
   // Drawing state
   const [drawings, setDrawings] = useState<DrawingsMap>({});
@@ -4696,14 +4711,14 @@ aliveState: na, spawnState: ns,
 
   function scheduleOpLog(
     key: string,
-    entry: OpLogEntry,
+    entry: ScheduledOpLogEntry,
     opts?: { minDist?: number; prevX?: number; prevY?: number }
   ) {
     if (!opLogActiveRef.current) return;
     const pending = opLogPending.current;
 
     // Startposition vom allerersten Aufruf dieser Bewegungssequenz beibehalten
-    const existing  = pending[key] as any;
+    const existing = pending[key];
     const startX    = existing?.startX ?? existing?.prevX ?? opts?.prevX;
     const startY    = existing?.startY ?? existing?.prevY ?? opts?.prevY;
     const minDist   = existing?.minDist ?? opts?.minDist;
@@ -4716,10 +4731,10 @@ aliveState: na, spawnState: ns,
       delete opLogPending.current[key];
 
       // Distanz-Check: Startposition vs. finale newX/Y im entry
-      const md = (p as any).minDist as number | undefined;
+      const md = p.minDist;
       if (md !== undefined && p.prevX !== undefined && p.prevY !== undefined) {
-        const finalX = (p.entry as any).newX as number | undefined;
-        const finalY = (p.entry as any).newY as number | undefined;
+        const finalX = p.entry.newX;
+        const finalY = p.entry.newY;
         if (finalX !== undefined && finalY !== undefined) {
           const dist = Math.sqrt((finalX - p.prevX) ** 2 + (finalY - p.prevY) ** 2);
           if (dist < md) return;
@@ -4728,20 +4743,20 @@ aliveState: na, spawnState: ns,
 
       // Text neu generieren mit gespeicherter Startposition und finaler Position
       const finalEntry = { ...p.entry };
-      const sx = (p as any).startX as number | undefined;
-      const sy = (p as any).startY as number | undefined;
-      const fx = (p.entry as any).newX as number | undefined;
-      const fy = (p.entry as any).newY as number | undefined;
+      const sx = p.startX;
+      const sy = p.startY;
+      const fx = p.entry.newX;
+      const fy = p.entry.newY;
       if (sx !== undefined && sy !== undefined && fx !== undefined && fy !== undefined
-          && (p.entry as any)._groupLabel) {
-        finalEntry.text = `${(p.entry as any)._groupLabel}  ⬡ Token bewegt  (${(p.entry as any)._mapLabel} · ${coordLabel(sx, sy)} → ${coordLabel(fx, fy)})`;
+          && p.entry._groupLabel) {
+        finalEntry.text = `${p.entry._groupLabel}  ⬡ Token bewegt  (${p.entry._mapLabel} · ${coordLabel(sx, sy)} → ${coordLabel(fx, fy)})`;
       }
 
       const next = [...opLogRef.current, finalEntry];
       pushOpLog(next.length > 1000 ? next.slice(next.length - 1000) : next);
     }, 30_000); // 30s Debounce
 
-    (pending[key] as any) = { timer, entry, prevX: startX, prevY: startY, minDist,
+    pending[key] = { timer, entry, prevX: startX, prevY: startY, minDist,
       startX, startY };
   }
 
@@ -5135,7 +5150,7 @@ aliveState: na, spawnState: ns,
         });
         // Alle laufenden Move-Timer dieser Gruppe canceln – frischer Start auf neuer Ebene
         const pendingKeys = Object.keys(opLogPending.current).filter(k => k.startsWith(`token_move:${gId}:`));
-        pendingKeys.forEach(k => { clearTimeout((opLogPending.current[k] as any).timer); delete opLogPending.current[k]; });
+        pendingKeys.forEach(k => { clearTimeout(opLogPending.current[k].timer); delete opLogPending.current[k]; });
       } else if (isNew) {
         // ── Token neu gesetzt ──
         scheduleOpLog(`token_set:${gId}:${mapId}`, {
