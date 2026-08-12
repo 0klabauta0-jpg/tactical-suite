@@ -998,6 +998,8 @@ function GroupIconDisplay({ icon, size = 20 }: { icon?: string; size?: number })
     const src = icon.includes("drive.google.com/file/d/")
       ? icon.replace(/drive\.google\.com\/file\/d\/([^/]+).*/, "drive.google.com/uc?export=view&id=$1")
       : icon;
+    // User-provided icons may be arbitrary external URLs, so Next image optimization cannot be configured safely here.
+    // eslint-disable-next-line @next/next/no-img-element
     return <img src={src} style={{ width: size, height: size, borderRadius: 3, objectFit: "cover", flexShrink: 0 }} alt="icon" />;
   }
   return <span style={{ fontSize: size * 0.85, lineHeight: 1, flexShrink: 0 }}>{icon}</span>;
@@ -1036,6 +1038,8 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
   const isUrl = current && (current.startsWith("http") || current.startsWith("/"));
   const preview = current
     ? isUrl
+      // User-provided icons may be arbitrary external URLs, so keep this preview unoptimized.
+      // eslint-disable-next-line @next/next/no-img-element
       ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(event: React.SyntheticEvent<HTMLImageElement>) => { event.currentTarget.style.display = "none"; }} />
       : <span className="text-base leading-none">{current}</span>
     : <span className="text-gray-500 text-xs">🖼</span>;
@@ -2086,7 +2090,7 @@ function DrawingLayer({
     };
   }
 
-  function redraw(extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) {
+  const redraw = useCallback((extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -2230,15 +2234,15 @@ function DrawingLayer({
       ctx.lineCap = "round";
       ctx.stroke();
     }
-  }
+  }, [color, elements, markerNow, showGrid, strokeWidth]);
 
   // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerNow]);
+  useEffect(() => { redraw(); }, [movingEl, redraw, tool]);
 
   // Canvas-Größe an Bild anpassen – wir verwenden offsetWidth/offsetHeight
   // (die CSS-Größe des Elements VOR dem äußeren CSS-transform/scale),
   // damit canvas.width/height in natürlichen Pixeln bleibt und nicht zoom-skaliert wird.
-  function syncCanvasSize() {
+  const syncCanvasSize = useCallback(() => {
     const canvas = canvasRef.current;
     const img = document.getElementById("map-img") as HTMLImageElement | null;
     if (!canvas || !img) return;
@@ -2249,7 +2253,7 @@ function DrawingLayer({
       canvas.height = h;
       redraw();
     }
-  }
+  }, [redraw]);
 
   // ResizeObserver: Canvas neu skalieren wenn Bild sich verändert (Fenstergröße)
   useEffect(() => {
@@ -2259,7 +2263,7 @@ function DrawingLayer({
     ro.observe(img);
     syncCanvasSize();
     return () => ro.disconnect();
-  }, [elements, showGrid, markerNow]);
+  }, [syncCanvasSize]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!canDraw || tool === "pointer") return;
@@ -2586,55 +2590,6 @@ function DrawingLayer({
 // ZOOMABLE MAP
 // BUGFIX: Mausrad = nur Scrollen/Panning, kein Zoom. Zoom nur über Buttons.
 // ─────────────────────────────────────────────────────────────
-// ZOOM PANEL – verschiebbares Fenster für Zoom-Steuerung
-// ─────────────────────────────────────────────────────────────
-
-function ZoomPanel({ x, y, onMove, onZoomIn, onZoomOut, onReset, scale }: {
-  x: number; y: number; onMove: (x: number, y: number) => void;
-  onZoomIn: () => void; onZoomOut: () => void; onReset: () => void;
-  scale: number;
-}) {
-  const dragging = useRef(false);
-  const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-
-  function onHandleDown(e: React.PointerEvent) {
-    dragging.current = true;
-    dragStart.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault(); e.stopPropagation();
-  }
-  function onHandleMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    onMove(
-      Math.max(0, dragStart.current.px + e.clientX - dragStart.current.mx),
-      Math.max(0, dragStart.current.py + e.clientY - dragStart.current.my),
-    );
-  }
-  function onHandleUp() { dragging.current = false; }
-
-  return (
-    <div
-      className="absolute z-30 bg-gray-900 bg-opacity-95 border border-gray-700 rounded-2xl shadow-xl select-none overflow-hidden"
-      style={{ left: x, top: y, minWidth: 90 }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700 bg-gray-800 cursor-move"
-        onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
-      >
-        <span className="text-gray-500 text-xs">⠿</span>
-        <span className="text-xs font-semibold text-gray-300">🔍</span>
-        <span className="text-xs text-gray-500 ml-auto">{Math.round(scale * 100)}%</span>
-      </div>
-      <div className="flex flex-col gap-1 p-2">
-        <button onClick={onZoomIn}  onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">＋</button>
-        <button onClick={onZoomOut} onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-sm font-bold border border-gray-600 bg-gray-800 text-white hover:bg-gray-700">－</button>
-        <button onClick={onReset}   onPointerDown={(e) => e.stopPropagation()} className="w-full h-8 rounded-lg text-xs border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700">⊙ Reset</button>
-      </div>
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
@@ -2939,6 +2894,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         transition: (tokenDrag || markerDrag || panning) ? "none" : "transform 0.1s",
         width: "100%", height: "100%", position: "relative",
       }}>
+        {/* Exact canvas/image alignment is required here; optimization would change that rendering contract. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img id="map-img" src={imageSrc} alt="Map"
           className="w-full h-full object-contain block select-none"
           draggable={false}
@@ -3785,47 +3742,32 @@ function BoardApp() {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 
-      setLocalPanelPos((p) => {
-        const navW = 340, navH = 300;
-        const placerW = 280, placerH = 220;
-        const toolbarW = 260, toolbarH = 160;
-        const zoomW = 160, zoomH = 110;
-
-        const notesW = p.notes.w ?? 420;
-        const notesH = p.notes.h ?? 260;
-        const logW = p.logNotes.w ?? 520;
-        const logH = p.logNotes.h ?? 360;
-
-        return {
-          ...p,
-          nav: {
-            x: clamp(Number(p.nav.x) || 0, pad, Math.max(pad, vw - navW - pad)),
-            y: clamp(Number(p.nav.y) || 0, pad, Math.max(pad, vh - navH - pad)),
-          },
-          placer: {
-            x: clamp(Number(p.placer.x) || 0, pad, Math.max(pad, vw - placerW - pad)),
-            y: clamp(Number(p.placer.y) || 0, pad, Math.max(pad, vh - placerH - pad)),
-          },
-          toolbar: {
-            x: clamp(Number(p.toolbar.x) || 0, pad, Math.max(pad, vw - toolbarW - pad)),
-            y: clamp(Number(p.toolbar.y) || 0, pad, Math.max(pad, vh - toolbarH - pad)),
-          },
-          zoom: {
-            x: clamp(Number(p.zoom.x) || 0, pad, Math.max(pad, vw - zoomW - pad)),
-            y: clamp(Number(p.zoom.y) || 0, pad, Math.max(pad, vh - zoomH - pad)),
-          },
-          notes: {
-            ...p.notes,
-            x: clamp(Number(p.notes.x) || 0, pad, Math.max(pad, vw - notesW - pad)),
-            y: clamp(Number(p.notes.y) || 0, pad, Math.max(pad, vh - notesH - pad)),
-          },
-          logNotes: {
-            ...p.logNotes,
-            x: clamp(Number(p.logNotes.x) || 0, pad, Math.max(pad, vw - logW - pad)),
-            y: clamp(Number(p.logNotes.y) || 0, pad, Math.max(pad, vh - logH - pad)),
-          },
-        };
-      });
+      setPanelNav((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 340 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 300 - pad)),
+      }));
+      setPanelPlacer((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 280 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 220 - pad)),
+      }));
+      setPanelToolbar((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 260 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 160 - pad)),
+      }));
+      setPanelZoom((panel) => ({
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - 160 - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - 110 - pad)),
+      }));
+      setPanelNotes((panel) => ({
+        ...panel,
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - (panel.w ?? 420) - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - (panel.h ?? 260) - pad)),
+      }));
+      setPanelLogNotes((panel) => ({
+        ...panel,
+        x: clamp(Number(panel.x) || 0, pad, Math.max(pad, vw - (panel.w ?? 520) - pad)),
+        y: clamp(Number(panel.y) || 0, pad, Math.max(pad, vh - (panel.h ?? 360) - pad)),
+      }));
     };
 
     applyClamp();
