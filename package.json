@@ -16,7 +16,9 @@
     "release:preflight": "tsx scripts/preflight-release.ts",
     "room:backup": "tsx scripts/backup-room.ts",
     "room:backup:verify": "tsx scripts/verify-room-backup.ts",
-    "room:features": "tsx scripts/set-room-features.ts"
+    "room:features": "tsx scripts/set-room-features.ts",
+    "room:audit-tokens": "tsx scripts/audit-token-locations.ts",
+    "room:rockbreaker-entry": "tsx scripts/set-rockbreaker-entry.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
