@@ -24,6 +24,14 @@ import {
   type BoardPoi as POI,
   type BoardToken as Token,
 } from "@/lib/board/collections";
+import {
+  parseAliveState,
+  parseGroupRoles,
+  parseSpawnState,
+  type BoardGroupRoles as GroupRoles,
+  type BoardPlayerAliveState as PlayerAliveState,
+  type BoardPlayerSpawnState as PlayerSpawnState,
+} from "@/lib/board/members";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -44,13 +52,10 @@ const APP_VERSION = "1.010";
 // ─────────────────────────────────────────────────────────────
 
 // GroupRoles: leader/deputy pro Gruppe
-type GroupRoles = Record<string, { leader?: string; deputy?: string }>;
 
 
 // ── Star Citizen Systeme ──────────────────────────────────────────────────
 type StarSystem = { id: string; label: string; x: number; y: number }; // Position auf Galaxie-Karte
-type PlayerAliveState = Record<string, "alive" | "dead">;
-type PlayerSpawnState = Record<string, string>;
 type PanelLayout = {
   nav:      { x: number; y: number };
   placer:   { x: number; y: number };
@@ -4403,8 +4408,8 @@ drawingsRef.current = activeDrawings;
 React.startTransition(() => {
   setTokens(activeTokens);
   setOrderMarkers(activeOM);
-  setAliveState(data.aliveState ?? {});
-  setSpawnState(data.spawnState ?? {});
+  setAliveState(parseAliveState(data.aliveState));
+  setSpawnState(parseSpawnState(data.spawnState));
   setMaps(activeMaps);
   setPois(activePois);
   setDrawings(activeDrawings);
@@ -4434,7 +4439,7 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
       if (data.systemNotesTexts) { setSystemNotesTexts(data.systemNotesTexts); systemNotesRef.current = data.systemNotesTexts; }
       if (Array.isArray(data.logEntries)) setLogEntries(data.logEntries);
       if (Array.isArray(data.opLogEntries)) { setOpLogEntries(data.opLogEntries); opLogRef.current = data.opLogEntries; }
-      if (data.groupRoles) setGroupRoles(data.groupRoles);
+      if (data.groupRoles) setGroupRoles(parseGroupRoles(data.groupRoles));
       if (data.drawings) setDrawings(data.drawings);
       // Systeme (rückwärtskompatibel)
       if (Array.isArray(data.systems) && data.systems.length > 0) {
