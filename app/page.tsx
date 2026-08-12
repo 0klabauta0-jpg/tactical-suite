@@ -14,6 +14,16 @@ import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
+import {
+  parseMapEntries,
+  parseOrderMarkers,
+  parsePois,
+  parseTokens,
+  type BoardMapEntry as MapEntry,
+  type BoardOrderMarker as OrderMarker,
+  type BoardPoi as POI,
+  type BoardToken as Token,
+} from "@/lib/board/collections";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -36,10 +46,6 @@ const APP_VERSION = "1.010";
 // GroupRoles: leader/deputy pro Gruppe
 type GroupRoles = Record<string, { leader?: string; deputy?: string }>;
 
-type Token = { groupId: string; x: number; y: number; mapId?: string };
-type OrderMarker = { groupId: string; x: number; y: number; mapId: string };
-type MapEntry = { id: string; label: string; image: string; x?: number; y?: number };
-type POI = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
 
 // ── Star Citizen Systeme ──────────────────────────────────────────────────
 type StarSystem = { id: string; label: string; x: number; y: number }; // Position auf Galaxie-Karte
@@ -248,10 +254,6 @@ function stableId(str: string): string {
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
   return "p_" + (h >>> 0).toString(36);
-}
-
-function normalizeToken(t: Token): Token {
-  return { ...t, mapId: (t.mapId ?? "main") };
 }
 
 function normalizeImageUrl(url: string): string {
@@ -3090,7 +3092,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     setOrderMarkerDrag(null); lastOrderMarkerPos.current = null;
   }
 
-  const visibleTokens = tokens.map(normalizeToken).filter((t) => (t.mapId ?? "main") === activeMapId);
+  const visibleTokens = parseTokens(tokens).filter((t) => t.mapId === activeMapId);
   const visibleOrderMarkers = orderMarkers.filter((m) => m.mapId === activeMapId);
   const [orderMarkerDrag, setOrderMarkerDrag] = useState<string | null>(null);
   const lastOrderMarkerPos = useRef<{ x: number; y: number } | null>(null);
@@ -4326,13 +4328,12 @@ useEffect(() => {
 // ── Map data: prefer per-system fields, fallback legacy → LEGACY_DEFAULT_SYSTEM
 let didMigrate = false;
 
-const normalizeTokensArr = (arr: any[]): Token[] => arr.map(normalizeToken);
-const normalizeOrderMarkersArr = (arr: any[]): OrderMarker[] =>
-  arr.map((m: any) => ({ groupId: m.groupId, x: m.x, y: m.y, mapId: m.mapId ?? "main" }));
+const normalizeTokensArr = (arr: unknown): Token[] => parseTokens(arr);
+const normalizeOrderMarkersArr = (arr: unknown): OrderMarker[] => parseOrderMarkers(arr);
 
 const tokensBySystem: Record<string, Token[]> =
   data.tokensBySystem && typeof data.tokensBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.tokensBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeTokensArr(v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.tokensBySystem).map(([k, v]) => [k, normalizeTokensArr(v)]))
     : (() => {
         didMigrate = Array.isArray(data.tokens);
         return Array.isArray(data.tokens) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeTokensArr(data.tokens) } as Record<string, Token[]> : {} as Record<string, Token[]>;
@@ -4340,7 +4341,7 @@ const tokensBySystem: Record<string, Token[]> =
 
 const orderMarkersBySystem: Record<string, OrderMarker[]> =
   data.orderMarkersBySystem && typeof data.orderMarkersBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.orderMarkersBySystem).map(([k, v]) => [k, Array.isArray(v) ? normalizeOrderMarkersArr(v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.orderMarkersBySystem).map(([k, v]) => [k, normalizeOrderMarkersArr(v)]))
     : (() => {
         didMigrate = didMigrate || Array.isArray(data.orderMarkers);
         return Array.isArray(data.orderMarkers) ? { [LEGACY_DEFAULT_SYSTEM]: normalizeOrderMarkersArr(data.orderMarkers) } as Record<string, OrderMarker[]> : {} as Record<string, OrderMarker[]>;
@@ -4348,18 +4349,21 @@ const orderMarkersBySystem: Record<string, OrderMarker[]> =
 
 const mapsBySystem: Record<string, MapEntry[]> =
   data.mapsBySystem && typeof data.mapsBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => [k, Array.isArray(v) && (v as any[]).length > 0 ? (v as any[]) : getDefaultMaps(k)]))
+    ? Object.fromEntries(Object.entries(data.mapsBySystem).map(([k, v]) => {
+        const parsedMaps = parseMapEntries(v);
+        return [k, parsedMaps.length > 0 ? parsedMaps : getDefaultMaps(k)];
+      }))
     : (() => {
         const legacyHas = Array.isArray(data.maps) && data.maps.length > 0;
         didMigrate = didMigrate || legacyHas;
-        return legacyHas ? { [LEGACY_DEFAULT_SYSTEM]: data.maps } as Record<string, MapEntry[]> : {} as Record<string, MapEntry[]>;
+        return legacyHas ? { [LEGACY_DEFAULT_SYSTEM]: parseMapEntries(data.maps) } as Record<string, MapEntry[]> : {} as Record<string, MapEntry[]>;
       })();
 
 const poisBySystem: Record<string, POI[]> =
   data.poisBySystem && typeof data.poisBySystem === "object"
-    ? Object.fromEntries(Object.entries(data.poisBySystem).map(([k, v]) => [k, Array.isArray(v) ? (v as any[]) : []]))
+    ? Object.fromEntries(Object.entries(data.poisBySystem).map(([k, v]) => [k, parsePois(v)]))
     : (() => {
-        const legacyPois = Array.isArray(data.pois) ? data.pois : (data.pois ?? []);
+        const legacyPois = parsePois(data.pois);
         didMigrate = didMigrate || !!data.pois;
         return { [LEGACY_DEFAULT_SYSTEM]: legacyPois } as Record<string, POI[]>;
       })();
@@ -5043,7 +5047,7 @@ aliveState: na, spawnState: ns,
   }
 
   function commitToken(gId: string, x: number, y: number, mapId: string) {
-    const prev = tokensRef.current.map(normalizeToken);
+    const prev = parseTokens(tokensRef.current);
     const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
     const isNew = i === -1;
     const oldToken = isNew ? null : prev[i];
