@@ -5,11 +5,12 @@ import { Suspense, useRef, useState } from "react";
 import {
   DraggableTroopChip,
   ParentLevelDropTarget,
+  RockbreakerRecoveryButton,
   TokenDropTarget,
   TroopTransferProvider,
   tokenDropIntentAtPoint,
 } from "@/app/components/map/token-transfer-controls";
-import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
+import { ROCKBREAKER_SCENE_ID, type TokenLocation, type TokenTransferIntent } from "@/lib/map/token-transfer";
 
 const MAIN_LOCATION: TokenLocation = { kind: "map2d", mapId: "main", x: 0.32, y: 0.44 };
 
@@ -74,8 +75,13 @@ function nextLocation(intent: TokenTransferIntent): TokenLocation {
 function TokenTransferTestPageContent() {
   const searchParams = useSearchParams();
   const conflict = searchParams.get("conflict") === "1";
-  const [location, setLocation] = useState<TokenLocation>(conflict ? MAIN_LOCATION : { kind: "unplaced" });
-  const [currentMap, setCurrentMap] = useState("main");
+  const rockbreaker = searchParams.get("rockbreaker") === "1";
+  const [location, setLocation] = useState<TokenLocation>(
+    rockbreaker
+      ? { kind: "rockbreaker3d", sceneId: ROCKBREAKER_SCENE_ID, revision: 1 }
+      : conflict ? MAIN_LOCATION : { kind: "unplaced" },
+  );
+  const [currentMap, setCurrentMap] = useState(rockbreaker ? "rockbreaker" : "main");
   const [message, setMessage] = useState("");
   const [lastIntent, setLastIntent] = useState("");
 
@@ -117,6 +123,13 @@ function TokenTransferTestPageContent() {
             expectedSource={location}
             className="bg-cyan-950 text-cyan-100"
           />
+          {location.kind === "rockbreaker3d" ? (
+            <RockbreakerRecoveryButton
+              label="Fight Team"
+              disabled={false}
+              onRecover={() => { void transfer({ kind: "moveUp" }); }}
+            />
+          ) : null}
           {currentMap === "main" ? (
             <TokenDropTarget
               id="child-cap-map"

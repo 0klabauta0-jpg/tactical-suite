@@ -22,6 +22,7 @@ import { RockbreakerMap, type RockbreakerEnemyKind } from "@/app/components/map/
 import {
   DraggableTroopChip,
   ParentLevelDropTarget,
+  RockbreakerRecoveryButton,
   TokenDropTarget,
   TroopTransferProvider,
   tokenDropIntentAtPoint,
@@ -1808,12 +1809,14 @@ function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, 
 // TOKEN PLACER
 // ─────────────────────────────────────────────────────────────
 
-function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation, showOrders = true }: {
+function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation, showOrders = true, onRecoverFromRockbreaker, recoveringGroups }: {
   groups: Group[];
   onPlaceOrder: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
   getGroupLocation: (groupId: string) => GroupLocation;
   showOrders?: boolean;
+  onRecoverFromRockbreaker?: (groupId: string) => void;
+  recoveringGroups?: ReadonlySet<string>;
 }) {
   const [armedOrderGroupId, setArmedOrderGroupId] = useState<string | null>(null);
   const tactical = groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
@@ -1869,6 +1872,13 @@ function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation,
               className="flex-1 bg-gray-800 text-left text-gray-200 hover:bg-gray-700"
             />
           )}
+          {location.kind === "rockbreaker3d" && onRecoverFromRockbreaker ? (
+            <RockbreakerRecoveryButton
+              label={g.label}
+              disabled={recoveringGroups?.has(g.id) ?? false}
+              onRecover={() => onRecoverFromRockbreaker(g.id)}
+            />
+          ) : null}
           <span className="self-center whitespace-nowrap px-1 text-[10px] text-gray-500" title={`Aktueller Ort: ${locationLabel}`}>
             {locationLabel}
           </span>
@@ -5771,6 +5781,8 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId}
                 getGroupLocation={(groupId) => getConfirmedGroupLocation(groupId)}
+                onRecoverFromRockbreaker={(groupId) => { void requestTokenTransfer(groupId, { kind: "moveUp" }); }}
+                recoveringGroups={pendingTokenTransfers}
                 showOrders={activeRenderer === "image2d"} />
             ) : null}
             enemy={canWrite && activeRenderer === "rockbreaker3d" ? (

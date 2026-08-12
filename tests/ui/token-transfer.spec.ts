@@ -53,3 +53,12 @@ test("prefers the Rockbreaker pill when a map token overlaps it", async ({ page 
   await expect(page.getByTestId("manual-transfer-intent"))
     .toHaveText('{"kind":"enterChild","childId":"rockbreaker"}');
 });
+
+test("recovers a Rockbreaker troop to Nyx through the token dock", async ({ page }) => {
+  await page.goto("/ui-test/token-transfer?rockbreaker=1");
+
+  await page.getByRole("button", { name: "Fight Team nach Nyx zurückholen" }).click();
+
+  await expect(page.getByTestId("last-transfer-intent")).toHaveText('{"kind":"moveUp"}');
+  await expect(page.getByTestId("token-main-g1")).toBeVisible();
+});
