@@ -2,13 +2,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createPortal } from "react-dom";
-import Papa from "papaparse";
 import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
 import { canAdministerRoom, canWriteBoard, parseRole, type Role } from "@/lib/domain/roles";
+import type { EditablePlayerField, Player, PlayerOverrides } from "@/lib/domain/player";
+import { parsePlayersCsv } from "@/lib/players/csv";
+import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -27,19 +29,6 @@ const APP_VERSION = "1.010";
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
-
-type Player = {
-  id: string;
-  name: string;
-  area?: string;
-  role?: string;
-  squadron?: string;
-  status?: string;
-  ampel?: string;
-  appRole?: string;
-  homeLocation?: string;
-  icon?: string;   // emoji oder URL – wie bei Gruppen
-};
 
 // color: optional hex ohne #, z.B. "e63946"
 type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string; systemId?: string };
@@ -299,49 +288,29 @@ const cachedPlayersByRoom: Record<string, Player[]> = {};
 
 // Firestore-Override-Cache: roomId → { playerId → Partial<Player> }
 // Wird bei Login geladen. Enthält nur Felder die Firestore überschreibt (z.B. appRole).
-const firestoreOverrideCache: Record<string, Record<string, Partial<Player>>> = {};
+const firestoreOverrideCache: Record<string, PlayerOverrides> = {};
 
-async function loadFirestoreOverrides(roomId: string): Promise<Record<string, Partial<Player>>> {
+async function loadFirestoreOverrides(roomId: string): Promise<PlayerOverrides> {
   if (firestoreOverrideCache[roomId]) return firestoreOverrideCache[roomId];
   try {
     const snap = await getDoc(doc(db, "rooms", roomId, "config", "playerOverrides"));
     if (!snap.exists()) { firestoreOverrideCache[roomId] = {}; return {}; }
-    const data = snap.data() as Record<string, Partial<Player>>;
+    const data = snap.data() as PlayerOverrides;
     firestoreOverrideCache[roomId] = data;
     return data;
   } catch { return {}; }
 }
 
-async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Player>) {
+async function saveFirestoreOverride(roomId: string, playerId: string, fields: Partial<Omit<Player, "id">>) {
   const overrides = await loadFirestoreOverrides(roomId);
-  const next = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
+  const next: PlayerOverrides = { ...overrides, [playerId]: { ...(overrides[playerId] ?? {}), ...fields } };
   firestoreOverrideCache[roomId] = next;
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
-// Spieler aus Sheet mit Firestore-Overrides mergen.
-// Regel für appRole: "zuletzt gesetzte gewinnt"
-// - Firestore speichert "lastSheetAppRole" = der zuletzt vom Sheet gelesene Wert.
-// - Wenn Sheet-AppRolle sich geändert hat (Sheet != lastSheetAppRole) → Sheet gewinnt.
-// - Wenn kein Sheet-Change → Firestore-Override appRole gewinnt (manuell gesetzt).
-function mergeWithOverrides(players: Player[], overrides: Record<string, Partial<Player> & { lastSheetAppRole?: string }>): Player[] {
-  return players.map((p) => {
-    const ov = overrides[p.id];
-    if (!ov) return p;
-    // appRole-Speziallogik: Sheet-Change erkennen
-    let resolvedAppRole = ov.appRole ?? p.appRole;
-    const sheetAppRole = p.appRole ?? "viewer";
-    const lastSheetAppRole = ov.lastSheetAppRole;
-    if (lastSheetAppRole !== undefined && sheetAppRole !== lastSheetAppRole) {
-      // Sheet hat sich geändert → Sheet-Wert gewinnt
-      resolvedAppRole = sheetAppRole;
-    }
-    return { ...p, ...ov, appRole: resolvedAppRole };
-  });
-}
-
+// The merge behavior is implemented in lib/players/merge-overrides.ts.
 // Beim Login: Sheet-AppRolle in Firestore als lastSheetAppRole tracken
-async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: string, overrides: Record<string, any>) {
+async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: Role, overrides: PlayerOverrides) {
   const ov = overrides[playerId] ?? {};
   // Kein Update nötig wenn Sheet-Wert unverändert
   if (ov.lastSheetAppRole === sheetAppRole) return;
@@ -349,7 +318,7 @@ async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: 
   // Wenn ov.appRole existiert UND sich von lastSheetAppRole unterscheidet → manueller Override → nicht überschreiben
   const hasManualOverride = ov.appRole !== undefined && ov.appRole !== ov.lastSheetAppRole;
   const existing = await loadFirestoreOverrides(roomId);
-  const next = {
+  const next: PlayerOverrides = {
     ...existing,
     [playerId]: {
       ...(existing[playerId] ?? {}),
@@ -362,33 +331,6 @@ async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: 
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
-function parsePlayersFromCsv(text: string): Player[] {
-  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-  const list: Player[] = [];
-  (parsed.data as any[]).forEach((row) => {
-    const name = (row["Spielername"] ?? row["Name"] ?? "").toString().trim();
-    if (!name) return;
-    // PlayerId: Pflichtfeld aus Sheet, Fallback: stabiler Hash des Namens
-    const explicitId = row["PlayerId"]?.toString().trim();
-    const id = explicitId || stableId(name);
-    list.push({
-      id,
-      name,
-      area:         (row["Bereich"]    ?? "").toString(),
-      role:         (row["Rolle"]      ?? "").toString(),
-      squadron:     (row["Staffel"]    ?? "").toString(),
-      status:       (row["Status"]     ?? "").toString(),
-      ampel:        (row["Ampel"]      ?? "").toString(),
-      appRole:      (row["AppRolle"]   ?? "viewer").toString().toLowerCase(),
-      homeLocation: (row["Heimatort"]  ?? "").toString(),
-    });
-  });
-  return list;
-}
-
-// Startzeile für Spielerdaten (Zeile 10 = Header, Zeile 11 = erste Datenzeile).
-// Für Google Sheets: range=A10:Z10000 liefert CSV ab Zeile 10.
-// Der erste CSV-Row wird dann automatisch als Header interpretiert (Papa.parse header:true).
 const SHEET_HEADER_ROW = 10; // 1-basiert, wie im Sheet sichtbar
 
 async function loadPlayersForRoom(roomId: string, force = false): Promise<Player[]> {
@@ -407,7 +349,7 @@ async function loadPlayersForRoom(roomId: string, force = false): Promise<Player
     url += sep2 + "_t=" + Date.now();
     const res = await fetch(url, { cache: "no-store" });
     const text = await res.text();
-    const list = parsePlayersFromCsv(text);
+    const list = parsePlayersCsv(text).players;
     cachedPlayersByRoom[roomId] = list;
     return list;
   } catch {
@@ -708,7 +650,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       if (adminHandle.trim()) {
         const adminId = stableId(adminHandle.trim());
         const existing = await loadFirestoreOverrides(roomId);
-        const next = {
+        const next: PlayerOverrides = {
           ...existing,
           [adminId]: {
             ...(existing[adminId] ?? {}),
@@ -1062,7 +1004,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
       if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
         const existing = await loadFirestoreOverrides(roomId);
-        const next = {
+        const next: PlayerOverrides = {
           ...existing,
           [found.id]: { ...(existing[found.id] ?? {}), appRole: "admin", lastSheetAppRole: "admin" },
         };
@@ -1470,7 +1412,7 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
   onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; groupId: string; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
-  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
+  onSetPlayerField: (pid: string, field: EditablePlayerField, value: string) => void;
   groupColor: string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
@@ -1729,7 +1671,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
   spawnGroups: Group[]; spawnState: PlayerSpawnState; onSetSpawn: (pid: string, sid: string) => void;
   groupRoles: GroupRoles; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   isAdmin: boolean; onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
-  onSetPlayerField: (pid: string, field: keyof Player, value: string) => void;
+  onSetPlayerField: (pid: string, field: EditablePlayerField, value: string) => void;
   onSetColor: (id: string, hex: string) => void;
   onSetIcon: (id: string, icon: string) => void;
   systems?: StarSystem[]; onSetSystem?: (sysId: string) => void;
@@ -4327,7 +4269,7 @@ useEffect(() => {
     const overridesRef = doc(db, "rooms", roomId, "config", "playerOverrides");
     const unsub = onSnapshot(overridesRef, (snap) => {
       if (!snap.exists()) return;
-      const ov = snap.data() as Record<string, Partial<Player>>;
+      const ov = snap.data() as PlayerOverrides;
       firestoreOverrideCache[roomId] = ov;
       const sheetList = cachedPlayersByRoom[roomId] ?? [];
       applyPlayerList(mergeWithOverrides(sheetList, ov), false);
@@ -4562,12 +4504,12 @@ aliveState: na, spawnState: ns,
   }
 
   // GroupRoles
-  async function setPlayerField(playerId: string, field: keyof Player, value: string) {
+  async function setPlayerField(playerId: string, field: EditablePlayerField, value: string) {
     // Lokal updaten
     setPlayers((prev) => prev.map((p) => p.id === playerId ? { ...p, [field]: value } : p));
     // Firestore-Override speichern
     const existing = await loadFirestoreOverrides(roomId);
-    const next = {
+    const next: PlayerOverrides = {
       ...existing,
       [playerId]: { ...(existing[playerId] ?? {}), [field]: value },
     };
@@ -4575,9 +4517,9 @@ aliveState: na, spawnState: ns,
     await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
   }
 
-  async function setPlayerAppRole(playerId: string, newRole: "admin" | "commander" | "viewer") {
+  async function setPlayerAppRole(playerId: string, newRole: Role) {
     const existing = await loadFirestoreOverrides(roomId);
-    const next = {
+    const next: PlayerOverrides = {
       ...existing,
       [playerId]: { ...(existing[playerId] ?? {}), appRole: newRole, lastSheetAppRole: newRole },
     };
