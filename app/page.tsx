@@ -19,6 +19,14 @@ import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
 import { RockbreakerMap } from "@/app/components/map/rockbreaker-map";
+import {
+  DraggableTroopChip,
+  ParentLevelDropTarget,
+  TokenDropTarget,
+  TroopTransferProvider,
+  tokenDropIntentAtPoint,
+  useTokenDropTarget,
+} from "@/app/components/map/token-transfer-controls";
 import { MobileLinkDialog } from "@/app/components/mobile/mobile-link-dialog";
 import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
 import { resolveMapRenderer } from "@/lib/map/renderer";
@@ -29,6 +37,12 @@ import {
   type MapUiPreferences,
 } from "@/lib/map/ui-preferences";
 import { zoomIn, zoomOut } from "@/lib/map/zoom";
+import { transferTokenClient, TokenTransferClientError } from "@/lib/map/token-transfer-client";
+import { groupsForLocationMarker, locateGroup, type GroupLocation } from "@/lib/map/token-occupancy";
+import { resolveParentLocation, selectEntry2dPosition, selectReturn2dPosition } from "@/lib/map/token-placement";
+import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
+import { subscribeSceneObjects } from "@/lib/map-scene/client";
+import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
   parseMapEntries,
@@ -1793,72 +1807,71 @@ function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, 
 // TOKEN PLACER
 // ─────────────────────────────────────────────────────────────
 
-function TokenPlacerPanel({ groups, onPlace, onPlaceOrder, activeMapId }: {
+function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation }: {
   groups: Group[];
-  onPlace: (gId: string, x: number, y: number, mapId: string) => void;
   onPlaceOrder: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
+  getGroupLocation: (groupId: string) => GroupLocation;
 }) {
-  // armed: null | { gId, mode: "token" | "order" }
-  const [armed, setArmed] = useState<{ gId: string; mode: "token" | "order" } | null>(null);
+  const [armedOrderGroupId, setArmedOrderGroupId] = useState<string | null>(null);
   const tactical = groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
 
-  const armedRef = useRef(armed);
-  useEffect(() => { armedRef.current = armed; }, [armed]);
+  const armedOrderRef = useRef(armedOrderGroupId);
+  useEffect(() => { armedOrderRef.current = armedOrderGroupId; }, [armedOrderGroupId]);
   const skipNextClick = useRef(false);
 
   useEffect(() => {
     function handler(ev: MouseEvent) {
       if (skipNextClick.current) { skipNextClick.current = false; return; }
       const el = document.getElementById("map-img");
-      if (!el || !armedRef.current) return;
+      if (!el || !armedOrderRef.current) return;
       const rect = el.getBoundingClientRect();
       const x = (ev.clientX - rect.left) / rect.width;
       const y = (ev.clientY - rect.top) / rect.height;
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-        if (armedRef.current.mode === "token") onPlace(armedRef.current.gId, x, y, activeMapId);
-        else onPlaceOrder(armedRef.current.gId, x, y, activeMapId);
-        setArmed(null);
+        onPlaceOrder(armedOrderRef.current, x, y, activeMapId);
+        setArmedOrderGroupId(null);
       }
     }
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
-  }, [onPlace, onPlaceOrder, activeMapId]);
-
-  const isArmed = (gId: string, mode: "token" | "order") =>
-    armed?.gId === gId && armed?.mode === mode;
-  const anyArmed = armed !== null;
+  }, [onPlaceOrder, activeMapId]);
 
   return (
     <div>
       <div className="text-xs text-gray-500 mb-2">Karte: <span className="text-blue-400">{activeMapId}</span></div>
       {tactical.map((g) => {
-              return (
+        const location = getGroupLocation(g.id);
+        return (
         <div key={g.id} className="flex gap-1 mb-1">
-          {/* Token-Button */}
-          <button
-            className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
-              isArmed(g.id, "token") ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
-            }`}
-            onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmed(isArmed(g.id, "token") ? null : { gId: g.id, mode: "token" }); }}>
-            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: groupColor(g) }} />
-            {isArmed(g.id, "token") ? "▶ Klicke…" : g.label}
-          </button>
+          {location.kind === "ambiguous" ? (
+            <button type="button" disabled title="Mehrere gespeicherte Positionen" className="flex-1 rounded-lg border border-red-800 bg-red-950 px-2 py-1.5 text-left text-xs text-red-300 opacity-80">
+              {g.label} – Position prüfen
+            </button>
+          ) : (
+            <DraggableTroopChip
+              groupId={g.id}
+              label={g.label}
+              color={groupColor(g)}
+              expectedSource={location}
+              className="flex-1 bg-gray-800 text-left text-gray-200 hover:bg-gray-700"
+            />
+          )}
           {/* Auftrags-Button */}
           <button
             title={`Auftrag für ${g.label} setzen`}
             className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${
-              isArmed(g.id, "order") ? "bg-orange-600 border-orange-500 text-white" : "bg-gray-800 border-gray-600 text-orange-400 hover:bg-gray-700 hover:border-orange-600"
+              armedOrderGroupId === g.id ? "bg-orange-600 border-orange-500 text-white" : "bg-gray-800 border-gray-600 text-orange-400 hover:bg-gray-700 hover:border-orange-600"
             }`}
-            onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmed(isArmed(g.id, "order") ? null : { gId: g.id, mode: "order" }); }}>
-            {isArmed(g.id, "order") ? "▶ Klicke…" : "⚑"}
+            onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmedOrderGroupId(armedOrderGroupId === g.id ? null : g.id); }}>
+            {armedOrderGroupId === g.id ? "▶ Klicke…" : "⚑"}
           </button>
         </div>
         );
       })}
-      {anyArmed && (
+      {armedOrderGroupId && (
         <button className="w-full rounded-lg border border-red-800 px-2 py-1.5 text-xs bg-red-950 text-red-400"
-          onClick={(e) => { e.stopPropagation(); setArmed(null); }}>Abbrechen</button>
+          onClick={(e) => { e.stopPropagation(); setArmedOrderGroupId(null); }}>Abbrechen</button>
       )}
     </div>
   );
@@ -2575,7 +2588,7 @@ function DrawingLayer({
 // ─────────────────────────────────────────────────────────────
 
 function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState, groupRoles,
-  onMoveTokenLocal, onCommitToken, canWriteTokens, isAdmin: isAdminProp, markers, onOpenMarker,
+  onCommitToken, onTransferToken, canWriteTokens, isAdmin: isAdminProp, markers, onOpenMarker,
   onCommitMarker, activeMapId, onRemoveToken, onMoveTokenUp, getActiveGroupsForMarker,
   orderMarkers, onMoveOrderMarkerLocal, onCommitOrderMarker, onRemoveOrderMarker,
   onResetDrawTool,
@@ -2584,8 +2597,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
 }: {
   imageSrc: string; tokens: Token[]; groups: Group[]; board: BoardState;
   playersById: Record<string, Player>; aliveState: PlayerAliveState; groupRoles: GroupRoles;
-  onMoveTokenLocal: (gId: string, x: number, y: number, mapId: string) => void;
   onCommitToken: (gId: string, x: number, y: number, mapId: string) => void;
+  onTransferToken: (gId: string, intent: TokenTransferIntent) => void;
   canWriteTokens: boolean; isAdmin: boolean;
   markers: Array<{ id: string; label: string; x: number; y: number; isPOI?: boolean }>;
   onOpenMarker: (id: string) => void; onCommitMarker: (id: string, x: number, y: number) => void;
@@ -2633,6 +2646,15 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   const lastMarkerPos = useRef<{ x: number; y: number } | null>(null);
   const [hoveredToken, setHoveredToken] = useState<string | null>(null);
   const mapRootRef = useRef<HTMLDivElement>(null);
+  const mapDropTarget = useTokenDropTarget(`map-drop-${activeMapId}`, {
+    type: "map2d",
+    mapId: activeMapId,
+    imageElementId: "map-img",
+  });
+  const setMapRootNode = useCallback((node: HTMLDivElement | null) => {
+    mapRootRef.current = node;
+    mapDropTarget.setNodeRef(node);
+  }, [mapDropTarget]);
   const draggingTokenEl  = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Token-Drag
   const draggingMarkerEl = useRef<HTMLElement | null>(null); // DOM-Ref für lag-freies Marker-Drag
   const isDraggingAny    = useRef(false); // sync flag – verhindert Pan-Start wenn Token/Marker gezogen
@@ -2764,14 +2786,13 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
     }
   }
 
-  function onBgUp() {
+  function onBgUp(event?: React.PointerEvent) {
     if (tokenDrag && lastTokenPos.current && canWriteTokens) {
       const [gId] = tokenDrag.split(":");
       const pos = lastTokenPos.current;
-      // commitToken zuerst – liest noch die alte Position aus tokensRef für Op-Log
-      onCommitToken(gId, pos.x, pos.y, activeMapId);
-      // moveTokenLocal danach – updated tokensRef auf neue Position
-      onMoveTokenLocal(gId, pos.x, pos.y, activeMapId);
+      const dropIntent = event ? tokenDropIntentAtPoint(event.clientX, event.clientY) : null;
+      if (dropIntent && dropIntent.kind !== "place2d") onTransferToken(gId, dropIntent);
+      else onCommitToken(gId, pos.x, pos.y, activeMapId);
     }
     draggingTokenEl.current = null;
     if (markerDrag && lastMarkerPos.current) onCommitMarker(markerDrag, lastMarkerPos.current.x, lastMarkerPos.current.y);
@@ -2833,7 +2854,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   }
 
   return (
-    <div ref={mapRootRef} className="w-full h-full overflow-hidden relative"
+    <div ref={setMapRootNode} className="w-full h-full overflow-hidden relative"
+      {...mapDropTarget.dropTargetProps}
       style={{ cursor: drawTool !== "pointer" && canDraw ? "crosshair" : scale > 1 ? (panning ? "grabbing" : "grab") : "default" }}
       onPointerDown={(e) => { if (drawTool !== "pointer" && canDraw && scale <= 1) return; onBgDown(e); }}
       onPointerMove={(e) => {
@@ -2855,7 +2877,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         }
         if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgMove(e);
       }}
-      onPointerUp={() => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
+      onPointerUp={(e) => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(e); }}
       onPointerLeave={() => { setGridCoord(null); setGridPixel(null); }}>
 
       {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
@@ -2920,7 +2942,10 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
           const activeGroups = getActiveGroupsForMarker ? getActiveGroupsForMarker(m.id) : [];
           const showGroupMenu = openGroupMenu === m.id;
           return (
-            <div key={m.id}
+            <TokenDropTarget key={m.id}
+              id={`child-drop-${m.id}`}
+              data={{ type: "child", childId: m.id }}
+              testId={`location-pill-${m.id}`}
               className={`absolute z-10 flex flex-col items-center gap-0.5 ${isAdminProp ? "cursor-move" : "cursor-pointer"}`}
               style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, transform: `translate(-50%,-100%) scale(${Math.min(1, 1/scale)})`, transformOrigin: "center bottom" }}
               onPointerDown={(e) => {
@@ -2934,7 +2959,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 }
               }}
               onPointerMove={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgMove(e); } }}
-              onPointerUp={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgUp(); } }}
+              onPointerUp={(e) => { if (markerDrag === m.id) { e.stopPropagation(); onBgUp(e); } }}
               onClick={(e) => {
                 e.stopPropagation();
                 if (markerDrag) return;
@@ -2992,7 +3017,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 {m.isPOI ? "🔵" : "📍"} {m.label}
                 {isAdminProp && <span className="ml-1 opacity-50">↵↵</span>}
               </div>
-            </div>
+            </TokenDropTarget>
           );
         })}
 
@@ -3022,7 +3047,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                 setTokenDrag(tokenKey); lastTokenPos.current = null;
               }}
               onPointerMove={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgMove(e); } }}
-              onPointerUp={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgUp(); } }}
+              onPointerUp={(e) => { if (tokenDrag === tokenKey) { e.stopPropagation(); onBgUp(e); } }}
               onMouseEnter={() => setHoveredToken(tokenKey)}
               onMouseLeave={() => setHoveredToken(null)}
               title={canWriteTokens ? "Ziehen  ·  ✕ zum Entfernen" : "Nur Ansicht"}>
@@ -3664,6 +3689,11 @@ function BoardApp() {
   const [groupRoles, setGroupRoles] = useState<GroupRoles>({});
 
   const [tokens, setTokens] = useState<Token[]>([]);
+  const [rockbreakerObjects, setRockbreakerObjects] = useState<SceneObject[]>([]);
+  const rockbreakerObjectsRef = useRef<SceneObject[]>([]);
+  const [pendingTokenTransfers, setPendingTokenTransfers] = useState<Set<string>>(() => new Set());
+  const pendingTokenTransfersRef = useRef<Set<string>>(new Set());
+  const [tokenTransferMessage, setTokenTransferMessage] = useState<string | null>(null);
   const [orderMarkers, setOrderMarkers] = useState<OrderMarker[]>([]);
   const orderMarkersRef = useRef<OrderMarker[]>([]);
   const [aliveState, setAliveState] = useState<PlayerAliveState>({});
@@ -3843,6 +3873,8 @@ function BoardApp() {
 const LEGACY_DEFAULT_SYSTEM = "pyro";
 
 const tokensBySystemRef = useRef<Record<string, Token[]>>({});
+const confirmedTokensBySystemRef = useRef<Record<string, Token[]>>({});
+const confirmedTokensRef = useRef<Token[]>([]);
 const orderMarkersBySystemRef = useRef<Record<string, OrderMarker[]>>({});
 const mapsBySystemRef = useRef<Record<string, MapEntry[]>>({});
 const poisBySystemRef = useRef<Record<string, POI[]>>({});
@@ -3858,6 +3890,7 @@ const visibleSystemIdRef = useRef(activeSystemId);
   useEffect(() => { mapsRef.current = maps; }, [maps]);
   useEffect(() => { poisRef.current = pois; }, [pois]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
+  useEffect(() => { rockbreakerObjectsRef.current = rockbreakerObjects; }, [rockbreakerObjects]);
 
 // Keep per-system caches in sync with the system that is actually visible in the map UI
 useEffect(() => { tokensBySystemRef.current[visibleSystemIdRef.current] = tokens; }, [tokens]);
@@ -3879,7 +3912,7 @@ useEffect(() => {
   drawingsBySystemRef.current[prevSystemId] = drawingsRef.current;
   activeMapIdBySystemRef.current[prevSystemId] = activeMapIdBySystemRef.current[prevSystemId] ?? "main";
 
-  const t = tokensBySystemRef.current[activeSystemId] ?? [];
+  const t = confirmedTokensBySystemRef.current[activeSystemId] ?? tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
   const m = normalizeMapsForSystem(activeSystemId, mapsBySystemRef.current[activeSystemId] ?? getDefaultMaps(activeSystemId));
   const p = poisBySystemRef.current[activeSystemId] ?? [];
@@ -3888,6 +3921,7 @@ useEffect(() => {
 
   visibleSystemIdRef.current = activeSystemId;
 
+  confirmedTokensRef.current = t;
   setTokens(t); tokensRef.current = t;
   setOrderMarkers(om); orderMarkersRef.current = om;
   setMaps(m); mapsRef.current = m;
@@ -4070,6 +4104,7 @@ const drawingsBySystem: Record<string, DrawingsMap> =
       })();
 
 tokensBySystemRef.current = tokensBySystem;
+confirmedTokensBySystemRef.current = tokensBySystem;
 orderMarkersBySystemRef.current = orderMarkersBySystem;
 mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
@@ -4079,6 +4114,7 @@ const targetSystemId = activeSystemIdRef.current;
 // ── Block 4: Refs sofort setzen (kein Re-render), dann State als Transition ──
 const activeTokens = tokensBySystemRef.current[targetSystemId] ?? [];
 tokensRef.current = activeTokens;
+confirmedTokensRef.current = activeTokens;
 
 const activeOM = orderMarkersBySystemRef.current[targetSystemId] ?? [];
 orderMarkersRef.current = activeOM;
@@ -4147,6 +4183,18 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   }, [user, roomId]);
 
   useEffect(() => {
+    if (!user || !roomCfg?.features.rockbreaker3d) {
+      rockbreakerObjectsRef.current = [];
+      setRockbreakerObjects([]);
+      return;
+    }
+    return subscribeSceneObjects(roomId, "nyx--rockbreaker", (objects) => {
+      rockbreakerObjectsRef.current = objects;
+      setRockbreakerObjects(objects);
+    });
+  }, [user, roomId, roomCfg?.features.rockbreaker3d]);
+
+  useEffect(() => {
     if (!user) return;
     const unsubscribe = onSnapshot(collection(db, "rooms", roomId, "playerStatus"), (snapshot) => {
       const next: Record<string, PlayerStatus> = {};
@@ -4175,14 +4223,6 @@ if (didMigrate && !data.tokensBySystem && !data.mapsBySystem && !data.poisBySyst
   }, [user, roomId]);
 
   // writes
-async function pushTokensOnly(nt: Token[]) {
-  const ref = doc(db, "rooms", roomId, "state", "board");
-  const sysId = visibleSystemIdRef.current;
-  tokensBySystemRef.current[sysId] = nt;
-  try { await updateDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }); }
-  catch { await setDoc(ref, { tokensBySystem: tokensBySystemRef.current, updatedAt: serverTimestamp() }, { merge: true }); }
-}
-
 async function pushOrderMarkersOnly(nm: OrderMarker[]) {
   const ref = doc(db, "rooms", roomId, "state", "board");
   const sysId = visibleSystemIdRef.current;
@@ -4631,6 +4671,11 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   function deleteGroup(id: string) {
     if (!canWrite || id === "unassigned") return;
     const g = boardRef.current.groups.find((g) => g.id === id);
+    const location = getConfirmedGroupLocation(id, g?.systemId ?? activeSystemIdRef.current);
+    if (location.kind !== "unplaced") {
+      setTokenTransferMessage("Token zuerst entfernen oder eine Ebene verschieben.");
+      return;
+    }
     setBoard((prev) => {
       const moved = prev.columns[id] ?? [];
       const newCols = { ...prev.columns };
@@ -4638,11 +4683,9 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
       newCols["unassigned"] = [...(newCols["unassigned"] ?? []), ...moved];
       const next = { groups: prev.groups.filter((g) => g.id !== id), columns: newCols };
       boardRef.current = next;
-      const nt = tokensRef.current.filter((t) => t.groupId !== id);
-      setTokens(nt); tokensRef.current = nt; pushTokensOnly(nt);
       // GroupRoles bereinigen
       const ngr = { ...groupRolesRef.current }; delete ngr[id]; groupRolesRef.current = ngr; setGroupRoles(ngr);
-      pushAll(next, nt, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, undefined, ngr);
+      pushAll(next, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current, undefined, ngr);
       return next;
     });
     if (g && !g.isSpawn) {
@@ -4749,30 +4792,105 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   }
 
   // TOKENS
-  function moveTokenLocal(gId: string, x: number, y: number, mapId: string) {
-    const next = (() => {
-      const prev = tokensRef.current;
-      const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
-      return i === -1 ? [...prev, { groupId: gId, x, y, mapId }] : prev.map((t, idx) => idx === i ? { ...t, x, y, mapId } : t);
-    })();
-    tokensRef.current = next;
-    setTokens(next);
+  function sceneObjectsForSystem(systemId: string) {
+    return systemId === "nyx" ? rockbreakerObjectsRef.current : [];
   }
 
-  // Gibt alle Vorfahren-Map-IDs zurück (von mapId bis "main")
-  function getAncestorMapIds(mapId: string): string[] {
-    const ancestors: string[] = [];
-    let current = mapId;
-    while (current !== "main") {
-      const poi = poisRef.current.find((p) => p.id === current);
-      if (poi) { ancestors.push(poi.parentMapId); current = poi.parentMapId; }
-      else {
-        const map = mapsRef.current.find((m) => m.id === current);
-        if (map && map.id !== "main") { ancestors.push("main"); current = "main"; }
-        else break;
-      }
+  function getConfirmedGroupLocation(groupId: string, systemId = activeSystemIdRef.current) {
+    return locateGroup(
+      groupId,
+      systemId === visibleSystemIdRef.current
+        ? confirmedTokensRef.current
+        : confirmedTokensBySystemRef.current[systemId] ?? [],
+      sceneObjectsForSystem(systemId),
+    );
+  }
+
+  function optimisticTokensForTransfer(
+    groupId: string,
+    source: TokenLocation,
+    intent: TokenTransferIntent,
+    current: Token[],
+  ): Token[] {
+    const withoutGroup = current.filter((token) => token.groupId !== groupId);
+    if (intent.kind === "remove") return withoutGroup;
+    if (intent.kind === "place2d") {
+      return [...withoutGroup, { groupId, mapId: intent.mapId, x: intent.x, y: intent.y }];
     }
-    return ancestors;
+    if (intent.kind === "enterChild") {
+      if (intent.childId === "rockbreaker") return withoutGroup;
+      const position = selectEntry2dPosition(intent.childId, withoutGroup);
+      return [...withoutGroup, { groupId, mapId: intent.childId, ...position }];
+    }
+
+    const parent = source.kind === "rockbreaker3d"
+      ? {
+          parentMapId: "main",
+          marker: (() => {
+            const marker = mapsRef.current.find((map) => map.id === "rockbreaker");
+            return { x: marker?.x ?? 0.5, y: marker?.y ?? 0.5 };
+          })(),
+        }
+      : source.kind === "map2d"
+        ? resolveParentLocation(source.mapId, mapsRef.current, poisRef.current)
+        : null;
+    if (!parent) return current;
+    const position = selectReturn2dPosition(parent.marker, withoutGroup.filter((token) => (token.mapId ?? "main") === parent.parentMapId));
+    return [...withoutGroup, { groupId, mapId: parent.parentMapId, ...position }];
+  }
+
+  async function requestTokenTransfer(groupId: string, intent: TokenTransferIntent) {
+    if (!canWrite || !user || pendingTokenTransfersRef.current.has(groupId)) return;
+    const systemId = activeSystemIdRef.current;
+    const source = getConfirmedGroupLocation(groupId, systemId);
+    if (source.kind === "ambiguous") {
+      setTokenTransferMessage("Trupp besitzt mehrere gespeicherte Positionen. Bitte zuerst die Daten prüfen.");
+      return;
+    }
+
+    const normalizedIntent = intent.kind === "place2d" && (
+      (source.kind === "rockbreaker3d" && intent.mapId === "main")
+      || (source.kind === "map2d"
+        && source.mapId !== intent.mapId
+        && resolveParentLocation(source.mapId, mapsRef.current, poisRef.current)?.parentMapId === intent.mapId)
+    )
+      ? { kind: "moveUp" } as const
+      : intent;
+
+    const pending = new Set(pendingTokenTransfersRef.current).add(groupId);
+    pendingTokenTransfersRef.current = pending;
+    setPendingTokenTransfers(pending);
+    setTokenTransferMessage(null);
+
+    const optimistic = optimisticTokensForTransfer(groupId, source, normalizedIntent, tokensRef.current);
+    tokensRef.current = optimistic;
+    tokensBySystemRef.current[systemId] = optimistic;
+    if (visibleSystemIdRef.current === systemId) setTokens(optimistic);
+
+    try {
+      await transferTokenClient(roomId, {
+        operationId: crypto.randomUUID(),
+        systemId,
+        groupId,
+        expectedSource: source,
+        intent: normalizedIntent,
+      }, () => user.getIdToken());
+    } catch (error) {
+      const confirmed = confirmedTokensBySystemRef.current[systemId] ?? [];
+      tokensBySystemRef.current[systemId] = confirmed;
+      if (visibleSystemIdRef.current === systemId) {
+        tokensRef.current = confirmed;
+        setTokens(confirmed);
+      }
+      setTokenTransferMessage(error instanceof TokenTransferClientError
+        ? error.message
+        : "Trupp konnte nicht verschoben werden. Der bestätigte Stand wurde wiederhergestellt.");
+    } finally {
+      const nextPending = new Set(pendingTokenTransfersRef.current);
+      nextPending.delete(groupId);
+      pendingTokenTransfersRef.current = nextPending;
+      setPendingTokenTransfers(nextPending);
+    }
   }
 
   function commitToken(gId: string, x: number, y: number, mapId: string) {
@@ -4781,32 +4899,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
     const isNew = i === -1;
     const oldToken = isNew ? null : prev[i];
 
-    // Token setzen / bewegen
-    let next = isNew
-      ? [...prev, { groupId: gId, x, y, mapId }]
-      : prev.map((t, idx) => idx === i ? { ...t, x, y, mapId } : t);
-
-    if (mapId === "main") {
-      // Token auf Hauptkarte → alle Tokens dieser Gruppe auf Unterkarten entfernen
-      const subIds = new Set([
-        ...mapsRef.current.filter((m) => m.id !== "main").map((m) => m.id),
-        ...poisRef.current.map((p) => p.id),
-      ]);
-      next = next.filter((t) => !(t.groupId === gId && subIds.has(t.mapId ?? "")));
-      // Re-add the newly placed token
-      const stillHere = next.find((t) => t.groupId === gId && (t.mapId ?? "main") === "main");
-      if (!stillHere) next = [...next, { groupId: gId, x, y, mapId: "main" }];
-    } else {
-      // Token auf Unterkarte/POI → alle Tokens dieser Gruppe auf Vorfahren-Ebenen entfernen
-      const ancestorIds = new Set(getAncestorMapIds(mapId));
-      ancestorIds.add("main"); // immer auch main entfernen
-      next = next.filter((t) => !(t.groupId === gId && (ancestorIds.has(t.mapId ?? "main") || (t.mapId == null && ancestorIds.has("main")))));
-      // Re-add the newly placed token on current mapId
-      const stillHere = next.find((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
-      if (!stillHere) next = [...next, { groupId: gId, x, y, mapId }];
-    }
-
-    setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+    void requestTokenTransfer(gId, { kind: "place2d", mapId, x, y });
     // ── Op-Log ──────────────────────────────────────────────────
     const g = boardRef.current.groups.find((gg) => gg.id === gId);
     if (g && !g.isSpawn) {
@@ -4882,14 +4975,9 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
     }
   }
 
-  function upsertToken(gId: string, x: number, y: number, mapId: string) {
-    commitToken(gId, x, y, mapId);
-  }
-
   function removeToken(gId: string, mapId: string) {
     if (!canWrite) return;
-    const next = tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === mapId));
-    setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+    void requestTokenTransfer(gId, { kind: "remove" });
     // ── Op-Log: sofort ──────────────────────────────────────────
     const g = boardRef.current.groups.find((g) => g.id === gId);
     if (g && !g.isSpawn) {
@@ -4904,70 +4992,8 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   // Token von Unterkarte/POI auf übergeordnete Karte verschieben
   // fromMapId = die Unterkarte/POI-ID, auf der der Token gerade liegt
   function moveTokenUp(gId: string, fromMapId: string) {
-    if (!canWrite) return;
-
-    // Kontext-abhängig:
-    // - User ist auf "main" → Token direkt auf main holen (egal wie tief verschachtelt)
-    // - User ist auf Unterkarte → genau eine Ebene hoch
-    const onMain = activeMapId === "main";
-
-    let targetMapId: string;
-    let posX: number;
-    let posY: number;
-
-    if (onMain) {
-      // Alle Ebenen hochlaufen bis wir das Element finden das direkt auf main liegt
-      let currentId = fromMapId;
-      posX = 0.5; posY = 0.5;
-      while (currentId !== "main") {
-        const poi = poisRef.current.find((p) => p.id === currentId);
-        if (poi) {
-          posX = poi.x ?? 0.5;
-          posY = poi.y ?? 0.5;
-          currentId = poi.parentMapId;
-        } else {
-          const mapEntry = mapsRef.current.find((m) => m.id === currentId);
-          posX = mapEntry?.x ?? 0.5;
-          posY = mapEntry?.y ?? 0.5;
-          currentId = "main";
-        }
-      }
-      targetMapId = "main";
-    } else {
-      // Genau eine Ebene hoch
-      const poi = poisRef.current.find((p) => p.id === fromMapId);
-      if (poi) {
-        targetMapId = poi.parentMapId;
-        posX = poi.x ?? 0.5;
-        posY = poi.y ?? 0.5;
-      } else {
-        const mapEntry = mapsRef.current.find((m) => m.id === fromMapId);
-        targetMapId = "main";
-        posX = mapEntry?.x ?? 0.5;
-        posY = mapEntry?.y ?? 0.5;
-      }
-    }
-
-    // Alle Sub-Map-IDs sammeln (alle POIs + Unterkarten außer "main")
-    const allSubIds = new Set([
-      ...mapsRef.current.filter((m) => m.id !== "main").map((m) => m.id),
-      ...poisRef.current.map((p) => p.id),
-    ]);
-
-    // Beim Hochziehen auf main: Token dieser Gruppe von ALLEN Unter-Ebenen entfernen
-    // Beim Hochziehen eine Ebene: nur den Token von fromMapId entfernen
-    const withoutOld = onMain
-      ? tokensRef.current.filter((t) => !(t.groupId === gId && allSubIds.has(t.mapId ?? "")))
-      : tokensRef.current.filter((t) => !(t.groupId === gId && (t.mapId ?? "main") === fromMapId));
-
-    const existing = withoutOld.findIndex(
-      (t) => t.groupId === gId && (t.mapId ?? "main") === targetMapId
-    );
-    const next = existing === -1
-      ? [...withoutOld, { groupId: gId, x: posX, y: posY, mapId: targetMapId }]
-      : withoutOld.map((t, i) => i === existing ? { ...t, x: posX, y: posY } : t);
-
-    setTokens(next); tokensRef.current = next; pushTokensOnly(next);
+    void fromMapId;
+    void requestTokenTransfer(gId, { kind: "moveUp" });
   }
 
   function setGroupSystem(gId: string, sysId: string) {
@@ -5203,33 +5229,14 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   const activeImage = normalizeImageUrl(activeMapEntry?.image ?? activePOI?.image ?? "");
   const activeLabel = activeMapEntry?.label ?? activePOI?.label ?? "";
 
-  // Build a map: childMapId → groups with tokens there (recursively through all levels)
-  const tokensByMap = useMemo(() => {
-    const result: Record<string, { groupId: string; color: string; label: string }[]> = {};
-    for (const t of tokens) {
-      const mid = t.mapId ?? "main";
-      if (!result[mid]) result[mid] = [];
-      const g = board.groups.find((g) => g.id === t.groupId);
-      if (g && !result[mid].find((e) => e.groupId === t.groupId)) {
-        result[mid].push({ groupId: g.id, color: groupColor(g), label: g.label });
-      }
-    }
-    return result;
-  }, [tokens, board.groups]);
-
-  // For a marker (child map/POI), collect all groups active on it or any of its descendants
   function getActiveGroupsForMarker(markerId: string): { groupId: string; color: string; label: string }[] {
-    const direct = tokensByMap[markerId] ?? [];
-    // Also collect from sub-POIs of this map
-    const subPois = pois.filter((p) => p.parentMapId === markerId);
-    const indirect: { groupId: string; color: string; label: string }[] = [];
-    for (const sp of subPois) {
-      for (const g of (tokensByMap[sp.id] ?? [])) {
-        if (!indirect.find((e) => e.groupId === g.groupId) && !direct.find((e) => e.groupId === g.groupId))
-          indirect.push({ ...g });
-      }
-    }
-    return [...direct, ...indirect];
+    return groupsForLocationMarker(
+      markerId,
+      board.groups,
+      tokens,
+      pois,
+      activeSystemId === "nyx" ? rockbreakerObjects : [],
+    );
   }
 
   const markersOnActive = useMemo(() => {
@@ -5593,6 +5600,10 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
       )}
 
       {/* MAP – Block 3: display:none statt Unmount */}
+      <TroopTransferProvider
+        disabledGroups={pendingTokenTransfers}
+        onTransfer={({ groupId, intent }) => requestTokenTransfer(groupId, intent)}
+      >
       <div className="flex-1 relative flex flex-col"
         style={{ display: tab === "map" ? "flex" : "none" }}>
           {/* System-Tabs auf der Karte */}
@@ -5634,6 +5645,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 canWrite={canWrite}
                 getIdToken={() => user.getIdToken()}
                 onBack={() => setActiveMapId("main")}
+                objectsOverride={rockbreakerObjects}
               />
             ) : activeRenderer === "disabled" ? (
               <div className="flex h-full items-center justify-center bg-gray-950 p-6 text-center text-gray-300">
@@ -5647,7 +5659,8 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
             ) : (
               <ZoomableMap imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
                 playersById={playersById} aliveState={aliveState} groupRoles={groupRoles}
-                onMoveTokenLocal={moveTokenLocal} onCommitToken={commitToken}
+                onCommitToken={commitToken}
+                onTransferToken={(groupId, intent) => { void requestTokenTransfer(groupId, intent); }}
                 canWriteTokens={canWrite && drawTool === "pointer"}
                 markers={markersOnActive}
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
@@ -5670,6 +5683,16 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
               />
             )}
           </div>
+
+          {canWrite && activeMapId !== "main" && (
+            <ParentLevelDropTarget className="absolute left-1/2 top-14 z-40 -translate-x-1/2 shadow-2xl" />
+          )}
+
+          {tokenTransferMessage && (
+            <div role="status" className="absolute bottom-4 left-1/2 z-50 max-w-xl -translate-x-1/2 rounded-xl border border-amber-600 bg-gray-950/95 px-4 py-2 text-center text-sm text-amber-200 shadow-2xl">
+              {tokenTransferMessage}
+            </div>
+          )}
 
           {/* Zoom/Pan Reset Button */}
           {activeRenderer === "image2d" && activeImage && (mapScale !== 1) && (
@@ -5695,11 +5718,11 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                   onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
               </div>
             )}
-            tokens={canWrite ? (
+            tokens={canWrite && activeRenderer === "image2d" ? (
               <TokenPlacerPanel groups={tacticalGroups}
-                onPlace={(gId, x, y, mapId) => upsertToken(gId, x, y, mapId)}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
-                activeMapId={activeMapId} />
+                activeMapId={activeMapId}
+                getGroupLocation={(groupId) => getConfirmedGroupLocation(groupId)} />
             ) : null}
             drawing={activeRenderer === "image2d" && activeImage && canWrite ? (
               <DrawingToolbar
@@ -5715,6 +5738,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
 
           </div>
         </div>
+      </TroopTransferProvider>
 
     </div>
   );
