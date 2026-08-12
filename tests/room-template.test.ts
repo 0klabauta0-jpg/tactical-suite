@@ -20,7 +20,7 @@ describe("buildRoomTemplateCopy", () => {
       columns: { alpha: ["ada"] },
       systems: [{ id: "stanton", label: "Stanton", x: 10, y: 20 }],
       mapsBySystem: {
-        stanton: [{ id: "main", label: "Stanton", image: "/stanton.png", renderer: "image2d" }],
+        stanton: [{ id: "main", label: "Stanton", image: "/stanton.png" }],
       },
       poisBySystem: {
         stanton: [{ id: "seraphim", label: "Seraphim", image: "/seraphim.png", parentMapId: "main" }],
@@ -34,7 +34,7 @@ describe("buildRoomTemplateCopy", () => {
       pois: [{ id: "station", label: "Ruin", image: "", parentMapId: "main" }],
       systems: [{ id: "broken", label: "Broken", x: "far", y: 2 }],
     })).toEqual({
-      maps: [{ id: "main", label: "Pyro", image: "/pyro.png", renderer: "image2d" }],
+      maps: [{ id: "main", label: "Pyro", image: "/pyro.png" }],
       pois: [{ id: "station", label: "Ruin", image: "", parentMapId: "main" }],
     });
   });
