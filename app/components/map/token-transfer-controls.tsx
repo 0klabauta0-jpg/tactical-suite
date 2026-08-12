@@ -264,13 +264,16 @@ export function ParentLevelDropTarget({
   );
 }
 
-export function tokenDropIntentAtPoint(clientX: number, clientY: number): TokenTransferIntent | null {
-  const element = document.elementsFromPoint(clientX, clientY)
-    .map((candidate) => candidate.closest<HTMLElement>("[data-token-drop-target]"))
-    .find((candidate): candidate is HTMLElement => Boolean(candidate));
-  const target = element?.dataset.tokenDropTarget;
-  if (!target) return null;
+export function tokenDropIntentForTargets(targets: readonly string[]): TokenTransferIntent | null {
+  const target = targets.find((candidate) => candidate === "parent" || candidate.startsWith("child:"));
   if (target === "parent") return { kind: "moveUp" };
-  if (target.startsWith("child:")) return { kind: "enterChild", childId: target.slice("child:".length) };
+  if (target?.startsWith("child:")) return { kind: "enterChild", childId: target.slice("child:".length) };
   return null;
+}
+
+export function tokenDropIntentAtPoint(clientX: number, clientY: number): TokenTransferIntent | null {
+  const targets = document.elementsFromPoint(clientX, clientY)
+    .map((candidate) => candidate.closest<HTMLElement>("[data-token-drop-target]")?.dataset.tokenDropTarget)
+    .filter((target): target is string => Boolean(target));
+  return tokenDropIntentForTargets([...new Set(targets)]);
 }
