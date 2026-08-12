@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
-import { createPortal } from "react-dom";
 import { DndContext, DragEndEvent, PointerSensor, type DraggableAttributes, type DraggableSyntheticListeners, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -40,7 +39,6 @@ import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
-  updatePassword,
   User,
 } from "firebase/auth";
 
@@ -128,8 +126,6 @@ const DEFAULT_GROUPS: Group[] = [
   { id: "g3", label: "Subradar", systemId: "pyro" },
   { id: "spawn1", label: "Spawn", isSpawn: true, systemId: "pyro" },
 ];
-
-const DEFAULT_MAPS: MapEntry[] = [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
 
 const DEFAULT_SYSTEMS: StarSystem[] = [
   { id: "stanton", label: "Stanton", x: 0.35, y: 0.45 },
@@ -1413,7 +1409,7 @@ function SystemChip({ systemId, systems, canChange, onChange }: {
 // ─────────────────────────────────────────────────────────────
 
 function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggleAlive, spawnGroups, spawnState, onSetSpawn,
-  groupRoles, groupId, onSetRole, onSetAppRole, onSetPlayerField, groupColor: gColor,
+  groupRoles, groupId, onSetRole, onSetAppRole, onSetPlayerField,
 }: {
   player: Player; aliveState: PlayerAliveState; currentPlayerId: string; canWrite: boolean; isAdmin: boolean;
   onToggleAlive: (id: string) => void; spawnGroups: Group[]; spawnState: PlayerSpawnState;
@@ -1421,7 +1417,6 @@ function Card({ player, aliveState, currentPlayerId, canWrite, isAdmin, onToggle
   groupRoles: GroupRoles; groupId: string; onSetRole: (gId: string, pid: string, role: "leader" | "deputy" | null) => void;
   onSetAppRole: (pid: string, role: "admin" | "commander" | "viewer") => void;
   onSetPlayerField: (pid: string, field: EditablePlayerField, value: string) => void;
-  groupColor: string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: player.id });
   const isDead = aliveState[player.id] === "dead";
@@ -1552,8 +1547,7 @@ const CardMemo = React.memo(Card, (prev, next) =>
   prev.groupRoles[prev.groupId] === next.groupRoles[next.groupId] &&
   prev.canWrite === next.canWrite &&
   prev.currentPlayerId === next.currentPlayerId &&
-  prev.spawnState[prev.player.id] === next.spawnState[next.player.id] &&
-  prev.groupColor === next.groupColor
+  prev.spawnState[prev.player.id] === next.spawnState[next.player.id]
 );
 
 // ─────────────────────────────────────────────────────────────
@@ -1769,8 +1763,7 @@ function DroppableColumn({ group, ids, playersById, aliveState, currentPlayerId,
                   canWrite={canWrite} onToggleAlive={onToggleAlive} spawnGroups={spawnGroups}
                   spawnState={spawnState} onSetSpawn={onSetSpawn}
                   groupRoles={groupRoles} groupId={group.id} onSetRole={onSetRole}
-                  isAdmin={isAdmin} onSetAppRole={onSetAppRole} onSetPlayerField={onSetPlayerField}
-                  groupColor={gColor} />
+                  isAdmin={isAdmin} onSetAppRole={onSetAppRole} onSetPlayerField={onSetPlayerField} />
               ) : null
             )}
           </SortableContext>
@@ -2339,15 +2332,6 @@ function DrawingLayer({
     };
   }
 
-  function toPixel(rel: { x: number; y: number }, rect: DOMRect): { x: number; y: number } {
-    // Canvas hat dieselbe Größe wie das Bild, Ursprung = Bild-Top-Left
-    const canvas = canvasRef.current!;
-    return {
-      x: rel.x * canvas.width,
-      y: rel.y * canvas.height,
-    };
-  }
-
   function redraw(extraStroke?: { points: { x: number; y: number }[] } | null, extraLine?: { x1: number; y1: number; x2: number; y2: number } | null) {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2613,18 +2597,8 @@ function DrawingLayer({
       const dy = p.y - movingEl.startRel.y;
       const moved = applyDelta(movingEl.origEl, dx, dy);
       setMovingEl((prev) => prev ? { ...prev, el: moved } : null);
-      // Live preview: temporarily replace in elements for redraw
-      const previewEls = elements.map((el) => el.id === moved.id ? moved : el);
-      // Trigger redraw via direct call (we pass the preview elements)
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          // Minimal redraw with preview – we store moved el in a ref for render
-          movingPreviewRef.current = moved;
-          redraw();
-        }
-      }
+      movingPreviewRef.current = moved;
+      redraw();
       return;
     }
 
@@ -3191,7 +3165,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         }
         if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgMove(e);
       }}
-      onPointerUp={(e)   => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
+      onPointerUp={() => { if (drawTool !== "pointer" && canDraw && !tokenDrag && !markerDrag && !orderMarkerDrag) return; onBgUp(); }}
       onPointerLeave={() => { setGridCoord(null); setGridPixel(null); }}>
 
       {/* Zoom-Steuerung ist jetzt im verschiebbaren ZoomPanel außerhalb */}
@@ -3567,16 +3541,14 @@ function NotesPanel({ x, y, w, h, text, onChange, onMove, onResize, canWrite,
 // LOG-NOTIZEN-PANEL – Zeitgestempelte Einträge, minimierbar
 // ─────────────────────────────────────────────────────────────
 
-function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, onToggleVisible, canWrite, useRelTime, minimized, onToggleMinimize }: {
+function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, onResize, canWrite, minimized, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: LogEntry[];
   onAdd: (text: string) => void;
   onClear: () => void;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
-  onToggleVisible: () => void;
   canWrite: boolean;
-  useRelTime: boolean;
   minimized?: boolean; onToggleMinimize?: () => void;
 }) {
   const dragging = useRef(false);
@@ -3587,7 +3559,7 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
   const [confirmClear, setConfirmClear] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const firstTs = entries[0]?.ts ?? 0;
-  const [useRelTimeLocal, setUseRelTimeLocal] = useState(useRelTime);
+  const [useRelTimeLocal, setUseRelTimeLocal] = useState(false);
 
   function onHeaderDown(e: React.PointerEvent) {
     dragging.current = true; start.current = { mx: e.clientX, my: e.clientY, px: x, py: y };
@@ -3722,8 +3694,8 @@ function LogNotesPanel({ x, y, w, h, visible, entries, onAdd, onClear, onMove, o
 // OP LOG PANEL
 // ─────────────────────────────────────────────────────────────
 
-function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isActive, canWrite, onMove, onResize, onToggleVisible,
-  isAdmin, activeSystemId, systems, minimized, onToggleMinimize }: {
+function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isActive, canWrite, onMove, onResize,
+  isAdmin, systems, minimized, onToggleMinimize }: {
   x: number; y: number; w: number; h: number; visible: boolean;
   entries: OpLogEntry[];
   onClear: () => void;
@@ -3732,9 +3704,7 @@ function OpLogPanel({ x, y, w, h, visible, entries, onClear, onToggleActive, isA
   canWrite: boolean;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
-  onToggleVisible: () => void;
   isAdmin: boolean;
-  activeSystemId: string;
   systems: StarSystem[];
   minimized?: boolean;
   onToggleMinimize?: () => void;
@@ -4018,13 +3988,13 @@ function BoardApp() {
   const toggleMinPanel = useCallback((key: string) => { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }, []);
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
-  const [panelLayout, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
+  const [, setPanelLayout] = useState<PanelLayout>(DEFAULT_PANEL_LAYOUT);
   // ── Lokale Panel-Positionen (nur client-seitig, kein Firestore-Sync) ──
   // ── Block 5: Panel-State isoliert – jede Position eigener State ──
   const [panelNav,      setPanelNav]      = useState({ x: DEFAULT_PANEL_LAYOUT.nav.x,    y: DEFAULT_PANEL_LAYOUT.nav.y    });
   const [panelPlacer,   setPanelPlacer]   = useState({ x: DEFAULT_PANEL_LAYOUT.placer.x, y: DEFAULT_PANEL_LAYOUT.placer.y });
   const [panelToolbar,  setPanelToolbar]  = useState({ x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 });
-  const [panelZoom,     setPanelZoom]     = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16,     y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600  });
+  const [panelZoom, setPanelZoom] = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16, y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600 });
   const [panelNotes,    setPanelNotes]    = useState({ x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    });
   const [panelLogNotes, setPanelLogNotes] = useState({ x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false });
   const [panelOpLog,    setPanelOpLog]    = useState({ x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false });
@@ -4110,11 +4080,9 @@ function BoardApp() {
   const [systemNotesTexts, setSystemNotesTexts] = useState<Record<string,string>>({});
   const systemNotesRef = React.useRef<Record<string,string>>({});
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
-  const [useRelTime, setUseRelTime] = useState(false);
   const logEntriesRef = useRef<LogEntry[]>([]);
   const [notesVisible, setNotesVisible] = useState(true);
   const [showToolbar,  setShowToolbar]  = useState(true);
-  const [showZoom,     setShowZoom]     = useState(true);
   const [showNav,      setShowNav]      = useState(true);
   const [showPlacer,   setShowPlacer]   = useState(true);
 
@@ -4605,10 +4573,6 @@ aliveState: na, spawnState: ns,
     setPanelToolbar({ x, y });
   }, []);
 
-  const movePanelZoom = useCallback((x: number, y: number) => {
-    setPanelZoom({ x, y });
-  }, []);
-
   // ── Viewport-Clamp: Panels bleiben immer im sichtbaren Bereich ──────────
   useEffect(() => {
     function reclamp() {
@@ -4637,9 +4601,6 @@ aliveState: na, spawnState: ns,
     window.addEventListener("resize", reclamp);
     return () => window.removeEventListener("resize", reclamp);
   }, []);
-
-  const notesMoveDebounce   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const notesResizeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const movePanelNotes = useCallback((x: number, y: number) => {
     setPanelNotes(n => {
@@ -5064,18 +5025,6 @@ aliveState: na, spawnState: ns,
     return ancestors;
   }
 
-  // Gibt alle Nachfahren-Map-IDs zurück (alle POIs + Unterkarten unterhalb von mapId)
-  function getDescendantMapIds(mapId: string): Set<string> {
-    const result = new Set<string>();
-    const queue = [mapId];
-    while (queue.length) {
-      const cur = queue.shift()!;
-      poisRef.current.forEach((p) => { if (p.parentMapId === cur) { result.add(p.id); queue.push(p.id); } });
-      mapsRef.current.forEach((m) => { if (m.id !== "main" && m.id !== cur) {/* handled via POIs */} });
-    }
-    return result;
-  }
-
   function commitToken(gId: string, x: number, y: number, mapId: string) {
     const prev = parseTokens(tokensRef.current);
     const i = prev.findIndex((t) => t.groupId === gId && (t.mapId ?? "main") === mapId);
@@ -5288,13 +5237,6 @@ aliveState: na, spawnState: ns,
     }
   }
 
-
-  function moveSystem(id: string, x: number, y: number) {
-    if (!isAdmin) return;
-    const next = systemsRef.current.map((s) => s.id === id ? { ...s, x, y } : s);
-    setSystems(next); systemsRef.current = next;
-    pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, mapsRef.current, poisRef.current);
-  }
 
   function upsertOrderMarker(gId: string, x: number, y: number, mapId: string) {
     if (!canWrite) return;
@@ -5800,7 +5742,7 @@ aliveState: na, spawnState: ns,
                             groupRoles={groupRoles} groupId="unassigned" onSetRole={setGroupRole}
                             isAdmin={isAdmin} onSetAppRole={setPlayerAppRole}
                             onSetPlayerField={setPlayerField}
-                            groupColor="#6b7280" />
+                            />
                         ) : null
                       )}
                     </UnassignedDrop>
@@ -5860,9 +5802,7 @@ aliveState: na, spawnState: ns,
           onClear={handleClearLogEntries}
           onMove={movePanelLogNotes}
           onResize={resizePanelLogNotes}
-          onToggleVisible={toggleLogNotesVisible}
           canWrite={canWrite}
-          useRelTime={useRelTime}
           minimized={minimizedPanels["log"]}
           onToggleMinimize={() => toggleMinPanel("log")}
         />
@@ -5880,9 +5820,7 @@ aliveState: na, spawnState: ns,
           canWrite={canWrite}
           onMove={movePanelOpLog}
           onResize={resizePanelOpLog}
-          onToggleVisible={toggleOpLogVisible}
           isAdmin={isAdmin}
-          activeSystemId={activeSystemId}
           systems={systems}
           minimized={minimizedPanels["oplog"]}
           onToggleMinimize={() => toggleMinPanel("oplog")}
