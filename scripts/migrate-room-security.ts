@@ -1,6 +1,6 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { loadPlayersFromSheet } from "../lib/players/sheet-loader";
-import { planRoomSecurityMigration } from "../lib/release/room-security-migration";
+import { applyRoomSecurityMigrationWrites, planRoomSecurityMigration } from "../lib/release/room-security-migration";
 import { hashRoomPassword } from "../lib/server/password-hash";
 import { parseRoomAuthSecret } from "../lib/server/room-auth-secret";
 import { getScriptFirestore } from "./firebase-admin-runtime";
@@ -46,22 +46,25 @@ async function main() {
   if (!apply) return;
 
   const passwordHash = plan.passwordToHash ? await hashRoomPassword(plan.passwordToHash) : null;
+  const roleRefs = plan.roles.map(({ playerId }) => ({
+    playerId,
+    ref: firestore.doc(`rooms/${roomId}/roles/${playerId}`),
+  }));
   await firestore.runTransaction(async (transaction) => {
-    const [freshConfig, freshSecret] = await Promise.all([transaction.get(configRef), transaction.get(secretRef)]);
-    if (!freshConfig.exists) throw new Error("Room config disappeared during migration.");
-    if (passwordHash && !freshSecret.exists) transaction.create(secretRef, { ...passwordHash, updatedAt: FieldValue.serverTimestamp() });
-    for (const role of plan.roles) {
-      const reference = firestore.doc(`rooms/${roomId}/roles/${role.playerId}`);
-      const current = await transaction.get(reference);
-      if (!current.exists) transaction.create(reference, {
-        role: role.role,
-        lastSheetRole: role.role,
-        updatedBy: "room-security-migration",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-    if (plan.overridesChanged) transaction.set(overridesRef, plan.cleanedOverrides);
-    if (plan.removeLegacyPassword) transaction.update(configRef, { password: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
+    await applyRoomSecurityMigrationWrites({
+      configRef,
+      secretRef,
+      overridesRef,
+      roleRefs,
+      plan,
+      passwordHash,
+      updatedAt: FieldValue.serverTimestamp(),
+      deletedValue: FieldValue.delete(),
+      readAll: (references) => transaction.getAll(...references),
+      create: (reference, data) => { transaction.create(reference, data); },
+      set: (reference, data) => { transaction.set(reference, data); },
+      update: (reference, data) => { transaction.update(reference, data); },
+    });
   });
 
   const [verifiedConfig, verifiedSecret, verifiedRoles] = await Promise.all([

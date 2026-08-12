@@ -48,3 +48,51 @@ export function planRoomSecurityMigration(input: {
     overridesChanged,
   };
 }
+
+type MigrationDocumentState = { exists: boolean };
+
+export async function applyRoomSecurityMigrationWrites<Reference>(input: {
+  configRef: Reference;
+  secretRef: Reference;
+  overridesRef: Reference;
+  roleRefs: Array<{ playerId: string; ref: Reference }>;
+  plan: ReturnType<typeof planRoomSecurityMigration>;
+  passwordHash: object | null;
+  updatedAt: unknown;
+  deletedValue: unknown;
+  readAll: (refs: readonly Reference[]) => Promise<ReadonlyArray<MigrationDocumentState>>;
+  create: (ref: Reference, data: Record<string, unknown>) => void;
+  set: (ref: Reference, data: Record<string, unknown>) => void;
+  update: (ref: Reference, data: Record<string, unknown>) => void;
+}) {
+  const roleRefsByPlayer = new Map(input.roleRefs.map(({ playerId, ref }) => [playerId, ref]));
+  const orderedRoleRefs = input.plan.roles.map(({ playerId }) => {
+    const reference = roleRefsByPlayer.get(playerId);
+    if (!reference) throw new Error(`Missing role reference for ${playerId}.`);
+    return reference;
+  });
+  const [freshConfig, freshSecret, ...freshRoles] = await input.readAll([
+    input.configRef,
+    input.secretRef,
+    ...orderedRoleRefs,
+  ]);
+  if (!freshConfig?.exists) throw new Error("Room config disappeared during migration.");
+  if (freshRoles.length !== orderedRoleRefs.length) throw new Error("Migration read returned an incomplete role set.");
+
+  if (input.passwordHash && !freshSecret?.exists) {
+    input.create(input.secretRef, { ...input.passwordHash, updatedAt: input.updatedAt });
+  }
+  input.plan.roles.forEach((role, index) => {
+    if (freshRoles[index]?.exists) return;
+    input.create(orderedRoleRefs[index], {
+      role: role.role,
+      lastSheetRole: role.role,
+      updatedBy: "room-security-migration",
+      updatedAt: input.updatedAt,
+    });
+  });
+  if (input.plan.overridesChanged) input.set(input.overridesRef, input.plan.cleanedOverrides);
+  if (input.plan.removeLegacyPassword) {
+    input.update(input.configRef, { password: input.deletedValue, updatedAt: input.updatedAt });
+  }
+}
