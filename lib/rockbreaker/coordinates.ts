@@ -6,7 +6,8 @@ export type Mat4 = readonly [number, number, number, number, number, number, num
 export type Ray3 = { origin: Vec3; direction: Vec3 };
 export type WorldAnchor =
   | { kind: "asteroid"; asteroidId: string; local: Vec3 }
-  | { kind: "beltPlane" };
+  | { kind: "beltPlane" }
+  | { kind: "freeSpace" };
 export type WorldPoint = { x: number; y: number; z: number; sceneVersion: 1; anchor: WorldAnchor };
 export type AsteroidHit = { asteroidId: string; asteroidWorldMatrix: Mat4; hitPoint: Vec3 };
 
@@ -40,7 +41,7 @@ export function worldPointFromHit(hit: AsteroidHit): WorldPoint {
 }
 
 export function worldPointFromAnchor(anchor: WorldAnchor, matrices: ReadonlyMap<string, Mat4>): Vec3 | null {
-  if (anchor.kind === "beltPlane") return null;
+  if (anchor.kind !== "asteroid") return null;
   const matrix = matrices.get(anchor.asteroidId);
   if (!matrix || !finite3(anchor.local) || !matrix.every(Number.isFinite)) return null;
   const world = new Vector3(...anchor.local).applyMatrix4(new Matrix4().fromArray([...matrix]));
