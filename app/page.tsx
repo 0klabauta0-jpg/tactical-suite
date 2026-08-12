@@ -11,6 +11,7 @@ import { canAdministerRoom, canWriteBoard, parseRole, type Role } from "@/lib/do
 import type { EditablePlayerField, Player, PlayerOverrides } from "@/lib/domain/player";
 import { parsePlayersCsv } from "@/lib/players/csv";
 import { mergeWithOverrides } from "@/lib/players/merge-overrides";
+import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -295,7 +296,7 @@ async function loadFirestoreOverrides(roomId: string): Promise<PlayerOverrides> 
   try {
     const snap = await getDoc(doc(db, "rooms", roomId, "config", "playerOverrides"));
     if (!snap.exists()) { firestoreOverrideCache[roomId] = {}; return {}; }
-    const data = snap.data() as PlayerOverrides;
+    const data = parsePlayerOverrides(snap.data());
     firestoreOverrideCache[roomId] = data;
     return data;
   } catch { return {}; }
@@ -4269,7 +4270,7 @@ useEffect(() => {
     const overridesRef = doc(db, "rooms", roomId, "config", "playerOverrides");
     const unsub = onSnapshot(overridesRef, (snap) => {
       if (!snap.exists()) return;
-      const ov = snap.data() as PlayerOverrides;
+      const ov = parsePlayerOverrides(snap.data());
       firestoreOverrideCache[roomId] = ov;
       const sheetList = cachedPlayersByRoom[roomId] ?? [];
       applyPlayerList(mergeWithOverrides(sheetList, ov), false);
