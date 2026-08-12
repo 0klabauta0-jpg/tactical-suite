@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { acquireSceneObjectLock, commitSceneObjectMove, createSceneObject, MapSceneStoreError, type MapSceneTransactionStore } from "@/lib/server/map-scene-store";
 import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { freeSpaceWorldPoint } from "@/lib/rockbreaker/drag";
 
 const point = (x: number) => ({ x, y: 0, z: 0, sceneVersion: 1 as const, anchor: { kind: "beltPlane" as const } });
 
@@ -64,6 +65,37 @@ describe("map scene store", () => {
     const locked = await acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, nowMs: 2 });
     const moved = await commitSceneObjectMove(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, expectedRevision: first.revision, expectedLockRevision: locked.lockRevision!, position: point(4), nowMs: 3 });
     expect(moved).toMatchObject({ revision: 1, position: point(4) });
+  });
+
+  it("rejects out-of-bounds group moves without changing other scene objects", async () => {
+    const { objects, store } = createStore();
+    const actor = { uid: "u1", role: "commander" as const };
+    objects.set("groupToken--g1", {
+      id: "groupToken--g1", type: "groupToken", groupId: "g1", systemId: "nyx", mapId: "rockbreaker",
+      sceneVersion: 1, color: "#0ea5e9", position: freeSpaceWorldPoint([1, 2, 3]), revision: 0,
+      createdBy: "u1", createdAtMs: 1, updatedBy: "u1", updatedAtMs: 1,
+    });
+    const lockedGroup = await acquireSceneObjectLock(store, {
+      roomId: "room", sceneId: "nyx--rockbreaker", objectId: "groupToken--g1", actor, nowMs: 2,
+    });
+
+    await expect(commitSceneObjectMove(store, {
+      roomId: "room", sceneId: "nyx--rockbreaker", objectId: lockedGroup.id, actor,
+      expectedRevision: lockedGroup.revision, expectedLockRevision: lockedGroup.lockRevision!,
+      position: { ...freeSpaceWorldPoint([37, 0, 0]), x: 38 }, nowMs: 3,
+    })).rejects.toMatchObject({ code: "OUT_OF_BOUNDS" });
+
+    const enemy = await createSceneObject(store, {
+      roomId: "room", sceneId: "nyx--rockbreaker", actor,
+      draft: { type: "enemyMarker", kind: "ground", color: "#ef4444", position: point(1) }, nowMs: 4,
+    });
+    const lockedEnemy = await acquireSceneObjectLock(store, {
+      roomId: "room", sceneId: "nyx--rockbreaker", objectId: enemy.id, actor, nowMs: 5,
+    });
+    await expect(commitSceneObjectMove(store, {
+      roomId: "room", sceneId: "nyx--rockbreaker", objectId: enemy.id, actor,
+      expectedRevision: enemy.revision, expectedLockRevision: lockedEnemy.lockRevision!, position: point(100), nowMs: 6,
+    })).resolves.toMatchObject({ position: point(100) });
   });
 
   it("rejects scene writes while Rockbreaker is disabled for the room", async () => {

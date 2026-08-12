@@ -33,7 +33,8 @@ export async function PATCH(request: Request, context: Context) {
     if (error instanceof MapSceneStoreError) {
       const status = error.code === "OBJECT_LOCKED" || error.code === "REVISION_CONFLICT" || error.code === "LOCK_MISMATCH"
         ? 409
-        : error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 404;
+        : error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403
+          : error.code === "OUT_OF_BOUNDS" || error.code === "INVALID_OBJECT" ? 400 : 404;
       return json({ error: error.code, object: error.currentObject }, status);
     }
     return json({ error: "Objekt konnte nicht verschoben werden." }, 500);
