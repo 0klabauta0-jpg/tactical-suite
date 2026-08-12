@@ -10,7 +10,7 @@ describe("map control dock", () => {
 
   it("toggles only one section", () => {
     const next = toggleDockSection(DEFAULT_MAP_UI_PREFERENCES, "tokens");
-    expect(next.sections).toEqual({ maps: true, tokens: false, drawing: true });
+    expect(next.sections).toEqual({ maps: false, tokens: true, enemy: false, drawing: false });
     expect(next.showGrid).toBe(true);
   });
 });

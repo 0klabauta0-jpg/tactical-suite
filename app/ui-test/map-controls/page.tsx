@@ -17,6 +17,7 @@ export default function MapControlsTestPage() {
         onPreferencesChange={setPreferences}
         maps={<div>Karten-Testinhalt</div>}
         tokens={<div>Token-Testinhalt</div>}
+        enemy={<div>Feindmarker-Testinhalt</div>}
         drawing={<div>Zeichen-Testinhalt</div>}
       />
     </main>
