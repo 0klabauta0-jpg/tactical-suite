@@ -8,6 +8,7 @@ import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@d
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
+import { canAdministerRoom, canWriteBoard, parseRole, type Role } from "@/lib/domain/roles";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -56,7 +57,6 @@ type POI = { id: string; label: string; image: string; parentMapId: string; x?: 
 type StarSystem = { id: string; label: string; x: number; y: number }; // Position auf Galaxie-Karte
 type PlayerAliveState = Record<string, "alive" | "dead">;
 type PlayerSpawnState = Record<string, string>;
-type Role = "admin" | "commander" | "viewer";
 type PanelLayout = {
   nav:      { x: number; y: number };
   placer:   { x: number; y: number };
@@ -4212,8 +4212,8 @@ function BoardApp() {
   const [search, setSearch] = useState("");
 
   const playersById = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p])), [players]);
-  const canWrite = role === "admin" || role === "commander";
-  const isAdmin = role === "admin";
+  const canWrite = canWriteBoard(role);
+  const isAdmin = canAdministerRoom(role);
 
   // refs
   const boardRef = useRef(board);
@@ -4365,7 +4365,7 @@ useEffect(() => {
   // role
   useEffect(() => {
     if (!user || !currentPlayer) return;
-    const sheetRole = (currentPlayer.appRole ?? "viewer") as Role;
+    const sheetRole = parseRole(currentPlayer.appRole);
     setRole(sheetRole);
     setDoc(doc(db, "rooms", roomId, "members", user.uid), { role: sheetRole, name: currentPlayer.name }, { merge: true }).catch(console.error);
   }, [user, currentPlayer, roomId]);
@@ -5831,7 +5831,7 @@ aliveState: na, spawnState: ns,
                             currentPlayerId={currentPlayer.id} canWrite={canWrite} onToggleAlive={toggleAlive}
                             spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                             groupRoles={groupRoles} groupId="unassigned" onSetRole={setGroupRole}
-                            isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                            isAdmin={isAdmin} onSetAppRole={setPlayerAppRole}
                             onSetPlayerField={setPlayerField}
                             groupColor="#6b7280" />
                         ) : null
@@ -5851,7 +5851,7 @@ aliveState: na, spawnState: ns,
                       onDelete={deleteGroup} onClear={() => clearGroup(g.id)}
                       spawnGroups={spawnGroups} spawnState={spawnState} onSetSpawn={setSpawn}
                       groupRoles={groupRoles} onSetRole={setGroupRole}
-                      isAdmin={role === "admin"} onSetAppRole={setPlayerAppRole}
+                      isAdmin={isAdmin} onSetAppRole={setPlayerAppRole}
                       onSetPlayerField={setPlayerField}
                       onSetColor={setGroupColor} onSetIcon={setGroupIcon}
                       systems={systems}
@@ -5966,7 +5966,7 @@ aliveState: na, spawnState: ns,
                 onOpenMarker={(id) => setActiveMapId(id)} onCommitMarker={handleCommitMarker}
                 activeMapId={activeMapId} onRemoveToken={removeToken} onMoveTokenUp={moveTokenUp}
                 getActiveGroupsForMarker={getActiveGroupsForMarker}
-                    isAdmin={role === "admin"}
+                    isAdmin={isAdmin}
                     orderMarkers={orderMarkers}
                 onMoveOrderMarkerLocal={moveOrderMarkerLocal}
                 onCommitOrderMarker={upsertOrderMarker}
