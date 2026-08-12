@@ -18,6 +18,7 @@ import { loginToRoom } from "@/lib/auth/room-login-client";
 import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
+import { MobileLinkDialog } from "@/app/components/mobile/mobile-link-dialog";
 import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
 import {
   DEFAULT_MAP_UI_PREFERENCES,
@@ -3735,6 +3736,7 @@ function BoardApp() {
   const [pois, setPois] = useState<POI[]>([]);
   const [tab, setTab] = useState<"board" | "map">("board");
   const [showProfile, setShowProfile] = useState(false);
+  const [showMobileLink, setShowMobileLink] = useState(false);
   const [isNewPlayer, setIsNewPlayer] = useState(false);
   const [activeMapId, setActiveMapId] = useState("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
@@ -5385,6 +5387,12 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
               className="text-xs px-2 py-1 rounded border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700">
               ✎ Profil
             </button>
+            {roomCfg?.features.mobileStatus && (
+              <button title="Persönlichen QR-Code fürs Handy erstellen" onClick={() => setShowMobileLink(true)}
+                className="text-xs px-2 py-1 rounded border border-blue-800 bg-blue-950 text-blue-300 hover:bg-blue-900">
+                📱 Handy verbinden
+              </button>
+            )}
             <button
               title="Spielerliste aus Sheet neu laden"
               onClick={refreshPlayers}
@@ -5476,6 +5484,15 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
             );
           }}
           onClose={() => { if (!isNewPlayer) setShowProfile(false); }}
+        />
+      )}
+
+      {showMobileLink && currentPlayer && user && roomCfg?.features.mobileStatus && (
+        <MobileLinkDialog
+          roomId={roomId}
+          playerName={currentPlayer.name}
+          getIdToken={() => user.getIdToken()}
+          onClose={() => setShowMobileLink(false)}
         />
       )}
 
