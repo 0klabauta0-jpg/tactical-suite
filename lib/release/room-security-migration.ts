@@ -91,13 +91,14 @@ export async function applyRoomSecurityMigrationWrites<Reference>(input: {
     input.create(input.secretRef, { ...input.passwordHash, updatedAt: input.updatedAt });
   }
   input.plan.roles.forEach((role, index) => {
-    if (freshRoles[index]?.exists) return;
-    input.create(orderedRoleRefs[index], {
+    const data = {
       role: role.role,
       lastSheetRole: role.role,
       updatedBy: "room-security-migration",
       updatedAt: input.updatedAt,
-    });
+    };
+    if (freshRoles[index]?.exists) input.set(orderedRoleRefs[index], data);
+    else input.create(orderedRoleRefs[index], data);
   });
   if (input.plan.overridesChanged) input.set(input.overridesRef, input.plan.cleanedOverrides);
   if (input.plan.removeLegacyPassword) {

@@ -150,4 +150,32 @@ describe("room security migration", () => {
       "update:config",
     ]);
   });
+
+  it("completes an existing tracking-only role document", async () => {
+    const plan = planRoomSecurityMigration({
+      config: { roomName: "Alpha" },
+      overrides: {},
+      existingSecret: { version: 1, passwordHash: "hash", salt: "salt", keyLength: 64, cost: 16_384, blockSize: 8, parallelization: 1 },
+      existingRoles: new Map([["p1", { lastSheetRole: "admin" }]]),
+      players: [{ id: "p1", name: "Ada", appRole: "admin" }],
+    });
+    const calls: string[] = [];
+
+    await migration.applyRoomSecurityMigrationWrites({
+      configRef: "config",
+      secretRef: "secret",
+      overridesRef: "overrides",
+      roleRefs: [{ playerId: "p1", ref: "role-p1" }],
+      plan,
+      passwordHash: null,
+      updatedAt: "server-time",
+      deletedValue: "delete-field",
+      readAll: async () => [{ exists: true }, { exists: true }, { exists: true }],
+      create: (ref) => { calls.push(`create:${ref}`); },
+      set: (ref) => { calls.push(`set:${ref}`); },
+      update: (ref) => { calls.push(`update:${ref}`); },
+    });
+
+    expect(calls).toEqual(["set:role-p1"]);
+  });
 });
