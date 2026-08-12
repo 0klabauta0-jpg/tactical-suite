@@ -32,10 +32,19 @@ describe("board snapshot collections", () => {
     expect(parseMapEntries([
       { id: "main", label: "Pyro", image: "/pyro.png" },
       { id: "broken", label: "Broken" },
-    ])).toEqual([{ id: "main", label: "Pyro", image: "/pyro.png" }]);
+    ])).toEqual([{ id: "main", label: "Pyro", image: "/pyro.png", renderer: "image2d" }]);
     expect(parsePois([
       { id: "station", label: "Ruin Station", image: "/station.png", parentMapId: "main" },
       { id: "broken", label: "Broken", image: "/broken.png" },
     ])).toEqual([{ id: "station", label: "Ruin Station", image: "/station.png", parentMapId: "main" }]);
+  });
+
+  it("defaults old maps to image2d and accepts a valid Rockbreaker scene", () => {
+    expect(parseMapEntries([{ id: "main", label: "Nyx", image: "/nyx.png" }])[0]).toMatchObject({ renderer: "image2d" });
+    expect(parseMapEntries([{
+      id: "rockbreaker", label: "Rockbreaker", image: "", renderer: "rockbreaker3d",
+      sceneId: "nyx--rockbreaker", x: 0.4, y: 0.6,
+    }])[0]).toMatchObject({ renderer: "rockbreaker3d", sceneId: "nyx--rockbreaker" });
+    expect(parseMapEntries([{ id: "broken", label: "Broken", image: "", renderer: "rockbreaker3d" }])).toEqual([]);
   });
 });

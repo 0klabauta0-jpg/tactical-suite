@@ -1,6 +1,15 @@
 export type BoardToken = { groupId: string; x: number; y: number; mapId?: string };
 export type BoardOrderMarker = { groupId: string; x: number; y: number; mapId: string };
-export type BoardMapEntry = { id: string; label: string; image: string; x?: number; y?: number };
+export type MapRendererKind = "image2d" | "rockbreaker3d";
+export type BoardMapEntry = {
+  id: string;
+  label: string;
+  image: string;
+  renderer: MapRendererKind;
+  sceneId?: string;
+  x?: number;
+  y?: number;
+};
 export type BoardPoi = { id: string; label: string; image: string; parentMapId: string; x?: number; y?: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,9 +47,20 @@ export function parseOrderMarkers(value: unknown): BoardOrderMarker[] {
 
 export function parseMapEntries(value: unknown): BoardMapEntry[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((candidate) => {
+  return value.flatMap<BoardMapEntry>((candidate) => {
     if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.label !== "string" || typeof candidate.image !== "string") return [];
-    return [{ id: candidate.id, label: candidate.label, image: candidate.image, ...parseOptionalCoordinates(candidate) }];
+    if (candidate.renderer === "rockbreaker3d") {
+      if (typeof candidate.sceneId !== "string" || !candidate.sceneId.trim()) return [];
+      return [{
+        id: candidate.id,
+        label: candidate.label,
+        image: candidate.image,
+        renderer: "rockbreaker3d" as const,
+        sceneId: candidate.sceneId,
+        ...parseOptionalCoordinates(candidate),
+      }];
+    }
+    return [{ id: candidate.id, label: candidate.label, image: candidate.image, renderer: "image2d" as const, ...parseOptionalCoordinates(candidate) }];
   });
 }
 

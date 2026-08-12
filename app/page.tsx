@@ -18,8 +18,10 @@ import { loginToRoom, roomLoginPlayerToDomain } from "@/lib/auth/room-login-clie
 import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
+import { RockbreakerMap } from "@/app/components/map/rockbreaker-map";
 import { MobileLinkDialog } from "@/app/components/mobile/mobile-link-dialog";
 import { enemyMarkerAgeLabel, normalizeEnemyMarker, type EnemyMarker } from "@/lib/map/enemy-markers";
+import { resolveMapRenderer } from "@/lib/map/renderer";
 import {
   DEFAULT_MAP_UI_PREFERENCES,
   loadMapUiPreferences,
@@ -148,12 +150,12 @@ const DEFAULT_SYSTEMS: StarSystem[] = [
 function getDefaultMaps(systemId: string): MapEntry[] {
   switch ((systemId || "").toLowerCase()) {
     case "stanton":
-      return [{ id: "main", label: "Stanton System", image: "/stanton-map.png" }];
+      return [{ id: "main", label: "Stanton System", image: "/stanton-map.png", renderer: "image2d" }];
     case "nyx":
-      return [{ id: "main", label: "Nyx System", image: "/nyx-map.png" }];
+      return [{ id: "main", label: "Nyx System", image: "/nyx-map.png", renderer: "image2d" }];
     case "pyro":
     default:
-      return [{ id: "main", label: "Pyro System", image: "/pyro-map.png" }];
+      return [{ id: "main", label: "Pyro System", image: "/pyro-map.png", renderer: "image2d" }];
   }
 }
 
@@ -4677,7 +4679,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
 
   function addSubmap() {
     if (!isAdmin) return;
-    const m: MapEntry = { id: uid(), label: "Neue Karte", image: "", x: 0.5, y: 0.5 };
+    const m: MapEntry = { id: uid(), label: "Neue Karte", image: "", renderer: "image2d", x: 0.5, y: 0.5 };
     const next = [...mapsRef.current, m]; setMaps(next); mapsRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, poisRef.current);
   }
@@ -4710,7 +4712,12 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   }
 
   function moveMapMarker(id: string, x: number, y: number) {
-    const next = mapsRef.current.map((m) => m.id === id ? { ...m, x, y } : m);
+    const exists = mapsRef.current.some((map) => map.id === id);
+    const next = exists
+      ? mapsRef.current.map((map) => map.id === id ? { ...map, x, y } : map)
+      : id === "rockbreaker" && roomCfg?.features.rockbreaker3d
+        ? [...mapsRef.current, { id: "rockbreaker", label: "Rockbreaker", image: "", renderer: "rockbreaker3d" as const, sceneId: "nyx--rockbreaker", x, y }]
+        : mapsRef.current;
     setMaps(next); mapsRef.current = next;
     pushAll(boardRef.current, tokensRef.current, aliveRef.current, spawnRef.current, next, poisRef.current);
   }
@@ -5176,13 +5183,23 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
     return ids;
   }, [board.columns, search, sortField, sortDir, playersById, aliveState]);
 
-  const displayMaps = useMemo(
-    () => normalizeMapsForSystem(activeSystemId, maps),
-    [activeSystemId, maps]
-  );
+  const displayMaps = useMemo(() => {
+    const normalized = normalizeMapsForSystem(activeSystemId, maps);
+    if (activeSystemId !== "nyx") return normalized.filter((map) => map.renderer !== "rockbreaker3d");
+    if (roomCfg?.features.rockbreaker3d && !normalized.some((map) => map.id === "rockbreaker")) {
+      return [...normalized, {
+        id: "rockbreaker", label: "Rockbreaker", image: "", renderer: "rockbreaker3d" as const,
+        sceneId: "nyx--rockbreaker", x: 0.5, y: 0.5,
+      }];
+    }
+    return roomCfg?.features.rockbreaker3d || isAdmin
+      ? normalized
+      : normalized.filter((map) => map.renderer !== "rockbreaker3d");
+  }, [activeSystemId, maps, roomCfg?.features.rockbreaker3d, isAdmin]);
 
   const activeMapEntry = displayMaps.find((m) => m.id === activeMapId);
   const activePOI = pois.find((p) => p.id === activeMapId);
+  const activeRenderer = resolveMapRenderer(activeMapEntry, roomCfg?.features ?? { rockbreaker3d: false, mobileStatus: false });
   const activeImage = normalizeImageUrl(activeMapEntry?.image ?? activePOI?.image ?? "");
   const activeLabel = activeMapEntry?.label ?? activePOI?.label ?? "";
 
@@ -5227,7 +5244,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   }, [activeMapId, displayMaps, pois]);
 
   function handleCommitMarker(id: string, x: number, y: number) {
-    if (mapsRef.current.find((m) => m.id === id)) moveMapMarker(id, x, y);
+    if (displayMaps.find((m) => m.id === id)) moveMapMarker(id, x, y);
     else movePOIMarker(id, x, y);
   }
 
@@ -5608,7 +5625,24 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
           </div>
           <div className="flex-1 relative">
             <div className="absolute inset-0 overflow-hidden" style={{ zIndex: 0 }}>
-            {!activeImage ? (
+            {activeRenderer === "rockbreaker3d" && activeMapEntry?.sceneId && user ? (
+              <RockbreakerMap
+                roomId={roomId}
+                sceneId={activeMapEntry.sceneId}
+                groups={board.groups.filter((group) => group.systemId === "nyx")}
+                showGrid={showGrid}
+                canWrite={canWrite}
+                getIdToken={() => user.getIdToken()}
+                onBack={() => setActiveMapId("main")}
+              />
+            ) : activeRenderer === "disabled" ? (
+              <div className="flex h-full items-center justify-center bg-gray-950 p-6 text-center text-gray-300">
+                <div>
+                  <div className="text-lg font-bold">Rockbreaker 3D ist für diesen Raum nicht aktiviert.</div>
+                  <button className="mt-4 rounded-lg border border-gray-600 px-4 py-2 hover:bg-gray-800" onClick={() => setActiveMapId("main")}>← Zur Nyx-Hauptkarte</button>
+                </div>
+              </div>
+            ) : !activeImage ? (
               <AutoMap label={activeLabel} mapId={activeMapId} />
             ) : (
               <ZoomableMap imageSrc={activeImage} tokens={tokens} groups={board.groups} board={board}
@@ -5638,7 +5672,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
           </div>
 
           {/* Zoom/Pan Reset Button */}
-          {activeImage && (mapScale !== 1) && (
+          {activeRenderer === "image2d" && activeImage && (mapScale !== 1) && (
             <button
               className="absolute bottom-3 right-3 z-40 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-900 bg-opacity-80 border border-gray-600 text-gray-300 text-xs hover:bg-gray-800 hover:text-white transition-colors shadow-lg"
               onClick={() => resetViewRef.current()}
@@ -5667,7 +5701,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId} />
             ) : null}
-            drawing={activeImage && canWrite ? (
+            drawing={activeRenderer === "image2d" && activeImage && canWrite ? (
               <DrawingToolbar
                 tool={drawTool} setTool={setDrawTool}
                 color={drawColor} setColor={setDrawColor}
