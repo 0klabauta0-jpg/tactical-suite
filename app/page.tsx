@@ -1158,7 +1158,7 @@ function GroupIconPicker({ current, onChange }: { current?: string; onChange: (i
   const isUrl = current && (current.startsWith("http") || current.startsWith("/"));
   const preview = current
     ? isUrl
-      ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(e) => { (e.target as any).style.display="none"; }} />
+      ? <img src={current} className="w-5 h-5 rounded object-cover" alt="icon" onError={(event: React.SyntheticEvent<HTMLImageElement>) => { event.currentTarget.style.display = "none"; }} />
       : <span className="text-base leading-none">{current}</span>
     : <span className="text-gray-500 text-xs">🖼</span>;
 
@@ -1786,12 +1786,12 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
   const togglePois = (id: string) => setPoisOpen(p => ({ ...p, [id]: !(p[id] ?? true) }));
   const navSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  function handleSubmapDragEnd(e: any) {
+  function handleSubmapDragEnd(e: DragEndEvent) {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = submaps.map((m) => m.id);
-    const oldIdx = ids.indexOf(active.id);
-    const newIdx = ids.indexOf(over.id);
+    const oldIdx = ids.indexOf(String(active.id));
+    const newIdx = ids.indexOf(String(over.id));
     onReorderMaps(arrayMove(ids, oldIdx, newIdx));
   }
 
@@ -1841,11 +1841,11 @@ function MapNavPanel({ maps, pois, activeMapId, setActiveMapId, isAdmin, onRenam
                         </div>
                         {pOpen && smPois.length > 0 && (
                           <DndContext sensors={navSensors}
-                            onDragEnd={(e: any) => {
+                            onDragEnd={(e: DragEndEvent) => {
                               const { active, over } = e;
                               if (!over || active.id === over.id) return;
                               const ids = smPois.map((p) => p.id);
-                              onReorderPOIs(sm.id, arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id)));
+                              onReorderPOIs(sm.id, arrayMove(ids, ids.indexOf(String(active.id)), ids.indexOf(String(over.id))));
                             }}>
                             <SortableContext items={smPois.map((p) => p.id)} strategy={rectSortingStrategy}>
                               {smPois.map((poi) => (
@@ -5105,8 +5105,9 @@ aliveState: na, spawnState: ns,
             const parts: string[] = [];
             let cur = id;
             while (cur && cur !== "main") {
-              const poi = allMaps.find((m) => m.id === cur);
-              if (poi) { parts.unshift(poi.label); cur = (poi as any).parentMapId ?? "main"; }
+              const entry = allMaps.find((m) => m.id === cur);
+              const poi = poisRef.current.find((p) => p.id === cur);
+              if (entry) { parts.unshift(entry.label); cur = poi?.parentMapId ?? "main"; }
               else break;
             }
             parts.unshift(sysLabel); // System immer an erster Stelle
