@@ -1807,11 +1807,12 @@ function SortableMapRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, 
 // TOKEN PLACER
 // ─────────────────────────────────────────────────────────────
 
-function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation }: {
+function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation, showOrders = true }: {
   groups: Group[];
   onPlaceOrder: (gId: string, x: number, y: number, mapId: string) => void;
   activeMapId: string;
   getGroupLocation: (groupId: string) => GroupLocation;
+  showOrders?: boolean;
 }) {
   const [armedOrderGroupId, setArmedOrderGroupId] = useState<string | null>(null);
   const tactical = groups.filter((g) => g.id !== "unassigned" && !g.isSpawn);
@@ -1842,11 +1843,21 @@ function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation 
       <div className="text-xs text-gray-500 mb-2">Karte: <span className="text-blue-400">{activeMapId}</span></div>
       {tactical.map((g) => {
         const location = getGroupLocation(g.id);
+        const locationLabel = location.kind === "unplaced" ? "nicht gesetzt"
+          : location.kind === "rockbreaker3d" ? "Rockbreaker"
+            : location.kind === "map2d" ? (location.mapId === "main" ? "Hauptkarte" : location.mapId)
+              : "mehrdeutig";
+        const canEnterRockbreaker = location.kind === "unplaced"
+          || (location.kind === "map2d" && location.mapId === "main");
         return (
         <div key={g.id} className="flex gap-1 mb-1">
           {location.kind === "ambiguous" ? (
             <button type="button" disabled title="Mehrere gespeicherte Positionen" className="flex-1 rounded-lg border border-red-800 bg-red-950 px-2 py-1.5 text-left text-xs text-red-300 opacity-80">
               {g.label} – Position prüfen
+            </button>
+          ) : !showOrders && !canEnterRockbreaker ? (
+            <button type="button" disabled title={`Bereits auf ${locationLabel}`} className="flex-1 rounded-full border border-gray-700 bg-gray-900 px-3 py-1.5 text-left text-xs font-semibold text-gray-500">
+              {g.label}
             </button>
           ) : (
             <DraggableTroopChip
@@ -1857,15 +1868,18 @@ function TokenPlacerPanel({ groups, onPlaceOrder, activeMapId, getGroupLocation 
               className="flex-1 bg-gray-800 text-left text-gray-200 hover:bg-gray-700"
             />
           )}
+          <span className="self-center whitespace-nowrap px-1 text-[10px] text-gray-500" title={`Aktueller Ort: ${locationLabel}`}>
+            {locationLabel}
+          </span>
           {/* Auftrags-Button */}
-          <button
+          {showOrders && <button
             title={`Auftrag für ${g.label} setzen`}
             className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${
               armedOrderGroupId === g.id ? "bg-orange-600 border-orange-500 text-white" : "bg-gray-800 border-gray-600 text-orange-400 hover:bg-gray-700 hover:border-orange-600"
             }`}
             onClick={(e) => { e.stopPropagation(); skipNextClick.current = true; setArmedOrderGroupId(armedOrderGroupId === g.id ? null : g.id); }}>
             {armedOrderGroupId === g.id ? "▶ Klicke…" : "⚑"}
-          </button>
+          </button>}
         </div>
         );
       })}
@@ -5739,11 +5753,12 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                   onReorderMaps={reorderMaps} onReorderPOIs={reorderPOIs} />
               </div>
             )}
-            tokens={canWrite && activeRenderer === "image2d" ? (
+            tokens={canWrite && (activeRenderer === "image2d" || activeRenderer === "rockbreaker3d") ? (
               <TokenPlacerPanel groups={tacticalGroups}
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId}
-                getGroupLocation={(groupId) => getConfirmedGroupLocation(groupId)} />
+                getGroupLocation={(groupId) => getConfirmedGroupLocation(groupId)}
+                showOrders={activeRenderer === "image2d"} />
             ) : null}
             enemy={canWrite && activeRenderer === "rockbreaker3d" ? (
               <div>

@@ -247,10 +247,12 @@ export function ParentLevelDropTarget({
   className = "",
   parentLabel,
   testId = "move-up-target",
+  onNavigate,
 }: {
   className?: string;
   parentLabel?: string;
   testId?: string;
+  onNavigate?: () => void;
 }) {
   return (
     <TokenDropTarget
@@ -258,6 +260,15 @@ export function ParentLevelDropTarget({
       data={{ type: "parent" }}
       testId={testId}
       className={`rounded-xl border-2 border-dashed border-cyan-700 bg-cyan-950/80 px-4 py-3 text-center text-sm font-semibold text-cyan-100 ${className}`}
+      role={onNavigate ? "button" : undefined}
+      tabIndex={onNavigate ? 0 : undefined}
+      aria-label={onNavigate ? `Eine Ebene hoch${parentLabel ? ` nach ${parentLabel}` : ""}` : undefined}
+      onClick={onNavigate}
+      onKeyDown={(event) => {
+        if (!onNavigate || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onNavigate();
+      }}
     >
       ↑ Eine Ebene hoch{parentLabel ? ` nach ${parentLabel}` : " ziehen"}
     </TokenDropTarget>
