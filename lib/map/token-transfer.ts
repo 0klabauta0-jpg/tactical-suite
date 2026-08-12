@@ -35,7 +35,7 @@ const validOperationId = (value: unknown): value is string =>
 const validCoordinate = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 
-function parseLocation(value: unknown): TokenLocation | null {
+export function parseTokenLocation(value: unknown): TokenLocation | null {
   if (!isRecord(value)) return null;
   if (value.kind === "unplaced") return { kind: "unplaced" };
   if (value.kind === "map2d" && validId(value.mapId) && validCoordinate(value.x) && validCoordinate(value.y)) {
@@ -61,7 +61,7 @@ function parseIntent(value: unknown): TokenTransferIntent | null {
 
 export function parseTokenTransferCommand(value: unknown): TokenTransferCommand | null {
   if (!isRecord(value) || !validOperationId(value.operationId) || !validId(value.systemId) || !validId(value.groupId)) return null;
-  const expectedSource = parseLocation(value.expectedSource);
+  const expectedSource = parseTokenLocation(value.expectedSource);
   const intent = parseIntent(value.intent);
   return expectedSource && intent ? {
     operationId: value.operationId,
