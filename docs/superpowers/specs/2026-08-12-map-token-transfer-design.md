@@ -36,12 +36,12 @@ This is preferred over client-orchestrated writes because a network interruption
 
 ## Location invariant
 
-Within one system, each ordinary troop group has exactly one authoritative tactical location:
+Within one system, each ordinary troop group has at most one authoritative tactical location:
 
 - a token on one 2D map or POI; or
 - a group object in one 3D scene.
 
-Colored dots on ancestor pills are derived occupancy indicators, not additional locations or duplicate tokens. Spawn groups retain their existing special behavior and are outside this transfer invariant unless the current application already treats them as ordinary movable troop groups.
+An unplaced group has no tactical location until it is placed again. Colored dots on ancestor pills are derived occupancy indicators, not additional locations or duplicate tokens. Spawn groups retain their existing special behavior and are outside this transfer invariant unless the current application already treats them as ordinary movable troop groups.
 
 ## User interaction
 
@@ -66,6 +66,8 @@ Valid drop targets are:
 - a child-map or POI pill, which transfers the group into that child location.
 
 After a successful child transfer, the large token disappears from the parent. The parent pill keeps a small colored group indicator. Opening the child shows the actual token or 3D group object.
+
+Normal 2D children use stable, neighboring slots in a fixed entry area near the left edge. This gives a pill drop an immediate deterministic destination without pretending that the parent-map drop coordinate is a coordinate inside the child.
 
 ### Rockbreaker entry
 
