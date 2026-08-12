@@ -84,7 +84,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
         ref={dockRef}
         aria-label="Kartensteuerung"
         data-collapsed="true"
-        className="fixed right-0 z-50 rounded-l-xl border border-r-0 border-gray-600 bg-gray-900/95 shadow-2xl"
+        className="fixed left-0 z-50 rounded-r-xl border border-l-0 border-gray-600 bg-gray-900/95 shadow-2xl"
         style={{ top: preferences.dockY }}
       >
         <button
@@ -94,7 +94,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
           title="Kartensteuerung ausklappen"
           onClick={() => onPreferencesChange({ ...preferences, dockCollapsed: false })}
         >
-          ‹
+          ›
         </button>
       </aside>
     );
@@ -112,7 +112,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
       ref={dockRef}
       aria-label="Kartensteuerung"
       data-collapsed="false"
-      className="fixed right-0 z-50 w-[min(280px,calc(100vw-16px))] overflow-hidden rounded-l-2xl border border-r-0 border-gray-600 bg-gray-900/95 shadow-2xl"
+      className="fixed left-0 z-50 w-[min(280px,calc(100vw-16px))] overflow-hidden rounded-r-2xl border border-l-0 border-gray-600 bg-gray-900/95 shadow-2xl"
       style={{ top: preferences.dockY, maxHeight: `calc(100vh - ${preferences.dockY + 8}px)` }}
       onPointerDown={(event) => event.stopPropagation()}
     >
@@ -140,11 +140,11 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
           type="button"
           className="rounded px-2 py-1 text-sm text-gray-300 hover:bg-gray-800 hover:text-white"
           aria-label="Steuerleiste einklappen"
-          title="Nach rechts einklappen"
+          title="Nach links einklappen"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => onPreferencesChange({ ...preferences, dockCollapsed: true })}
         >
-          ›
+          ‹
         </button>
       </div>
 
