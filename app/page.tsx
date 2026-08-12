@@ -13,6 +13,7 @@ import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
+import { getErrorCode, getErrorMessage } from "@/lib/error-details";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
   parseMapEntries,
@@ -390,7 +391,7 @@ function ProfileModal({
         homeLocation: home, ampel,
       });
       onSave(updated);
-    } catch (e: any) { setMsg(e?.message ?? "Fehler beim Speichern."); }
+    } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler beim Speichern.")); }
     setSaving(false);
   }
 
@@ -570,12 +571,12 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
 
       try {
         await signInWithEmailAndPassword(auth, email, pw);
-      } catch (authErr: any) {
+      } catch (authErr: unknown) {
         // "auth/user-not-found" is deprecated in Firebase ≥ v9.12 – now returns
         // "auth/invalid-credential". We also handle "auth/invalid-login-credentials"
         // (some SDK versions). For the setup user we always try to create it when
         // any sign-in error suggests the account doesn't exist yet.
-        const code: string = authErr?.code ?? "";
+        const code = getErrorCode(authErr);
         const isNoAccount =
           code === "auth/user-not-found" ||
           code === "auth/invalid-credential" ||
@@ -584,9 +585,9 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         if (isNoAccount) {
           try {
             await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: any) {
+          } catch (createErr: unknown) {
             // If it already exists (race-condition) just retry sign-in once
-            if (createErr?.code === "auth/email-already-in-use") {
+            if (getErrorCode(createErr) === "auth/email-already-in-use") {
               await signInWithEmailAndPassword(auth, email, pw);
             } else {
               throw createErr;
@@ -670,8 +671,8 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
       }
 
       setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
-    } catch (e: any) {
-      setMsg({ text: `Fehler: ${e?.message ?? "Unbekannt"}`, ok: false });
+    } catch (e: unknown) {
+      setMsg({ text: `Fehler: ${getErrorMessage(e, "Unbekannt")}`, ok: false });
     } finally {
       setSaving(false);
     }
@@ -958,8 +959,8 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       const pw = cfg.password + "_tcs_internal";
       try {
         await signInWithEmailAndPassword(auth, email, pw);
-      } catch (signInErr: any) {
-        const code: string = signInErr?.code ?? "";
+      } catch (signInErr: unknown) {
+        const code = getErrorCode(signInErr);
         const isNoAccount =
           code === "auth/user-not-found" ||
           code === "auth/invalid-credential" ||
@@ -967,8 +968,8 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
         if (isNoAccount) {
           try {
             await createUserWithEmailAndPassword(auth, email, pw);
-          } catch (createErr: any) {
-            if (createErr?.code === "auth/email-already-in-use") {
+          } catch (createErr: unknown) {
+            if (getErrorCode(createErr) === "auth/email-already-in-use") {
               setMsg("Account existiert bereits mit anderem Passwort. Bitte einen Admin kontaktieren.");
               setLoading(false);
               return;
@@ -996,7 +997,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       }
 
       onLogin(found, cfg);
-    } catch (e: any) { setMsg(e?.message ?? "Fehler."); }
+    } catch (e: unknown) { setMsg(getErrorMessage(e, "Fehler.")); }
     setLoading(false);
   }
 
