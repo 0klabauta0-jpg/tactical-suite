@@ -14,6 +14,7 @@ import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { buildRoomTemplateCopy } from "@/lib/rooms/template";
 import { getErrorCode, getErrorMessage } from "@/lib/error-details";
+import { zoomIn, zoomOut } from "@/lib/map/zoom";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
   parseMapEntries,
@@ -2929,7 +2930,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
   // expose scale control to parent (for ZoomPanel)
   useEffect(() => {
     onScaleChange(scale, setScale, resetView);
-  }, [scale]);
+  }, [scale, onScaleChange]);
   const [tokenDrag, setTokenDrag] = useState<string | null>(null);
   const [markerDrag, setMarkerDrag] = useState<string | null>(null);
   const [openGroupMenu, setOpenGroupMenu] = useState<string | null>(null); // markerId
@@ -3281,7 +3282,8 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
                             className="text-xs text-gray-600 hover:text-orange-400 px-1"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onMoveTokenUp ? onMoveTokenUp(g.groupId, m.id) : onRemoveToken?.(g.groupId, m.id);
+                              if (onMoveTokenUp) onMoveTokenUp(g.groupId, m.id);
+                              else onRemoveToken?.(g.groupId, m.id);
                               setOpenGroupMenu(null);
                             }}
                             title="Gruppe auf übergeordnete Ebene verschieben">↑</button>
@@ -4113,16 +4115,16 @@ function BoardApp() {
   const resetViewRef = useRef<() => void>(() => {});
   const [mapScale, setMapScale] = useState(1);
 
-  function handleScaleChange(
+  const handleScaleChange = useCallback((
     scale: number,
     setScaleFn: (fn: (s: number) => number) => void,
     resetFn: () => void,
-  ) {
+  ) => {
     setMapScale(scale);
-    zoomInRef.current  = () => setScaleFn((s) => Math.min(8, s * 1.3));
-    zoomOutRef.current = () => setScaleFn((s) => Math.max(0.3, s / 1.3));
+    zoomInRef.current  = () => setScaleFn(zoomIn);
+    zoomOutRef.current = () => setScaleFn(zoomOut);
     resetViewRef.current = resetFn;
-  }
+  }, []);
 
   const [sortField, setSortField] = useState<"name" | "area" | "role" | "squadron" | "homeLocation" | "aliveStatus" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -4181,7 +4183,7 @@ useEffect(() => {
   mapsBySystemRef.current[prevSystemId] = normalizeMapsForSystem(prevSystemId, mapsRef.current);
   poisBySystemRef.current[prevSystemId] = poisRef.current;
   drawingsBySystemRef.current[prevSystemId] = drawingsRef.current;
-  activeMapIdBySystemRef.current[prevSystemId] = activeMapId;
+  activeMapIdBySystemRef.current[prevSystemId] = activeMapIdBySystemRef.current[prevSystemId] ?? "main";
 
   const t = tokensBySystemRef.current[activeSystemId] ?? [];
   const om = orderMarkersBySystemRef.current[activeSystemId] ?? [];
@@ -4380,7 +4382,7 @@ mapsBySystemRef.current = mapsBySystem;
 poisBySystemRef.current = poisBySystem;
 drawingsBySystemRef.current = drawingsBySystem;
 
-const targetSystemId = activeSystemIdRef.current || activeSystemId;
+const targetSystemId = activeSystemIdRef.current;
 // ── Block 4: Refs sofort setzen (kein Re-render), dann State als Transition ──
 const activeTokens = tokensBySystemRef.current[targetSystemId] ?? [];
 tokensRef.current = activeTokens;
