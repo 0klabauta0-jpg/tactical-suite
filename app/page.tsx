@@ -9,9 +9,9 @@ import { useSearchParams } from "next/navigation";
 import { db, auth } from "@/lib/firebase";
 import { canAdministerRoom, canWriteBoard, parseRole, type Role } from "@/lib/domain/roles";
 import type { EditablePlayerField, Player, PlayerOverrides } from "@/lib/domain/player";
-import { parsePlayersCsv } from "@/lib/players/csv";
 import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { parsePlayerOverrides } from "@/lib/players/overrides";
+import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -332,30 +332,14 @@ async function syncSheetAppRole(roomId: string, playerId: string, sheetAppRole: 
   await setDoc(doc(db, "rooms", roomId, "config", "playerOverrides"), next, { merge: true });
 }
 
-const SHEET_HEADER_ROW = 10; // 1-basiert, wie im Sheet sichtbar
-
-async function loadPlayersForRoom(roomId: string, force = false): Promise<Player[]> {
-  if (!force && cachedPlayersByRoom[roomId]?.length) return cachedPlayersByRoom[roomId];
-  const cfg = await loadRoomConfig(roomId);
-  if (!cfg?.sheetUrl.startsWith("http")) return cachedPlayersByRoom[roomId] ?? [];
-  try {
-    // Range-Parameter: Ab Zeile SHEET_HEADER_ROW bis Zeile 10000, alle Spalten A-Z
-    let url = cfg.sheetUrl;
-    // Nur anhängen wenn noch kein range-Parameter gesetzt ist
-    if (!url.includes("range=")) {
-      const sep = url.includes("?") ? "&" : "?";
-      url += sep + "range=A" + SHEET_HEADER_ROW + ":Z10000";
-    }
-    const sep2 = url.includes("?") ? "&" : "?";
-    url += sep2 + "_t=" + Date.now();
-    const res = await fetch(url, { cache: "no-store" });
-    const text = await res.text();
-    const list = parsePlayersCsv(text).players;
-    cachedPlayersByRoom[roomId] = list;
-    return list;
-  } catch {
-    return cachedPlayersByRoom[roomId] ?? []; // Netzfehler → alten Cache behalten
+async function loadPlayersForRoom(roomId: string, force = false): Promise<PlayerLoadResult> {
+  if (!force && cachedPlayersByRoom[roomId]?.length) {
+    return { players: cachedPlayersByRoom[roomId], source: "cache" };
   }
+  const cfg = await loadRoomConfig(roomId);
+  const result = await loadPlayersFromSheet(cfg?.sheetUrl ?? "", cachedPlayersByRoom[roomId] ?? []);
+  if (result.source === "sheet") cachedPlayersByRoom[roomId] = result.players;
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -949,7 +933,8 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       if (password !== cfg.password) { setMsg("Falsches Team-Passwort."); setLoading(false); return; }
 
       // Spieler aus Sheet laden + Firestore-Overrides mergen
-      const sheetPlayers = await loadPlayersForRoom(roomId);
+      const sheetLoad = await loadPlayersForRoom(roomId);
+      const sheetPlayers = sheetLoad.players;
       const overrides = await loadFirestoreOverrides(roomId);
       const players = mergeWithOverrides(sheetPlayers, overrides);
 
@@ -967,7 +952,7 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       // ── Kein Sheet-Eintrag → Anmeldung verweigern ────────────────────────
       let newPlayerData: Player | null = null;
       if (!found) {
-        setMsg(`"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
+        setMsg(sheetLoad.warning ?? `"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
         setLoading(false);
         return;
       }
@@ -1027,9 +1012,9 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       const cfg = await loadRoomConfig(roomId);
       setRoomCfg(cfg ?? false);
       if (!cfg) { setMsg("Keine Raum-Konfiguration gefunden."); setRefreshing(false); return; }
-      const list = await loadPlayersForRoom(roomId, true);
+      const result = await loadPlayersForRoom(roomId, true);
       const now = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-      setMsg(`✓ ${list.length} Spieler geladen (${now})`);
+      setMsg(result.warning ?? `✓ ${result.players.length} Spieler geladen (${now})`);
     } catch {
       setMsg("Fehler beim Laden der Spielerliste.");
     }
@@ -4261,9 +4246,14 @@ useEffect(() => {
   useEffect(() => {
     if (!roomCfg) return;
     // Initialer Load
-    loadPlayersForRoom(roomId).then((sheetList) => {
+    loadPlayersForRoom(roomId).then((sheetLoad) => {
       loadFirestoreOverrides(roomId).then((ov) => {
-        applyPlayerList(mergeWithOverrides(sheetList, ov), false);
+        applyPlayerList(mergeWithOverrides(sheetLoad.players, ov), false);
+        if (sheetLoad.warning) {
+          setPlayerToast(sheetLoad.warning);
+          if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+          playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+        }
       });
     });
     // Echtzeit-Listener auf playerOverrides
@@ -4282,8 +4272,13 @@ useEffect(() => {
   useEffect(() => {
     if (!roomCfg) return;
     const id = setInterval(async () => {
-      const list = await loadPlayersForRoom(roomId, true);
-      applyPlayerList(list, true);
+      const result = await loadPlayersForRoom(roomId, true);
+      applyPlayerList(result.players, true);
+      if (result.warning) {
+        setPlayerToast(result.warning);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+      }
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [roomId, roomCfg]);
@@ -4293,9 +4288,14 @@ useEffect(() => {
     if (refreshingPlayers) return;
     setRefreshingPlayers(true);
     try {
-      const list = await loadPlayersForRoom(roomId, true);
+      const result = await loadPlayersForRoom(roomId, true);
+      const list = result.players;
       applyPlayerList(list, true);
-      if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
+      if (result.warning) {
+        setPlayerToast(result.warning);
+        if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
+        playerToastTimer.current = setTimeout(() => setPlayerToast(null), 5000);
+      } else if (!list.some(p => !new Set(Object.values(board.columns).flat()).has(p.id))) {
         setPlayerToast(`✓ ${list.length} Spieler – keine neuen`);
         if (playerToastTimer.current) clearTimeout(playerToastTimer.current);
         playerToastTimer.current = setTimeout(() => setPlayerToast(null), 3000);
