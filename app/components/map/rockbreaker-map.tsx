@@ -6,8 +6,9 @@ import { ParentLevelDropTarget, TokenDropTarget, tokenDropIntentAtPoint } from "
 import type { BoardGroup } from "@/lib/board/state";
 import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject } from "@/lib/map-scene/client";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
-import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type WorldPoint } from "@/lib/rockbreaker/coordinates";
+import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type Vec3, type WorldPoint } from "@/lib/rockbreaker/coordinates";
 import { confirmedObjectPosition, type SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { clampCanvasPoint, freeSpaceWorldPoint, intersectCameraDragPlane } from "@/lib/rockbreaker/drag";
 
 export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
@@ -23,6 +24,7 @@ export function RockbreakerMap({
   getIdToken,
   onBack,
   onMoveGroupUp,
+  onMoveGroupPosition,
   initialCameraAzimuth = 0.7,
   dropTargetId = "rockbreaker-scene-drop",
   dropTestId = "rockbreaker-scene-drop",
@@ -37,6 +39,7 @@ export function RockbreakerMap({
   getIdToken: () => Promise<string>;
   onBack: () => void;
   onMoveGroupUp: (groupId: string, revision: number) => Promise<void>;
+  onMoveGroupPosition?: (object: PositionedSceneObject, position: WorldPoint) => Promise<void>;
   initialCameraAzimuth?: number;
   dropTargetId?: string;
   dropTestId?: string;
@@ -45,6 +48,7 @@ export function RockbreakerMap({
   const objectsRef = useRef<SceneObject[]>(objects);
   const enemyPlacementRef = useRef<RockbreakerEnemyKind | null>(enemyPlacement);
   const onMoveGroupUpRef = useRef(onMoveGroupUp);
+  const onMoveGroupPositionRef = useRef(onMoveGroupPosition);
   const groupLabelRefs = useRef(new Map<string, HTMLSpanElement>());
   const [sceneReady, setSceneReady] = useState(0);
   const [message, setMessage] = useState("Weltkoordinaten in km");
@@ -66,6 +70,7 @@ export function RockbreakerMap({
   useEffect(() => { objectsRef.current = objects; }, [objects]);
   useEffect(() => { enemyPlacementRef.current = enemyPlacement; }, [enemyPlacement]);
   useEffect(() => { onMoveGroupUpRef.current = onMoveGroupUp; }, [onMoveGroupUp]);
+  useEffect(() => { onMoveGroupPositionRef.current = onMoveGroupPosition; }, [onMoveGroupPosition]);
   useEffect(() => { getIdTokenRef.current = getIdToken; }, [getIdToken]);
   useEffect(() => { canWriteRef.current = canWrite; }, [canWrite]);
   useEffect(() => { showGridRef.current = showGrid; if (sceneContext.current) sceneContext.current.grid.visible = showGrid; }, [showGrid]);
@@ -124,11 +129,12 @@ export function RockbreakerMap({
 
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
-      const setRay = (event: PointerEvent) => {
+      const setRayAt = (clientX: number, clientY: number) => {
         const rect = canvas.getBoundingClientRect();
-        pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+        pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
         raycaster.setFromCamera(pointer, camera);
       };
+      const setRay = (event: PointerEvent) => setRayAt(event.clientX, event.clientY);
       const pointAt = (event: PointerEvent): WorldPoint | null => {
         setRay(event);
         const hits = raycaster.intersectObjects([...asteroidMeshes, station], false);
@@ -150,7 +156,13 @@ export function RockbreakerMap({
       };
 
       const orbit = { active: false, x: 0, y: 0, azimuth: 0, elevation: 0 };
-      let drag: { object: PositionedSceneObject; mesh: Three.Object3D; lockRevision?: number; point: WorldPoint } | null = null;
+      let drag: {
+        object: PositionedSceneObject;
+        mesh: Three.Object3D;
+        lockRevision?: number;
+        point: WorldPoint;
+        cameraPlane?: { point: Vec3; normal: Vec3 };
+      } | null = null;
       const down = (event: PointerEvent) => {
         setRay(event);
         const objectHit = raycaster.intersectObjects([...objectMeshes.values()], true).find((hit) => hit.object.userData.objectId || hit.object.parent?.userData.objectId);
@@ -161,7 +173,17 @@ export function RockbreakerMap({
           canvas.setPointerCapture(event.pointerId);
           if (object.type === "groupToken") {
             const mesh = objectMeshes.get(object.id);
-            if (mesh) drag = { object, mesh, point: object.position };
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+            if (mesh) drag = {
+              object,
+              mesh,
+              point: object.position,
+              cameraPlane: {
+                point: [object.position.x, object.position.y, object.position.z],
+                normal: [direction.x, direction.y, direction.z],
+              },
+            };
             return;
           }
           void lockMapSceneObject(roomId, sceneId, object.id, () => getIdTokenRef.current()).then((locked) => {
@@ -175,7 +197,18 @@ export function RockbreakerMap({
       };
       const move = (event: PointerEvent) => {
         if (drag) {
-          const point = pointAt(event);
+          const point = drag.object.type === "groupToken" && drag.cameraPlane
+            ? (() => {
+                const rect = canvas.getBoundingClientRect();
+                const client = clampCanvasPoint({ x: event.clientX, y: event.clientY }, rect);
+                setRayAt(client.x, client.y);
+                const intersection = intersectCameraDragPlane({
+                  origin: [raycaster.ray.origin.x, raycaster.ray.origin.y, raycaster.ray.origin.z],
+                  direction: [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z],
+                }, drag.cameraPlane.point, drag.cameraPlane.normal);
+                return intersection ? freeSpaceWorldPoint(intersection) : null;
+              })()
+            : pointAt(event);
           if (point) { drag.point = point; drag.mesh.position.set(point.x, point.y, point.z); }
           return;
         }
@@ -192,10 +225,12 @@ export function RockbreakerMap({
           const operation = current.object.type === "groupToken" && dropIntent?.kind === "moveUp"
             ? onMoveGroupUpRef.current(current.object.groupId, current.object.revision)
             : current.object.type === "groupToken"
-              ? lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
-                  if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
-                  return moveMapSceneObject(roomId, sceneId, locked, current.point, locked.lockRevision ?? 0, () => getIdTokenRef.current());
-                })
+              ? onMoveGroupPositionRef.current
+                ? onMoveGroupPositionRef.current(current.object, current.point)
+                : lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
+                    if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
+                    return moveMapSceneObject(roomId, sceneId, locked, current.point, locked.lockRevision ?? 0, () => getIdTokenRef.current());
+                  })
               : moveMapSceneObject(roomId, sceneId, current.object, current.point, current.lockRevision ?? 0, () => getIdTokenRef.current());
           void operation
             .then(() => setMessage(dropIntent?.kind === "moveUp"

@@ -61,6 +61,11 @@ export default function RockbreakerTestPage() {
         object.type === "groupToken" && object.groupId === groupId && object.revision === revision
       )));
     },
+    onMoveGroupPosition: async (object: Extract<SceneObject, { position: unknown }>, position: Extract<SceneObject, { position: unknown }>["position"]) => {
+      setObjects((current) => current.map((candidate) => candidate.id === object.id && "position" in candidate
+        ? { ...candidate, position, revision: candidate.revision + 1 }
+        : candidate));
+    },
   };
   async function handleTransfer({ groupId, intent }: { groupId: string; expectedSource: TokenLocation; intent: TokenTransferIntent }) {
     if (intent.kind !== "enterChild" || intent.childId !== "rockbreaker") return;
