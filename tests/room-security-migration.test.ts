@@ -54,6 +54,34 @@ describe("room security migration", () => {
     expect(plan.roles).toEqual([{ playerId: "p1", role: "admin" }]);
   });
 
+  it("protects a duplicated player ID only once when both rows resolve to the same role", () => {
+    const plan = planRoomSecurityMigration({
+      config: { password: "secret" },
+      overrides: {},
+      existingSecret: null,
+      existingRoles: new Map(),
+      players: [
+        { id: "p1", name: "Ada", appRole: "admin" },
+        { id: "p1", name: "Ada", appRole: "admin" },
+      ],
+    });
+
+    expect(plan.roles).toEqual([{ playerId: "p1", role: "admin" }]);
+  });
+
+  it("stops when duplicate player rows resolve to conflicting roles", () => {
+    expect(() => planRoomSecurityMigration({
+      config: { password: "secret" },
+      overrides: {},
+      existingSecret: null,
+      existingRoles: new Map(),
+      players: [
+        { id: "p1", name: "Ada", appRole: "admin" },
+        { id: "p1", name: "Ada", appRole: "viewer" },
+      ],
+    })).toThrow("conflicting roles");
+  });
+
   it("stops when no valid secret exists or no admin can be established", () => {
     expect(() => planRoomSecurityMigration({ config: {}, overrides: {}, existingSecret: null, existingRoles: new Map(), players })).toThrow("password");
     expect(() => planRoomSecurityMigration({
