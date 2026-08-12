@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createPortal } from "react-dom";
-import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, DragEndEvent, PointerSensor, type DraggableAttributes, type DraggableSyntheticListeners, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useSearchParams } from "next/navigation";
@@ -371,6 +371,29 @@ const PROFILE_ORTE     = [
   "New Babbage (microTech)", "Levski (Nyx)",
 ];
 
+function ProfileSelect({ label, value, onChange, options, placeholder }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-gray-400 text-xs mb-1 block">{label}</label>
+      <select
+        className="w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none cursor-pointer"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>{option === "" ? (placeholder ?? "----") : option}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // PROFIL-MODAL – Spieler kann eigene Daten bearbeiten (außer AppRolle)
 // ─────────────────────────────────────────────────────────────
@@ -411,25 +434,8 @@ function ProfileModal({
     setSaving(false);
   }
 
-  const selectCls = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 appearance-none cursor-pointer";
   const inputCls  = "w-full bg-gray-800 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500";
   const labelCls  = "text-gray-400 text-xs mb-1 block";
-
-  function Sel({ label, value, onChange, opts, placeholder }: {
-    label: string; value: string; onChange: (v: string) => void;
-    opts: string[]; placeholder?: string;
-  }) {
-    return (
-      <div>
-        <label className={labelCls}>{label}</label>
-        <select className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
-          {opts.map((o) => (
-            <option key={o} value={o}>{o === "" ? (placeholder ?? "----") : o}</option>
-          ))}
-        </select>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black bg-opacity-70 px-4">
@@ -454,24 +460,24 @@ function ProfileModal({
         <div className="flex flex-col gap-3">
           {/* Name – einziges Freitext-Feld */}
           <div>
-            <label className={labelCls}>Handle / Name *</label>
+            <label className="text-gray-400 text-xs mb-1 block">Handle / Name *</label>
             <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="KRT_Bjoern" />
           </div>
 
           {/* Bereich + Rolle */}
           <div className="grid grid-cols-2 gap-3">
-            <Sel label="Bereich" value={area} onChange={setArea}
-              opts={PROFILE_BEREICHE} placeholder="----" />
-            <Sel label="Rolle / Job" value={role} onChange={setRole}
-              opts={PROFILE_ROLLEN} placeholder="----" />
+            <ProfileSelect label="Bereich" value={area} onChange={setArea}
+              options={PROFILE_BEREICHE} placeholder="----" />
+            <ProfileSelect label="Rolle / Job" value={role} onChange={setRole}
+              options={PROFILE_ROLLEN} placeholder="----" />
           </div>
 
           {/* Staffel + Heimatort */}
           <div className="grid grid-cols-2 gap-3">
-            <Sel label="Staffel" value={squadron} onChange={setSquadron}
-              opts={PROFILE_STAFFELN} placeholder="----" />
-            <Sel label="Heimatort" value={home} onChange={setHome}
-              opts={PROFILE_ORTE} placeholder="----" />
+            <ProfileSelect label="Staffel" value={squadron} onChange={setSquadron}
+              options={PROFILE_STAFFELN} placeholder="----" />
+            <ProfileSelect label="Heimatort" value={home} onChange={setHome}
+              options={PROFILE_ORTE} placeholder="----" />
           </div>
 
           {/* Ampel */}
@@ -961,7 +967,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
       }
 
       // ── Kein Sheet-Eintrag → Anmeldung verweigern ────────────────────────
-      let newPlayerData: Player | null = null;
       if (!found) {
         setMsg(sheetLoad.warning ?? `"${playerName.trim()}" wurde im Sheet nicht gefunden.`);
         setLoading(false);
@@ -996,7 +1001,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
         }
       }
 
-      // (kein Self-Registration mehr – newPlayerData ist immer null)
       // Setup-Schlüssel eingegeben → Admin-Rechte vergeben
       const SETUP_KEY = process.env.NEXT_PUBLIC_SETUP_KEY ?? "tcs-setup";
       if (setupKey.trim() && setupKey.trim() === SETUP_KEY) {
@@ -1894,7 +1898,7 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
   map: { id: string; label: string; image: string }; activeMapId: string;
   setActiveMapId: (id: string) => void; isAdmin: boolean; canDelete: boolean;
   onRename: (v: string) => void; onDelete: () => void; onSetImage: (img: string) => void;
-  indent: number; isPOI?: boolean; dragListeners?: object; dragAttributes?: object;
+  indent: number; isPOI?: boolean; dragListeners?: DraggableSyntheticListeners; dragAttributes?: DraggableAttributes;
 }) {
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
@@ -1940,9 +1944,9 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
         >
           <span className="flex items-center gap-1">
             {dragListeners && (
-              <span {...(dragListeners as any)} {...(dragAttributes as any)}
+              <span {...dragListeners} {...dragAttributes}
                 className="cursor-grab active:cursor-grabbing flex-shrink-0 touch-none select-none"
-                onPointerDown={(e) => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); (dragListeners as any).onPointerDown?.(e); }}>
+                onPointerDown={(event) => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); dragListeners.onPointerDown?.(event); }}>
                 <svg width="10" height="7" viewBox="0 0 10 7" fill="currentColor" className="text-gray-500 opacity-60">
                   <circle cx="2" cy="1.5" r="1.2"/><circle cx="5" cy="1.5" r="1.2"/><circle cx="8" cy="1.5" r="1.2"/>
                   <circle cx="2" cy="5.5" r="1.2"/><circle cx="5" cy="5.5" r="1.2"/><circle cx="8" cy="5.5" r="1.2"/>
@@ -5899,7 +5903,7 @@ aliveState: na, spawnState: ns,
             })}
             {/* Breadcrumb */}
             <div className="ml-3 flex items-center gap-1 text-sm">
-              {breadcrumb.map((b: any, i: number) => (
+              {breadcrumb.map((b, i) => (
                 <React.Fragment key={b.id}>
                   {i > 0 && <span className="text-gray-600">›</span>}
                   <button className={`hover:text-white ${i === breadcrumb.length - 1 ? "text-white" : "text-gray-400"}`} onClick={() => setActiveMapId(b.id)}>
