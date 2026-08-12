@@ -269,6 +269,14 @@ function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
+function currentTimestamp(): number {
+  return Date.now();
+}
+
+function applyMapTransform(element: HTMLDivElement, x: number, y: number, scale: number) {
+  element.style.transform = `translate(${x}px,${y}px) scale(${scale})`;
+}
+
 // Stabiler deterministischer Hash aus einem String (djb2).
 // Wird als Fallback-PlayerId verwendet solange das Sheet kein PlayerId-Feld hat.
 // Gleicher Name → immer gleiche ID, unabhängig von Zeilenreihenfolge.
@@ -1114,7 +1122,6 @@ function LoginView({ roomId, onLogin, onBack }: { roomId: string; onLogin: (p: P
 function InlineEdit({ value, onSave, className = "" }: { value: string; onSave: (v: string) => void; className?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  useEffect(() => { if (!editing) setDraft(value); }, [value, editing]);
   function commit() { if (draft.trim()) onSave(draft.trim()); setEditing(false); }
   if (editing) return (
     <input className={`bg-gray-700 border border-gray-500 text-white rounded px-1 text-sm focus:outline-none ${className}`}
@@ -1903,7 +1910,6 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
   const [showUrl, setShowUrl] = useState(false);
   const [urlDraft, setUrlDraft] = useState(map.image);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  useEffect(() => setUrlDraft(map.image), [map.image]);
 
   const isActive = activeMapId === map.id;
   const icon = indent === 0 ? "🗺" : isPOI ? "🔵" : "📍";
@@ -1961,7 +1967,7 @@ function MapNavRow({ map, activeMapId, setActiveMapId, isAdmin, canDelete, onRen
         </button>
         {isAdmin && (
           <button className={`text-xs px-1 flex-shrink-0 ${showUrl ? "text-blue-400" : "text-gray-600 hover:text-blue-400"}`}
-            onClick={() => setShowUrl((v) => !v)} title="Bild-URL">🖼</button>
+            onClick={() => { setUrlDraft(map.image); setShowUrl((value) => !value); }} title="Bild-URL">🖼</button>
         )}
         {canDelete && !confirmDelete && (
           <button className="text-xs text-gray-600 hover:text-red-500 px-1 flex-shrink-0"
@@ -2318,9 +2324,6 @@ function DrawingLayer({
   const textRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (textInput && textRef.current) textRef.current.focus(); }, [textInput]);
 
-  // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
-  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
-
   function getImgRect(): DOMRect | null {
     // Canvas ist deckungsgleich mit map-img – wir nehmen das Canvas-Rect
     // damit Koordinaten korrekt sind wenn Canvas innerhalb der transform-Div sitzt
@@ -2491,6 +2494,9 @@ function DrawingLayer({
     }
   }
 
+  // Canvas neu zeichnen wenn sich Elemente, Grid oder Tool ändern
+  useEffect(() => { redraw(); }, [elements, showGrid, tool, color, strokeWidth, movingEl, markerTick]);
+
   // Canvas-Größe an Bild anpassen – wir verwenden offsetWidth/offsetHeight
   // (die CSS-Größe des Elements VOR dem äußeren CSS-transform/scale),
   // damit canvas.width/height in natürlichen Pixeln bleibt und nicht zoom-skaliert wird.
@@ -2536,7 +2542,7 @@ function DrawingLayer({
     shiftHeld.current = e.shiftKey;
     if (tool === "marker_infantry" || tool === "marker_ground" || tool === "marker_air") {
       const kind = tool.replace("marker_", "") as "infantry" | "ground" | "air";
-      onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: Date.now() });
+      onAddElement({ id: uid(), type: "marker", kind, x: p.x, y: p.y, color: "#ef4444", opacity: 1.0, createdAt: currentTimestamp() });
       if (!e.shiftKey) onResetTool?.();
       return;
     }
@@ -3064,7 +3070,7 @@ function ZoomableMap({ imageSrc, tokens, groups, board, playersById, aliveState,
         const ny = Math.max(-maxY, Math.min(maxY, panStart.current.oy + e.clientY - panStart.current.y));
         offsetRef.current = { x: nx, y: ny };
         // Direkt per DOM – kein React re-render, kein Frame-Delay
-        transformDivRef.current.style.transform = `translate(${nx}px,${ny}px) scale(${scale})`;
+        applyMapTransform(transformDivRef.current, nx, ny, scale);
       }
     }
     if (tokenDrag && canWriteTokens) {
