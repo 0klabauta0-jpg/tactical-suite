@@ -4011,15 +4011,15 @@ function BoardApp() {
   }), [panelNav, panelPlacer, panelToolbar, panelZoom, panelNotes, panelLogNotes, panelOpLog]);
   const setLocalPanelPos = (updater: (p: PanelLayout) => PanelLayout) => {
     // Shim für alle Stellen die noch setLocalPanelPos nutzen (clamp-Effects etc.)
-    const cur: PanelLayout = { nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom, notes: panelNotes as any, logNotes: panelLogNotes as any, opLog: panelOpLog as any };
+    const cur: PanelLayout = { nav: panelNav, placer: panelPlacer, toolbar: panelToolbar, zoom: panelZoom, notes: panelNotes, logNotes: panelLogNotes, opLog: panelOpLog };
     const next = updater(cur);
     if (next.nav !== cur.nav) setPanelNav(next.nav);
     if (next.placer !== cur.placer) setPanelPlacer(next.placer);
     if (next.toolbar !== cur.toolbar) setPanelToolbar(next.toolbar);
     if (next.zoom !== cur.zoom) setPanelZoom(next.zoom);
-    if (next.notes !== cur.notes) setPanelNotes(next.notes as any);
-    if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes as any);
-    if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog as any);
+    if (next.notes !== cur.notes) setPanelNotes(next.notes);
+    if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes);
+    if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog);
   };
 
   // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
@@ -4619,30 +4619,30 @@ aliveState: na, spawnState: ns,
 
   const movePanelNotes = useCallback((x: number, y: number) => {
     setPanelNotes(n => {
-      const pos = clampPanelPosition(x, y, (n as any).w, (n as any).h);
+      const pos = clampPanelPosition(x, y, n.w, n.h);
       return { ...n, ...pos };
     });
   }, []);
 
   const resizePanelNotes = useCallback((w: number, h: number) => {
     setPanelNotes(n => {
-      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, (n as any).x, (n as any).y);
-      const pos  = clampPanelPosition((n as any).x, (n as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, NOTES_MIN_W, NOTES_MIN_H, n.x, n.y);
+      const pos  = clampPanelPosition(n.x, n.y, size.w, size.h);
       return { ...n, ...size, ...pos };
     });
   }, []);
 
   const movePanelLogNotes = useCallback((x: number, y: number) => {
     setPanelLogNotes(ln => {
-      const pos = clampPanelPosition(x, y, (ln as any).w, (ln as any).h);
+      const pos = clampPanelPosition(x, y, ln.w, ln.h);
       return { ...ln, ...pos };
     });
   }, []);
 
   const resizePanelLogNotes = useCallback((w: number, h: number) => {
     setPanelLogNotes(ln => {
-      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, (ln as any).x, (ln as any).y);
-      const pos  = clampPanelPosition((ln as any).x, (ln as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, LOG_MIN_W, LOG_MIN_H, ln.x, ln.y);
+      const pos  = clampPanelPosition(ln.x, ln.y, size.w, size.h);
       return { ...ln, ...size, ...pos };
     });
   }, []);
@@ -4653,15 +4653,15 @@ aliveState: na, spawnState: ns,
 
   const movePanelOpLog = useCallback((x: number, y: number) => {
     setPanelOpLog(ol => {
-      const pos = clampPanelPosition(x, y, (ol as any).w, (ol as any).h);
+      const pos = clampPanelPosition(x, y, ol.w, ol.h);
       return { ...ol, ...pos };
     });
   }, []);
 
   const resizePanelOpLog = useCallback((w: number, h: number) => {
     setPanelOpLog(ol => {
-      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, (ol as any).x, (ol as any).y);
-      const pos  = clampPanelPosition((ol as any).x, (ol as any).y, size.w, size.h);
+      const size = clampPanelSize(w, h, OPLOG_MIN_W, OPLOG_MIN_H, ol.x, ol.y);
+      const pos  = clampPanelPosition(ol.x, ol.y, size.w, size.h);
       return { ...ol, ...size, ...pos };
     });
   }, []);
