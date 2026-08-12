@@ -20,17 +20,21 @@ export function planRoomSecurityMigration(input: {
   const legacyPassword = typeof config.password === "string" && config.password.length > 0 ? config.password : null;
   if (!input.existingSecret && !legacyPassword) throw new Error("No valid protected or legacy room password exists.");
 
+  const parsedOverrides = parsePlayerOverrides(input.overrides);
   const roles: Array<{ playerId: string; role: Role }> = [];
   let adminCount = 0;
   for (const player of input.players) {
     const existing = parseProtectedRoleOverride(input.existingRoles.get(player.id));
-    const role = existing?.role ?? player.appRole;
+    const legacyOverride = parsedOverrides[player.id];
+    const sheetRoleChanged = legacyOverride?.lastSheetAppRole !== undefined
+      && player.appRole !== legacyOverride.lastSheetAppRole;
+    const legacyRole = sheetRoleChanged ? player.appRole : (legacyOverride?.appRole ?? player.appRole);
+    const role = existing?.role ?? legacyRole;
     if (role === "admin") adminCount += 1;
     if (!existing?.role) roles.push({ playerId: player.id, role });
   }
   if (adminCount === 0) throw new Error("Migration requires at least one unambiguous admin.");
 
-  const parsedOverrides = parsePlayerOverrides(input.overrides);
   let overridesChanged = false;
   const cleanedOverrides = Object.fromEntries(Object.entries(parsedOverrides).map(([playerId, override]) => {
     const safe = { ...override } as Record<string, unknown>;

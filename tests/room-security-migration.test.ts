@@ -16,13 +16,13 @@ describe("room security migration", () => {
       overrides: { p1: { appRole: "commander", lastSheetAppRole: "admin", area: "A" }, p2: { area: "B" } },
       existingSecret: null,
       existingRoles: new Map(),
-      players,
+      players: players.map((player) => player.id === "p3" ? { ...player, appRole: "admin" as const } : player),
     });
     expect(plan).toMatchObject({ passwordToHash: "room-secret", removeLegacyPassword: true });
     expect(plan.roles).toEqual([
-      { playerId: "p1", role: "admin" },
+      { playerId: "p1", role: "commander" },
       { playerId: "p2", role: "commander" },
-      { playerId: "p3", role: "viewer" },
+      { playerId: "p3", role: "admin" },
     ]);
     expect(plan.cleanedOverrides).toEqual({ p1: { area: "A" }, p2: { area: "B" } });
   });
@@ -40,6 +40,18 @@ describe("room security migration", () => {
     expect(plan.roles).toEqual([]);
     expect(plan.removeLegacyPassword).toBe(false);
     expect(plan.overridesChanged).toBe(false);
+  });
+
+  it("preserves a legacy admin override when the sheet role has not changed", () => {
+    const plan = planRoomSecurityMigration({
+      config: { password: "secret" },
+      overrides: { p1: { appRole: "admin", lastSheetAppRole: "viewer" } },
+      existingSecret: null,
+      existingRoles: new Map(),
+      players: [{ id: "p1", name: "Ada", appRole: "viewer" }],
+    });
+
+    expect(plan.roles).toEqual([{ playerId: "p1", role: "admin" }]);
   });
 
   it("stops when no valid secret exists or no admin can be established", () => {
