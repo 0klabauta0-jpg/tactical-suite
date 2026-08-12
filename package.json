@@ -18,6 +18,7 @@
     "room:backup:verify": "tsx scripts/verify-room-backup.ts",
     "room:features": "tsx scripts/set-room-features.ts",
     "room:audit-tokens": "tsx scripts/audit-token-locations.ts",
+    "room:normalize-tokens": "tsx scripts/normalize-token-locations.ts",
     "room:rockbreaker-entry": "tsx scripts/set-rockbreaker-entry.ts"
   },
   "dependencies": {
