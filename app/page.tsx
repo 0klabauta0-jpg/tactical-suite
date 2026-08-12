@@ -13,6 +13,7 @@ import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
+import { buildRoomTemplateCopy } from "@/lib/rooms/template";
 import { getErrorCode, getErrorMessage } from "@/lib/error-details";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
@@ -606,17 +607,12 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         updatedAt: serverTimestamp(),
       });
 
+      let templateWarning = "";
       if (templateRoomId && templateRoomId !== roomId) {
         try {
           const templateSnap = await getDoc(doc(db, "rooms", templateRoomId, "state", "board"));
           if (templateSnap.exists()) {
-            const td = templateSnap.data() as any;
-            const templateData: Record<string, any> = {};
-
-            if (Array.isArray(td.groups) && td.groups.length > 0) templateData.groups = td.groups;
-            if (td.columns && Object.keys(td.columns).length > 0) templateData.columns = td.columns;
-            if (Array.isArray(td.maps) && td.maps.length > 0) templateData.maps = td.maps;
-            if (Array.isArray(td.pois) && td.pois.length > 0) templateData.pois = td.pois;
+            const templateData = buildRoomTemplateCopy(templateSnap.data());
 
             if (Object.keys(templateData).length > 0) {
               await setDoc(
@@ -626,7 +622,10 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
               );
             }
           }
-        } catch (_) {}
+        } catch (error: unknown) {
+          templateWarning = ` Vorlage konnte nicht übernommen werden: ${getErrorMessage(error, "unbekannter Fehler")}`;
+          console.error("[KlabsCom] Vorlage konnte nicht übernommen werden", error);
+        }
       }
 
       if (adminHandle.trim()) {
@@ -670,7 +669,7 @@ function RoomSetupView({ roomId, onDone }: { roomId: string; onDone?: (p: Player
         return;
       }
 
-      setMsg({ text: "✓ Konfiguration gespeichert. Raum ist jetzt aktiv.", ok: true });
+      setMsg({ text: `✓ Konfiguration gespeichert. Raum ist jetzt aktiv.${templateWarning}`, ok: true });
     } catch (e: unknown) {
       setMsg({ text: `Fehler: ${getErrorMessage(e, "Unbekannt")}`, ok: false });
     } finally {
