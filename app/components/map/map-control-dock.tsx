@@ -9,6 +9,7 @@ export type MapControlDockProps = {
   onPreferencesChange: (next: MapUiPreferences) => void;
   maps: React.ReactNode;
   tokens: React.ReactNode;
+  enemy?: React.ReactNode;
   drawing: React.ReactNode;
 };
 
@@ -43,7 +44,7 @@ function DockSection({ id, label, open, onToggle, children }: SectionProps) {
   );
 }
 
-export function MapControlDock({ preferences, onPreferencesChange, maps, tokens, drawing }: MapControlDockProps) {
+export function MapControlDock({ preferences, onPreferencesChange, maps, tokens, enemy, drawing }: MapControlDockProps) {
   const dockRef = useRef<HTMLElement>(null);
   const drag = useRef({ active: false, pointerY: 0, dockY: 0 });
 
@@ -83,7 +84,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
         ref={dockRef}
         aria-label="Kartensteuerung"
         data-collapsed="true"
-        className="fixed left-0 z-50 rounded-r-xl border border-l-0 border-gray-600 bg-gray-900/95 shadow-2xl"
+        className="fixed right-0 z-50 rounded-l-xl border border-r-0 border-gray-600 bg-gray-900/95 shadow-2xl"
         style={{ top: preferences.dockY }}
       >
         <button
@@ -93,7 +94,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
           title="Kartensteuerung ausklappen"
           onClick={() => onPreferencesChange({ ...preferences, dockCollapsed: false })}
         >
-          ›
+          ‹
         </button>
       </aside>
     );
@@ -102,6 +103,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
   const sections: Array<{ id: keyof MapControlSections; label: string; content: React.ReactNode }> = [
     { id: "maps", label: "Karten", content: maps },
     ...(tokens === null || tokens === undefined ? [] : [{ id: "tokens" as const, label: "Token", content: tokens }]),
+    ...(enemy === null || enemy === undefined ? [] : [{ id: "enemy" as const, label: "Feindmarker", content: enemy }]),
     ...(drawing === null || drawing === undefined ? [] : [{ id: "drawing" as const, label: "Zeichnen", content: drawing }]),
   ];
 
@@ -110,7 +112,7 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
       ref={dockRef}
       aria-label="Kartensteuerung"
       data-collapsed="false"
-      className="fixed left-0 z-50 w-[min(360px,calc(100vw-16px))] overflow-hidden rounded-r-2xl border border-l-0 border-gray-600 bg-gray-900/95 shadow-2xl"
+      className="fixed right-0 z-50 w-[min(280px,calc(100vw-16px))] overflow-hidden rounded-l-2xl border border-r-0 border-gray-600 bg-gray-900/95 shadow-2xl"
       style={{ top: preferences.dockY, maxHeight: `calc(100vh - ${preferences.dockY + 8}px)` }}
       onPointerDown={(event) => event.stopPropagation()}
     >
@@ -138,11 +140,11 @@ export function MapControlDock({ preferences, onPreferencesChange, maps, tokens,
           type="button"
           className="rounded px-2 py-1 text-sm text-gray-300 hover:bg-gray-800 hover:text-white"
           aria-label="Steuerleiste einklappen"
-          title="Nach links einklappen"
+          title="Nach rechts einklappen"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => onPreferencesChange({ ...preferences, dockCollapsed: true })}
         >
-          ‹
+          ›
         </button>
       </div>
 

@@ -1,4 +1,4 @@
-export type MapControlSections = { maps: boolean; tokens: boolean; drawing: boolean };
+export type MapControlSections = { maps: boolean; tokens: boolean; enemy: boolean; drawing: boolean };
 export type MapUiPreferences = {
   showGrid: boolean;
   dockCollapsed: boolean;
@@ -12,7 +12,7 @@ export const DEFAULT_MAP_UI_PREFERENCES: MapUiPreferences = {
   showGrid: true,
   dockCollapsed: false,
   dockY: 70,
-  sections: { maps: true, tokens: true, drawing: true },
+  sections: { maps: false, tokens: false, enemy: false, drawing: false },
 };
 
 function defaults(): MapUiPreferences {
@@ -29,9 +29,10 @@ export function parseMapUiPreferences(value: unknown): MapUiPreferences {
     dockCollapsed: typeof record.dockCollapsed === "boolean" ? record.dockCollapsed : false,
     dockY: typeof record.dockY === "number" && Number.isFinite(record.dockY) ? Math.max(70, record.dockY) : 70,
     sections: {
-      maps: typeof sections.maps === "boolean" ? sections.maps : true,
-      tokens: typeof sections.tokens === "boolean" ? sections.tokens : true,
-      drawing: typeof sections.drawing === "boolean" ? sections.drawing : true,
+      maps: typeof sections.maps === "boolean" ? sections.maps : false,
+      tokens: typeof sections.tokens === "boolean" ? sections.tokens : false,
+      enemy: typeof sections.enemy === "boolean" ? sections.enemy : false,
+      drawing: typeof sections.drawing === "boolean" ? sections.drawing : false,
     },
   };
 }

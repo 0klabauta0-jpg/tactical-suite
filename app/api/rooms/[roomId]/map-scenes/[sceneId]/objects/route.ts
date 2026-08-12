@@ -38,7 +38,7 @@ export async function POST(request: Request, context: Context) {
     }), 201);
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
-    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 400);
+    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : error.code === "PROTECTED_OBJECT" ? 409 : 400);
     return json({ error: "Objekt konnte nicht erstellt werden." }, 500);
   }
 }

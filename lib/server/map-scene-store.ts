@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Role } from "@/lib/domain/roles";
 import type { WorldPoint } from "@/lib/rockbreaker/coordinates";
 import { parseWorldPoint, type SceneObject } from "@/lib/rockbreaker/scene-objects";
-import { groupTokenObjectId, orderMarkerObjectId } from "@/lib/rockbreaker/scene-objects";
+import { orderMarkerObjectId } from "@/lib/rockbreaker/scene-objects";
 
 export type MapSceneActor = { uid: string; role: Role };
 export type SceneObjectDraft =
@@ -26,7 +26,7 @@ export type MapSceneTransactionStore = {
 
 export class MapSceneStoreError extends Error {
   constructor(
-    public readonly code: "FORBIDDEN" | "FEATURE_DISABLED" | "INVALID_SCENE" | "INVALID_OBJECT" | "OBJECT_NOT_FOUND" | "OBJECT_LOCKED" | "REVISION_CONFLICT" | "LOCK_MISMATCH",
+    public readonly code: "FORBIDDEN" | "FEATURE_DISABLED" | "INVALID_SCENE" | "INVALID_OBJECT" | "PROTECTED_OBJECT" | "OBJECT_NOT_FOUND" | "OBJECT_LOCKED" | "REVISION_CONFLICT" | "LOCK_MISMATCH",
     public readonly currentObject?: SceneObject | null,
   ) { super(code); }
 }
@@ -52,10 +52,10 @@ export async function createSceneObject(store: MapSceneTransactionStore, input: 
 }): Promise<SceneObject> {
   assertWriter(input.actor);
   assertBoundary(input.sceneId);
+  if (input.draft.type === "groupToken") throw new MapSceneStoreError("PROTECTED_OBJECT");
   if (!validDraft(input.draft)) throw new MapSceneStoreError("INVALID_OBJECT");
-  const objectId = input.draft.type === "groupToken" ? groupTokenObjectId(input.draft.groupId)
-    : input.draft.type === "orderMarker" ? orderMarkerObjectId(input.draft.groupId)
-      : `${input.draft.type}--${randomUUID()}`;
+  const objectId = input.draft.type === "orderMarker" ? orderMarkerObjectId(input.draft.groupId)
+    : `${input.draft.type}--${randomUUID()}`;
   const result = await store.runObjectTransaction(input.roomId, input.sceneId, objectId, async ({ object, groupIds, rockbreakerEnabled }) => {
     assertFeatureEnabled(rockbreakerEnabled);
     if (object) return object;
@@ -126,6 +126,7 @@ export async function deleteSceneObject(store: MapSceneTransactionStore, input: 
   await store.runObjectTransaction(input.roomId, input.sceneId, input.objectId, async ({ object, rockbreakerEnabled }) => {
     assertFeatureEnabled(rockbreakerEnabled);
     if (!object) throw new MapSceneStoreError("OBJECT_NOT_FOUND");
+    if (object.type === "groupToken") throw new MapSceneStoreError("PROTECTED_OBJECT", object);
     return null;
   });
 }

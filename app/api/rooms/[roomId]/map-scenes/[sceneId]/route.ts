@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { buildRockbreakerEntryUpdate } from "@/lib/release/rockbreaker-entry-rollout";
 import { RoomAuthError } from "@/lib/server/room-auth";
 
 type Context = { params: Promise<{ roomId: string; sceneId: string }> };
@@ -12,7 +13,7 @@ export async function PUT(request: Request, context: Context) {
   ]);
   try {
     const member = await requireRoomMember(request, roomId, { roles: ["admin"], freshRole: true });
-    const metadata = { systemId: "nyx", mapId: "rockbreaker", renderer: "rockbreaker3d", sceneVersion: 1, updatedBy: member.uid };
+    const metadata = { ...buildRockbreakerEntryUpdate(null), updatedBy: member.uid };
     await getAdminFirestore().doc(`rooms/${roomId}/mapScenes/${sceneId}`).set(metadata, { merge: true });
     return json(metadata);
   } catch (error) {

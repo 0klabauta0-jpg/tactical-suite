@@ -2,35 +2,50 @@
 
 import { useEffect, useRef, useState } from "react";
 import type * as Three from "three";
+import { ParentLevelDropTarget, tokenDropIntentAtPoint } from "@/app/components/map/token-transfer-controls";
 import type { BoardGroup } from "@/lib/board/state";
-import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject, subscribeSceneObjects } from "@/lib/map-scene/client";
+import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject } from "@/lib/map-scene/client";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
 import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type WorldPoint } from "@/lib/rockbreaker/coordinates";
 import { confirmedObjectPosition, type SceneObject } from "@/lib/rockbreaker/scene-objects";
 
-type Placement = { type: "groupToken"; groupId: string } | { type: "enemyMarker"; kind: "infantry" | "ground" | "air" } | null;
+export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
 
-export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, getIdToken, onBack, objectsOverride, initialCameraAzimuth = 0.7 }: {
+export function RockbreakerMap({
+  roomId,
+  sceneId,
+  groups,
+  objects,
+  enemyPlacement,
+  showGrid,
+  canWrite,
+  getIdToken,
+  onBack,
+  onMoveGroupUp,
+  initialCameraAzimuth = 0.7,
+}: {
   roomId: string;
   sceneId: string;
   groups: BoardGroup[];
+  objects: SceneObject[];
+  enemyPlacement: RockbreakerEnemyKind | null;
   showGrid: boolean;
   canWrite: boolean;
   getIdToken: () => Promise<string>;
   onBack: () => void;
-  objectsOverride?: SceneObject[];
+  onMoveGroupUp: (groupId: string, revision: number) => Promise<void>;
   initialCameraAzimuth?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [objects, setObjects] = useState<SceneObject[]>([]);
-  const objectsRef = useRef<SceneObject[]>([]);
-  const [placement, setPlacement] = useState<Placement>(null);
-  const placementRef = useRef<Placement>(null);
+  const objectsRef = useRef<SceneObject[]>(objects);
+  const enemyPlacementRef = useRef<RockbreakerEnemyKind | null>(enemyPlacement);
+  const onMoveGroupUpRef = useRef(onMoveGroupUp);
+  const groupLabelRefs = useRef(new Map<string, HTMLSpanElement>());
+  const [sceneReady, setSceneReady] = useState(0);
   const [message, setMessage] = useState("Weltkoordinaten in km");
   const getIdTokenRef = useRef(getIdToken);
   const canWriteRef = useRef(canWrite);
-  const groupsRef = useRef(groups);
   const showGridRef = useRef(showGrid);
   const initialCameraAzimuthRef = useRef(initialCameraAzimuth);
   const sceneContext = useRef<{
@@ -44,19 +59,12 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
     objectMeshes: Map<string, Three.Object3D>;
   } | null>(null);
 
-  useEffect(() => { placementRef.current = placement; }, [placement]);
+  useEffect(() => { objectsRef.current = objects; }, [objects]);
+  useEffect(() => { enemyPlacementRef.current = enemyPlacement; }, [enemyPlacement]);
+  useEffect(() => { onMoveGroupUpRef.current = onMoveGroupUp; }, [onMoveGroupUp]);
   useEffect(() => { getIdTokenRef.current = getIdToken; }, [getIdToken]);
   useEffect(() => { canWriteRef.current = canWrite; }, [canWrite]);
-  useEffect(() => { groupsRef.current = groups; }, [groups]);
   useEffect(() => { showGridRef.current = showGrid; if (sceneContext.current) sceneContext.current.grid.visible = showGrid; }, [showGrid]);
-  useEffect(() => {
-    if (objectsOverride) {
-      objectsRef.current = objectsOverride;
-      setObjects(objectsOverride);
-      return;
-    }
-    return subscribeSceneObjects(roomId, sceneId, (next) => { objectsRef.current = next; setObjects(next); });
-  }, [roomId, sceneId, objectsOverride]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -108,7 +116,7 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
       const objectRoot = new THREE.Group(); scene.add(objectRoot);
       const objectMeshes = new Map<string, Three.Object3D>();
       sceneContext.current = { THREE, scene, camera, renderer, grid, asteroidMeshes, objectRoot, objectMeshes };
-      setObjects([...objectsRef.current]);
+      setSceneReady((revision) => revision + 1);
 
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
@@ -138,7 +146,7 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
       };
 
       const orbit = { active: false, x: 0, y: 0, azimuth: 0, elevation: 0 };
-      let drag: { object: PositionedSceneObject; mesh: Three.Object3D; lockRevision: number; point: WorldPoint } | null = null;
+      let drag: { object: PositionedSceneObject; mesh: Three.Object3D; lockRevision?: number; point: WorldPoint } | null = null;
       const down = (event: PointerEvent) => {
         setRay(event);
         const objectHit = raycaster.intersectObjects([...objectMeshes.values()], true).find((hit) => hit.object.userData.objectId || hit.object.parent?.userData.objectId);
@@ -146,6 +154,12 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
         const object = objectsRef.current.find((candidate) => candidate.id === objectId);
         if (object && canWriteRef.current && "position" in object) {
           event.preventDefault();
+          canvas.setPointerCapture(event.pointerId);
+          if (object.type === "groupToken") {
+            const mesh = objectMeshes.get(object.id);
+            if (mesh) drag = { object, mesh, point: object.position };
+            return;
+          }
           void lockMapSceneObject(roomId, sceneId, object.id, () => getIdTokenRef.current()).then((locked) => {
             const mesh = objectMeshes.get(object.id);
             if (mesh && "position" in locked) drag = { object: locked, mesh, lockRevision: locked.lockRevision ?? 0, point: locked.position };
@@ -170,22 +184,32 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
       const up = (event: PointerEvent) => {
         if (drag) {
           const current = drag; drag = null;
-          void moveMapSceneObject(roomId, sceneId, current.object, current.point, current.lockRevision, () => getIdTokenRef.current())
-            .then(() => setMessage(`Gespeichert: ${current.point.x.toFixed(2)} / ${current.point.y.toFixed(2)} / ${current.point.z.toFixed(2)} km`))
+          const dropIntent = tokenDropIntentAtPoint(event.clientX, event.clientY);
+          const operation = current.object.type === "groupToken" && dropIntent?.kind === "moveUp"
+            ? onMoveGroupUpRef.current(current.object.groupId, current.object.revision)
+            : current.object.type === "groupToken"
+              ? lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
+                  if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
+                  return moveMapSceneObject(roomId, sceneId, locked, current.point, locked.lockRevision ?? 0, () => getIdTokenRef.current());
+                })
+              : moveMapSceneObject(roomId, sceneId, current.object, current.point, current.lockRevision ?? 0, () => getIdTokenRef.current());
+          void operation
+            .then(() => setMessage(dropIntent?.kind === "moveUp"
+              ? "Trupp wurde nach Nyx verschoben."
+              : `Gespeichert: ${current.point.x.toFixed(2)} / ${current.point.y.toFixed(2)} / ${current.point.z.toFixed(2)} km`))
             .catch((reason) => {
               const confirmed = confirmedObjectPosition(objectsRef.current, current.object.id, current.object.position);
               current.mesh.position.set(confirmed.x, confirmed.y, confirmed.z);
               setMessage(reason instanceof Error ? reason.message : "Positionskonflikt – Serverstand übernommen.");
             });
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
           return;
         }
-        const selected = placementRef.current;
+        const selected = enemyPlacementRef.current;
         if (selected && canWriteRef.current && Math.abs(event.clientX - orbit.x) < 4 && Math.abs(event.clientY - orbit.y) < 4) {
           const point = pointAt(event);
           if (point) {
-            const draft = selected.type === "groupToken"
-              ? { type: "groupToken" as const, groupId: selected.groupId, color: groupsRef.current.find((group) => group.id === selected.groupId)?.color ? `#${groupsRef.current.find((group) => group.id === selected.groupId)!.color}` : "#3b82f6", position: point }
-              : { type: "enemyMarker" as const, kind: selected.kind, color: "#ef4444", position: point };
+            const draft = { type: "enemyMarker" as const, kind: selected, color: "#ef4444", position: point };
             void createMapSceneObject(roomId, sceneId, draft, () => getIdTokenRef.current()).then(() => setMessage("3D-Objekt gespeichert.")).catch((reason) => setMessage(reason instanceof Error ? reason.message : "Objekt konnte nicht gesetzt werden."));
           }
         }
@@ -201,7 +225,20 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
         renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix();
       });
       resizeObserver.observe(canvas);
-      const animate = () => { renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate); };
+      const animate = () => {
+        renderer.render(scene, camera);
+        for (const object of objectsRef.current) {
+          if (object.type !== "groupToken") continue;
+          const label = groupLabelRefs.current.get(object.groupId);
+          const mesh = objectMeshes.get(object.id);
+          if (!label || !mesh) continue;
+          const projected = mesh.position.clone().project(camera);
+          label.style.left = `${(projected.x * 0.5 + 0.5) * canvas.clientWidth}px`;
+          label.style.top = `${(-projected.y * 0.5 + 0.5) * canvas.clientHeight}px`;
+          label.style.display = projected.z >= -1 && projected.z <= 1 ? "block" : "none";
+        }
+        animationFrame = requestAnimationFrame(animate);
+      };
       animate();
     }).catch(() => setMessage("WebGL konnte nicht gestartet werden."));
 
@@ -246,31 +283,41 @@ export function RockbreakerMap({ roomId, sceneId, groups, showGrid, canWrite, ge
       mesh.userData.objectId = object.id;
       objectRoot.add(mesh); objectMeshes.set(object.id, mesh);
     }
-  }, [objects]);
+  }, [objects, sceneReady]);
 
-  const tacticalGroups = groups.filter((group) => !group.isSpawn && group.id !== "unassigned");
   return (
     <div className="absolute inset-0 bg-gray-950">
-      <canvas ref={canvasRef} className="h-full w-full touch-none" aria-label="Rockbreaker 3D Karte" />
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" aria-label="Rockbreaker 3D Karte" />
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden="true">
+        {objects.flatMap((object) => object.type === "groupToken" ? [(
+          <span
+            key={object.id}
+            ref={(element) => {
+              if (element) groupLabelRefs.current.set(object.groupId, element);
+              else groupLabelRefs.current.delete(object.groupId);
+            }}
+            data-testid={`rockbreaker-group-${object.groupId}`}
+            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-gray-950/90 px-2 py-1 text-xs font-bold text-white shadow-xl"
+            style={{ borderColor: object.color }}
+          >
+            {groups.find((group) => group.id === object.groupId)?.label ?? object.groupId}
+          </span>
+        )] : [])}
+      </div>
       <div className="absolute left-3 top-3 z-10 max-w-xs rounded-xl border border-gray-600 bg-gray-950/90 p-3 text-white shadow-xl">
         <div className="flex items-center gap-2">
           <button className="rounded-lg border border-gray-600 px-2 py-1 text-xs hover:bg-gray-800" onClick={onBack}>← Nyx</button>
           <span className="text-sm font-black">Rockbreaker 3D</span>
         </div>
-        {canWrite && (
-          <div className="mt-3 space-y-2">
-            <select aria-label="Truppenmarker" className="w-full rounded-lg border border-gray-600 bg-gray-800 px-2 py-2 text-xs" value={placement?.type === "groupToken" ? placement.groupId : ""}
-              onChange={(event) => setPlacement(event.target.value ? { type: "groupToken", groupId: event.target.value } : null)}>
-              <option value="">Truppe setzen …</option>
-              {tacticalGroups.map((group) => <option key={group.id} value={group.id}>{group.label}</option>)}
-            </select>
-            <div className="grid grid-cols-3 gap-1">
-              {(["infantry", "ground", "air"] as const).map((kind) => <button key={kind} className={`rounded border px-1 py-2 text-xs ${placement?.type === "enemyMarker" && placement.kind === kind ? "border-red-500 bg-red-900" : "border-gray-700 bg-gray-800"}`} onClick={() => setPlacement({ type: "enemyMarker", kind })}>{kind === "infantry" ? "INF" : kind === "ground" ? "BDN" : "LUFT"}</button>)}
-            </div>
-          </div>
-        )}
         <p className="mt-2 text-[11px] text-gray-400">{message}</p>
       </div>
+      {canWrite && (
+        <ParentLevelDropTarget
+          parentLabel="Nyx"
+          testId="rockbreaker-move-up"
+          className="absolute left-1/2 top-3 z-30 -translate-x-1/2 shadow-2xl"
+        />
+      )}
     </div>
   );
 }
