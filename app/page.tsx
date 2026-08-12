@@ -13,6 +13,7 @@ import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
 import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
+import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -31,10 +32,6 @@ const APP_VERSION = "1.010";
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
-
-// color: optional hex ohne #, z.B. "e63946"
-type Group = { id: string; label: string; isSpawn?: boolean; color?: string; icon?: string; systemId?: string };
-type BoardState = { groups: Group[]; columns: Record<string, string[]> };
 
 // GroupRoles: leader/deputy pro Gruppe
 type GroupRoles = Record<string, { leader?: string; deputy?: string }>;
@@ -251,12 +248,6 @@ function stableId(str: string): string {
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
   return "p_" + (h >>> 0).toString(36);
-}
-
-function safeBoard(data: any, groups: Group[]): BoardState {
-  const cols: Record<string, string[]> = {};
-  for (const g of groups) cols[g.id] = Array.isArray(data?.columns?.[g.id]) ? data.columns[g.id] : [];
-  return { groups, columns: cols };
 }
 
 function normalizeToken(t: Token): Token {
@@ -4325,12 +4316,12 @@ useEffect(() => {
     if (!user) return;
     const ref = doc(db, "rooms", roomId, "state", "board");
     const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as any;
-      if (!data) return;
-      const rawGroups: Group[] = Array.isArray(data.groups) && data.groups.length > 0 ? data.groups : DEFAULT_GROUPS;
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const parsedBoard = parseBoardState(data, DEFAULT_GROUPS);
       // Rückwärtskompatibilität: Gruppen ohne systemId bekommen "pyro" als Default
-      const loadedGroups: Group[] = rawGroups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
-      setBoard(safeBoard(data, loadedGroups));
+      const loadedGroups: Group[] = parsedBoard.groups.map((g) => g.systemId ? g : { ...g, systemId: "pyro" });
+      setBoard({ ...parsedBoard, groups: loadedGroups });
       
 // ── Map data: prefer per-system fields, fallback legacy → LEGACY_DEFAULT_SYSTEM
 let didMigrate = false;
