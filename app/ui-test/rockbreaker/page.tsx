@@ -13,9 +13,28 @@ function objectAt(x: number, y: number, z: number): SceneObject {
   };
 }
 
+function oldEnemyAt(): SceneObject {
+  return {
+    id: "enemy--old",
+    type: "enemyMarker",
+    kind: "ground",
+    systemId: "nyx",
+    mapId: "rockbreaker",
+    sceneVersion: 1,
+    color: "#ef4444",
+    position: { x: -2, y: 0, z: 3, sceneVersion: 1, anchor: { kind: "beltPlane" } },
+    revision: 1,
+    createdBy: "test",
+    createdAtMs: 1,
+    updatedBy: "test",
+    updatedAtMs: 1,
+  };
+}
+
 export default function RockbreakerTestPage() {
-  const [objects, setObjects] = useState<SceneObject[]>([objectAt(1, 0, 1)]);
+  const [objects, setObjects] = useState<SceneObject[]>([objectAt(1, 0, 1), oldEnemyAt()]);
   const [cameraA, setCameraA] = useState(0.2);
+  const [, setSceneClock] = useState(0);
   if (process.env.NEXT_PUBLIC_ENABLE_UI_TEST_ROUTES !== "1") notFound();
   const coordinate = objects[0] && "position" in objects[0]
     ? `${objects[0].position.x.toFixed(2)} / ${objects[0].position.y.toFixed(2)} / ${objects[0].position.z.toFixed(2)}`
@@ -40,8 +59,10 @@ export default function RockbreakerTestPage() {
   return (
     <main className="min-h-screen bg-gray-950 p-3 text-white">
       <div className="mb-3 flex flex-wrap gap-2">
-        <button className="rounded bg-blue-700 px-3 py-2" onClick={() => setObjects([objectAt(4, 2, -3)])}>Objekt auf 4 / 2 / -3 setzen</button>
+        <button className="rounded bg-blue-700 px-3 py-2" onClick={() => setObjects((current) => [objectAt(4, 2, -3), ...current.filter((object) => object.type === "enemyMarker")])}>Objekt auf 4 / 2 / -3 setzen</button>
         <button className="rounded bg-gray-700 px-3 py-2" onClick={() => setCameraA((value) => value + 0.5)}>Kamera A drehen</button>
+        <button className="rounded bg-gray-700 px-3 py-2" onClick={() => setSceneClock((value) => value + 365 * 24 * 60 * 60 * 1000)}>3D-Zeit ein Jahr vorspulen</button>
+        <button className="rounded bg-red-800 px-3 py-2" onClick={() => setObjects((current) => current.filter((object) => object.type !== "enemyMarker"))}>3D-Feindmarker löschen</button>
       </div>
       <div className="grid h-[70vh] grid-cols-2 gap-2">
         <div className="relative" key={cameraA}><RockbreakerMap {...shared} initialCameraAzimuth={cameraA} /></div>
@@ -51,6 +72,7 @@ export default function RockbreakerTestPage() {
       <div data-testid="camera-b-coordinate">{coordinate}</div>
       <div data-testid="scene-anchor">{anchor}</div>
       <div data-testid="scene-object-count">{objects.length}</div>
+      <div data-testid="rockbreaker-enemy-count">{objects.filter((object) => object.type === "enemyMarker").length}</div>
       <div>Grid sichtbar · Fight Team</div>
     </main>
   );

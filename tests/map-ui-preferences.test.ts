@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAP_UI_PREFERENCES, loadMapUiPreferences, parseMapUiPreferences } from "@/lib/map/ui-preferences";
+import { DEFAULT_MAP_UI_PREFERENCES, loadMapUiPreferences, parseMapUiPreferences, saveMapUiPreferences } from "@/lib/map/ui-preferences";
 
 describe("map UI preferences", () => {
   it("starts with a visible grid and compact dock sections", () => {
@@ -22,5 +22,16 @@ describe("map UI preferences", () => {
   it("falls back for malformed storage", () => {
     expect(loadMapUiPreferences({ getItem: () => "{broken", setItem: () => undefined }, "key"))
       .toEqual(DEFAULT_MAP_UI_PREFERENCES);
+  });
+
+  it("keeps an explicit hidden grid per player and restores the default for a new key", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    saveMapUiPreferences(storage, "room-a:player-a", { ...DEFAULT_MAP_UI_PREFERENCES, showGrid: false });
+    expect(loadMapUiPreferences(storage, "room-a:player-a").showGrid).toBe(false);
+    expect(loadMapUiPreferences(storage, "room-b:player-b").showGrid).toBe(true);
   });
 });

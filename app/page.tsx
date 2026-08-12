@@ -3796,20 +3796,27 @@ function BoardApp() {
   const [notesVisible, setNotesVisible] = useState(true);
   const [mapUiPreferences, setMapUiPreferences] = useState<MapUiPreferences>(DEFAULT_MAP_UI_PREFERENCES);
   const loadedMapUiKey = useRef<string | null>(null);
+  const skipNextMapUiSave = useRef(true);
   const mapUiStorageKey = currentPlayer ? `klabscom:map-ui:${roomId}:${currentPlayer.id}` : null;
 
   useEffect(() => {
     if (!mapUiStorageKey) {
       loadedMapUiKey.current = null;
+      skipNextMapUiSave.current = true;
       setMapUiPreferences(DEFAULT_MAP_UI_PREFERENCES);
       return;
     }
+    skipNextMapUiSave.current = true;
     setMapUiPreferences(loadMapUiPreferences(window.localStorage, mapUiStorageKey));
     loadedMapUiKey.current = mapUiStorageKey;
   }, [mapUiStorageKey]);
 
   useEffect(() => {
     if (!mapUiStorageKey || loadedMapUiKey.current !== mapUiStorageKey) return;
+    if (skipNextMapUiSave.current) {
+      skipNextMapUiSave.current = false;
+      return;
+    }
     saveMapUiPreferences(window.localStorage, mapUiStorageKey, mapUiPreferences);
   }, [mapUiPreferences, mapUiStorageKey]);
 

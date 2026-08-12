@@ -24,6 +24,12 @@ test("two cameras render one shared world coordinate", async ({ page }) => {
   await expect(page.getByTestId("scene-anchor")).toHaveText("beltPlane");
   await expect(page.getByText("Grid sichtbar · Fight Team")).toBeVisible();
 
+  await expect(page.getByTestId("rockbreaker-enemy-count")).toHaveText("1");
+  await page.getByRole("button", { name: "3D-Zeit ein Jahr vorspulen" }).click();
+  await expect(page.getByTestId("rockbreaker-enemy-count")).toHaveText("1");
+  await page.getByRole("button", { name: "3D-Feindmarker löschen" }).click();
+  await expect(page.getByTestId("rockbreaker-enemy-count")).toHaveText("0");
+
   await dragFirstGroupToParent(page);
   await expect(page.getByTestId("scene-object-count")).toHaveText("0");
   await expect(page.getByTestId("rockbreaker-group-g1")).toHaveCount(0);
