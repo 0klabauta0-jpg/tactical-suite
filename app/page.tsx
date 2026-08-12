@@ -43,6 +43,7 @@ import { resolveParentLocation, selectEntry2dPosition, selectReturn2dPosition } 
 import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
 import { subscribeSceneObjects } from "@/lib/map-scene/client";
 import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { rightPanelStack } from "@/lib/ui/session-panel-layout";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
   parseMapEntries,
@@ -3725,7 +3726,7 @@ function BoardApp() {
   const [activeMapId, setActiveMapId] = useState("main");
   const [activeSystemId, setActiveSystemId] = useState("pyro"); // aktives System für Board-Filter
   const activeSystemIdRef = useRef(activeSystemId);
-  const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({});
+  const [minimizedPanels, setMinimizedPanels] = useState<Record<string,boolean>>({ notes: true, log: true });
   const toggleMinPanel = useCallback((key: string) => { setMinimizedPanels(p => ({ ...p, [key]: !p[key] })); }, []);
   const [systems, setSystems] = useState<StarSystem[]>(DEFAULT_SYSTEMS);
   const systemsRef = React.useRef<StarSystem[]>(DEFAULT_SYSTEMS);
@@ -3737,7 +3738,7 @@ function BoardApp() {
   const [panelToolbar,  setPanelToolbar]  = useState({ x: DEFAULT_PANEL_LAYOUT.toolbar?.x ?? 300, y: DEFAULT_PANEL_LAYOUT.toolbar?.y ?? 16 });
   const [panelZoom, setPanelZoom] = useState({ x: DEFAULT_PANEL_LAYOUT.zoom?.x ?? 16, y: DEFAULT_PANEL_LAYOUT.zoom?.y ?? 600 });
   const [panelNotes,    setPanelNotes]    = useState({ x: DEFAULT_PANEL_LAYOUT.notes.x,    y: DEFAULT_PANEL_LAYOUT.notes.y,    w: DEFAULT_PANEL_LAYOUT.notes.w,    h: DEFAULT_PANEL_LAYOUT.notes.h    });
-  const [panelLogNotes, setPanelLogNotes] = useState({ x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: DEFAULT_PANEL_LAYOUT.logNotes.visible ?? false });
+  const [panelLogNotes, setPanelLogNotes] = useState({ x: DEFAULT_PANEL_LAYOUT.logNotes.x, y: DEFAULT_PANEL_LAYOUT.logNotes.y, w: DEFAULT_PANEL_LAYOUT.logNotes.w, h: DEFAULT_PANEL_LAYOUT.logNotes.h, visible: true });
   const [panelOpLog,    setPanelOpLog]    = useState({ x: DEFAULT_PANEL_LAYOUT.opLog.x,    y: DEFAULT_PANEL_LAYOUT.opLog.y,    w: DEFAULT_PANEL_LAYOUT.opLog.w,    h: DEFAULT_PANEL_LAYOUT.opLog.h,    visible: DEFAULT_PANEL_LAYOUT.opLog.visible ?? false });
   // Backward-compat: localPanelPos als berechnetes Objekt für alle Stellen die es noch lesen
   const localPanelPos = useMemo(() => ({
@@ -3756,6 +3757,18 @@ function BoardApp() {
     if (next.logNotes !== cur.logNotes) setPanelLogNotes(next.logNotes);
     if (next.opLog !== cur.opLog) setPanelOpLog(next.opLog);
   };
+
+  useEffect(() => {
+    const stacked = rightPanelStack(
+      window.innerWidth,
+      DEFAULT_PANEL_LAYOUT.notes.w,
+      DEFAULT_PANEL_LAYOUT.logNotes.w,
+    );
+    setPanelNotes((panel) => ({ ...panel, ...stacked.notes }));
+    setPanelLogNotes((panel) => ({ ...panel, ...stacked.logNotes, visible: true }));
+    // Position and collapse state are deliberately reset for each app session.
+    // Note contents remain sourced from Firestore and are not touched here.
+  }, []);
 
   // Floating Panels können je nach Screen/Tab "aus dem Viewport" rutschen (z.B. Board → Map).
   // Dieser Clamp hält sie immer sichtbar.
