@@ -44,3 +44,12 @@ test("rolls an optimistic move back after a transfer conflict", async ({ page })
     "Trupp wurde inzwischen von einem anderen Teilnehmer verschoben.",
   );
 });
+
+test("prefers the Rockbreaker pill when a map token overlaps it", async ({ page }) => {
+  await page.goto("/ui-test/token-transfer");
+
+  await dragTroop(page, "manual-map-token", "location-pill-rockbreaker");
+
+  await expect(page.getByTestId("manual-transfer-intent"))
+    .toHaveText('{"kind":"enterChild","childId":"rockbreaker"}');
+});

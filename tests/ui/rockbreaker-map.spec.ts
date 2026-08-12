@@ -10,6 +10,20 @@ async function dragFirstGroupToParent(page: import("@playwright/test").Page) {
   await page.mouse.up();
 }
 
+async function dragTroop(
+  page: import("@playwright/test").Page,
+  sourceTestId: string,
+  targetTestId: string,
+) {
+  const source = await page.getByTestId(sourceTestId).boundingBox();
+  const target = await page.getByTestId(targetTestId).boundingBox();
+  if (!source || !target) throw new Error("Trupp oder 3D-Ziel ist nicht sichtbar.");
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 20 });
+  await page.mouse.up();
+}
+
 test("two cameras render one shared world coordinate", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker");
   await expect(page.getByLabel("Rockbreaker 3D Karte")).toHaveCount(2);
@@ -33,4 +47,16 @@ test("two cameras render one shared world coordinate", async ({ page }) => {
   await dragFirstGroupToParent(page);
   await expect(page.getByTestId("scene-object-count")).toHaveText("0");
   await expect(page.getByTestId("rockbreaker-group-g1")).toHaveCount(0);
+});
+
+test("accepts a listed Nyx troop and lets the return target navigate without moving it", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+
+  await dragTroop(page, "troop-chip-g2", "rockbreaker-scene-drop-a");
+  await expect(page.getByTestId("rockbreaker-group-g2").first()).toBeVisible();
+  await expect(page.getByTestId("scene-object-count")).toHaveText("3");
+
+  await page.getByRole("button", { name: "Eine Ebene hoch nach Nyx" }).first().click();
+  await expect(page.getByTestId("rockbreaker-navigation-count")).toHaveText("1");
+  await expect(page.getByTestId("scene-object-count")).toHaveText("3");
 });

@@ -247,10 +247,12 @@ export function ParentLevelDropTarget({
   className = "",
   parentLabel,
   testId = "move-up-target",
+  onNavigate,
 }: {
   className?: string;
   parentLabel?: string;
   testId?: string;
+  onNavigate?: () => void;
 }) {
   return (
     <TokenDropTarget
@@ -258,19 +260,31 @@ export function ParentLevelDropTarget({
       data={{ type: "parent" }}
       testId={testId}
       className={`rounded-xl border-2 border-dashed border-cyan-700 bg-cyan-950/80 px-4 py-3 text-center text-sm font-semibold text-cyan-100 ${className}`}
+      role={onNavigate ? "button" : undefined}
+      tabIndex={onNavigate ? 0 : undefined}
+      aria-label={onNavigate ? `Eine Ebene hoch${parentLabel ? ` nach ${parentLabel}` : ""}` : undefined}
+      onClick={onNavigate}
+      onKeyDown={(event) => {
+        if (!onNavigate || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onNavigate();
+      }}
     >
       ↑ Eine Ebene hoch{parentLabel ? ` nach ${parentLabel}` : " ziehen"}
     </TokenDropTarget>
   );
 }
 
-export function tokenDropIntentAtPoint(clientX: number, clientY: number): TokenTransferIntent | null {
-  const element = document.elementsFromPoint(clientX, clientY)
-    .map((candidate) => candidate.closest<HTMLElement>("[data-token-drop-target]"))
-    .find((candidate): candidate is HTMLElement => Boolean(candidate));
-  const target = element?.dataset.tokenDropTarget;
-  if (!target) return null;
+export function tokenDropIntentForTargets(targets: readonly string[]): TokenTransferIntent | null {
+  const target = targets.find((candidate) => candidate === "parent" || candidate.startsWith("child:"));
   if (target === "parent") return { kind: "moveUp" };
-  if (target.startsWith("child:")) return { kind: "enterChild", childId: target.slice("child:".length) };
+  if (target?.startsWith("child:")) return { kind: "enterChild", childId: target.slice("child:".length) };
   return null;
+}
+
+export function tokenDropIntentAtPoint(clientX: number, clientY: number): TokenTransferIntent | null {
+  const targets = document.elementsFromPoint(clientX, clientY)
+    .map((candidate) => candidate.closest<HTMLElement>("[data-token-drop-target]")?.dataset.tokenDropTarget)
+    .filter((target): target is string => Boolean(target));
+  return tokenDropIntentForTargets([...new Set(targets)]);
 }

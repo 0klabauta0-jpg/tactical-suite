@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type * as Three from "three";
-import { ParentLevelDropTarget, tokenDropIntentAtPoint } from "@/app/components/map/token-transfer-controls";
+import { ParentLevelDropTarget, TokenDropTarget, tokenDropIntentAtPoint } from "@/app/components/map/token-transfer-controls";
 import type { BoardGroup } from "@/lib/board/state";
 import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject } from "@/lib/map-scene/client";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
@@ -24,6 +24,8 @@ export function RockbreakerMap({
   onBack,
   onMoveGroupUp,
   initialCameraAzimuth = 0.7,
+  dropTargetId = "rockbreaker-scene-drop",
+  dropTestId = "rockbreaker-scene-drop",
 }: {
   roomId: string;
   sceneId: string;
@@ -36,6 +38,8 @@ export function RockbreakerMap({
   onBack: () => void;
   onMoveGroupUp: (groupId: string, revision: number) => Promise<void>;
   initialCameraAzimuth?: number;
+  dropTargetId?: string;
+  dropTestId?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const objectsRef = useRef<SceneObject[]>(objects);
@@ -286,7 +290,12 @@ export function RockbreakerMap({
   }, [objects, sceneReady]);
 
   return (
-    <div className="absolute inset-0 bg-gray-950">
+    <TokenDropTarget
+      id={dropTargetId}
+      data={{ type: "child", childId: "rockbreaker" }}
+      testId={dropTestId}
+      className="absolute inset-0 bg-gray-950"
+    >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" aria-label="Rockbreaker 3D Karte" />
       <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden="true">
         {objects.flatMap((object) => object.type === "groupToken" ? [(
@@ -316,8 +325,9 @@ export function RockbreakerMap({
           parentLabel="Nyx"
           testId="rockbreaker-move-up"
           className="absolute left-1/2 top-3 z-30 -translate-x-1/2 shadow-2xl"
+          onNavigate={onBack}
         />
       )}
-    </div>
+    </TokenDropTarget>
   );
 }
