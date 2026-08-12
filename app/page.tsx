@@ -12,6 +12,7 @@ import type { EditablePlayerField, Player, PlayerOverrides } from "@/lib/domain/
 import { mergeWithOverrides } from "@/lib/players/merge-overrides";
 import { parsePlayerOverrides } from "@/lib/players/overrides";
 import { loadPlayersFromSheet, type PlayerLoadResult } from "@/lib/players/sheet-loader";
+import { parseRoomConfig, type RoomConfig } from "@/lib/rooms/config";
 import { doc, getDoc, getDocs, collection, onSnapshot, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -68,7 +69,6 @@ type OpLogEntry = {
 
 // RoomConfig wird aus Firestore geladen (rooms/{roomId}/config)
 // NEXT_PUBLIC_SHEET_CSV_URL und NEXT_PUBLIC_TEAM_PASSWORD sind nicht mehr nötig.
-type RoomConfig = { sheetUrl: string; password: string; roomName?: string; sheetShareUrl?: string };
 const roomConfigCache: Record<string, RoomConfig> = {};
 
 async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
@@ -79,13 +79,11 @@ async function loadRoomConfig(roomId: string): Promise<RoomConfig | null> {
       console.warn("[KlabsCom] loadRoomConfig: Dokument nicht gefunden:", `rooms/${roomId}/config/main`);
       return null;
     }
-    const d = snap.data() as any;
-    console.log("[KlabsCom] loadRoomConfig: Felder geladen:", Object.keys(d));
-    if (!d.sheetUrl || !d.password) {
-      console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt", d);
+    const cfg = parseRoomConfig(snap.data());
+    if (!cfg) {
+      console.warn("[KlabsCom] loadRoomConfig: sheetUrl oder password fehlt");
       return null;
     }
-    const cfg: RoomConfig = { sheetUrl: d.sheetUrl, password: d.password, roomName: d.roomName, sheetShareUrl: d.sheetShareUrl };
     roomConfigCache[roomId] = cfg;
     return cfg;
   } catch (e) {
