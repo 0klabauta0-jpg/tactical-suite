@@ -243,15 +243,23 @@ export function TokenDropTarget({
   );
 }
 
-export function ParentLevelDropTarget({ className = "" }: { className?: string }) {
+export function ParentLevelDropTarget({
+  className = "",
+  parentLabel,
+  testId = "move-up-target",
+}: {
+  className?: string;
+  parentLabel?: string;
+  testId?: string;
+}) {
   return (
     <TokenDropTarget
       id="token-parent-level"
       data={{ type: "parent" }}
-      testId="move-up-target"
+      testId={testId}
       className={`rounded-xl border-2 border-dashed border-cyan-700 bg-cyan-950/80 px-4 py-3 text-center text-sm font-semibold text-cyan-100 ${className}`}
     >
-      Eine Ebene nach oben ziehen
+      ↑ Eine Ebene hoch{parentLabel ? ` nach ${parentLabel}` : " ziehen"}
     </TokenDropTarget>
   );
 }

@@ -18,7 +18,7 @@ import { loginToRoom, roomLoginPlayerToDomain } from "@/lib/auth/room-login-clie
 import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
-import { RockbreakerMap } from "@/app/components/map/rockbreaker-map";
+import { RockbreakerMap, type RockbreakerEnemyKind } from "@/app/components/map/rockbreaker-map";
 import {
   DraggableTroopChip,
   ParentLevelDropTarget,
@@ -3690,6 +3690,7 @@ function BoardApp() {
 
   const [tokens, setTokens] = useState<Token[]>([]);
   const [rockbreakerObjects, setRockbreakerObjects] = useState<SceneObject[]>([]);
+  const [rockbreakerEnemyPlacement, setRockbreakerEnemyPlacement] = useState<RockbreakerEnemyKind | null>(null);
   const rockbreakerObjectsRef = useRef<SceneObject[]>([]);
   const [pendingTokenTransfers, setPendingTokenTransfers] = useState<Set<string>>(() => new Set());
   const pendingTokenTransfersRef = useRef<Set<string>>(new Set());
@@ -4840,12 +4841,12 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
   }
 
   async function requestTokenTransfer(groupId: string, intent: TokenTransferIntent) {
-    if (!canWrite || !user || pendingTokenTransfersRef.current.has(groupId)) return;
+    if (!canWrite || !user || pendingTokenTransfersRef.current.has(groupId)) return false;
     const systemId = activeSystemIdRef.current;
     const source = getConfirmedGroupLocation(groupId, systemId);
     if (source.kind === "ambiguous") {
       setTokenTransferMessage("Trupp besitzt mehrere gespeicherte Positionen. Bitte zuerst die Daten prüfen.");
-      return;
+      return false;
     }
 
     const normalizedIntent = intent.kind === "place2d" && (
@@ -4875,6 +4876,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
         expectedSource: source,
         intent: normalizedIntent,
       }, () => user.getIdToken());
+      return true;
     } catch (error) {
       const confirmed = confirmedTokensBySystemRef.current[systemId] ?? [];
       tokensBySystemRef.current[systemId] = confirmed;
@@ -4885,12 +4887,23 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
       setTokenTransferMessage(error instanceof TokenTransferClientError
         ? error.message
         : "Trupp konnte nicht verschoben werden. Der bestätigte Stand wurde wiederhergestellt.");
+      return false;
     } finally {
       const nextPending = new Set(pendingTokenTransfersRef.current);
       nextPending.delete(groupId);
       pendingTokenTransfersRef.current = nextPending;
       setPendingTokenTransfers(nextPending);
     }
+  }
+
+  async function moveRockbreakerGroupUp(groupId: string, revision: number) {
+    const source = getConfirmedGroupLocation(groupId, "nyx");
+    if (source.kind !== "rockbreaker3d" || source.revision !== revision) {
+      setTokenTransferMessage("Trupp wurde inzwischen von einem anderen Teilnehmer verschoben.");
+      throw new Error("Der bestätigte 3D-Stand hat sich geändert.");
+    }
+    const transferred = await requestTokenTransfer(groupId, { kind: "moveUp" });
+    if (!transferred) throw new Error("Trupp konnte nicht nach Nyx verschoben werden.");
   }
 
   function commitToken(gId: string, x: number, y: number, mapId: string) {
@@ -5602,7 +5615,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
       {/* MAP – Block 3: display:none statt Unmount */}
       <TroopTransferProvider
         disabledGroups={pendingTokenTransfers}
-        onTransfer={({ groupId, intent }) => requestTokenTransfer(groupId, intent)}
+        onTransfer={({ groupId, intent }) => { void requestTokenTransfer(groupId, intent); }}
       >
       <div className="flex-1 relative flex flex-col"
         style={{ display: tab === "map" ? "flex" : "none" }}>
@@ -5641,11 +5654,13 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 roomId={roomId}
                 sceneId={activeMapEntry.sceneId}
                 groups={board.groups.filter((group) => group.systemId === "nyx")}
+                objects={rockbreakerObjects}
+                enemyPlacement={rockbreakerEnemyPlacement}
                 showGrid={showGrid}
                 canWrite={canWrite}
                 getIdToken={() => user.getIdToken()}
                 onBack={() => setActiveMapId("main")}
-                objectsOverride={rockbreakerObjects}
+                onMoveGroupUp={moveRockbreakerGroupUp}
               />
             ) : activeRenderer === "disabled" ? (
               <div className="flex h-full items-center justify-center bg-gray-950 p-6 text-center text-gray-300">
@@ -5684,7 +5699,7 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
             )}
           </div>
 
-          {canWrite && activeMapId !== "main" && (
+          {canWrite && activeMapId !== "main" && activeRenderer !== "rockbreaker3d" && (
             <ParentLevelDropTarget className="absolute left-1/2 top-14 z-40 -translate-x-1/2 shadow-2xl" />
           )}
 
@@ -5723,6 +5738,23 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 onPlaceOrder={(gId, x, y, mapId) => upsertOrderMarker(gId, x, y, mapId)}
                 activeMapId={activeMapId}
                 getGroupLocation={(groupId) => getConfirmedGroupLocation(groupId)} />
+            ) : null}
+            enemy={canWrite && activeRenderer === "rockbreaker3d" ? (
+              <div>
+                <p className="mb-2 text-xs text-gray-500">Feindtyp wählen, dann in die 3D-Karte klicken.</p>
+                <div className="grid grid-cols-3 gap-1">
+                  {(["infantry", "ground", "air"] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={`rounded border px-1 py-2 text-xs ${rockbreakerEnemyPlacement === kind ? "border-red-500 bg-red-900 text-white" : "border-gray-700 bg-gray-800 text-red-300 hover:bg-gray-700"}`}
+                      onClick={() => setRockbreakerEnemyPlacement(rockbreakerEnemyPlacement === kind ? null : kind)}
+                    >
+                      {kind === "infantry" ? "INF" : kind === "ground" ? "BDN" : "LUFT"}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : null}
             drawing={activeRenderer === "image2d" && activeImage && canWrite ? (
               <DrawingToolbar

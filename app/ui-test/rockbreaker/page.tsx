@@ -17,10 +17,26 @@ export default function RockbreakerTestPage() {
   const [objects, setObjects] = useState<SceneObject[]>([objectAt(1, 0, 1)]);
   const [cameraA, setCameraA] = useState(0.2);
   if (process.env.NEXT_PUBLIC_ENABLE_UI_TEST_ROUTES !== "1") notFound();
-  const coordinate = "position" in objects[0]
+  const coordinate = objects[0] && "position" in objects[0]
     ? `${objects[0].position.x.toFixed(2)} / ${objects[0].position.y.toFixed(2)} / ${objects[0].position.z.toFixed(2)}`
     : "";
-  const shared = { roomId: "test", sceneId: "nyx--rockbreaker", groups: [{ id: "g1", label: "Truppe 1", systemId: "nyx" }], showGrid: true, canWrite: false, getIdToken: async () => "", onBack: () => undefined, objectsOverride: objects };
+  const anchor = objects[0] && "position" in objects[0] ? objects[0].position.anchor.kind : "";
+  const shared = {
+    roomId: "test",
+    sceneId: "nyx--rockbreaker",
+    groups: [{ id: "g1", label: "Fight Team", systemId: "nyx" }],
+    showGrid: true,
+    canWrite: true,
+    getIdToken: async () => "",
+    onBack: () => undefined,
+    objects,
+    enemyPlacement: null,
+    onMoveGroupUp: async (groupId: string, revision: number) => {
+      setObjects((current) => current.filter((object) => !(
+        object.type === "groupToken" && object.groupId === groupId && object.revision === revision
+      )));
+    },
+  };
   return (
     <main className="min-h-screen bg-gray-950 p-3 text-white">
       <div className="mb-3 flex flex-wrap gap-2">
@@ -33,7 +49,9 @@ export default function RockbreakerTestPage() {
       </div>
       <div data-testid="camera-a-coordinate">{coordinate}</div>
       <div data-testid="camera-b-coordinate">{coordinate}</div>
-      <div>Grid sichtbar · Truppe 1</div>
+      <div data-testid="scene-anchor">{anchor}</div>
+      <div data-testid="scene-object-count">{objects.length}</div>
+      <div>Grid sichtbar · Fight Team</div>
     </main>
   );
 }
