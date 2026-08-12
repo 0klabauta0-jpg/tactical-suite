@@ -17,11 +17,31 @@ function createStore(rockbreakerEnabled = true) {
 }
 
 describe("map scene store", () => {
-  it("deduplicates group tokens and locks them for the current commander", async () => {
+  it("protects group-token creation and deletion for the transfer service", async () => {
+    const { objects, store } = createStore();
+    const actor = { uid: "u1", role: "commander" as const };
+    await expect(createSceneObject(store, {
+      roomId: "room",
+      sceneId: "nyx--rockbreaker",
+      actor,
+      draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) },
+      nowMs: 1,
+    })).rejects.toMatchObject({ code: "PROTECTED_OBJECT" });
+    objects.set("groupToken--g1", {
+      id: "groupToken--g1", type: "groupToken", groupId: "g1", systemId: "nyx", mapId: "rockbreaker",
+      sceneVersion: 1, color: "#0ea5e9", position: point(1), revision: 0,
+      createdBy: "u1", createdAtMs: 1, updatedBy: "u1", updatedAtMs: 1,
+    });
+    const { deleteSceneObject } = await import("@/lib/server/map-scene-store");
+    await expect(deleteSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: "groupToken--g1", actor }))
+      .rejects.toMatchObject({ code: "PROTECTED_OBJECT" });
+  });
+
+  it("deduplicates order markers and locks them for the current commander", async () => {
     const { store } = createStore();
     const actor = { uid: "u1", role: "commander" as const };
-    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
-    const second = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "groupToken", groupId: "g1", color: "#ffffff", position: point(2) }, nowMs: 2 });
+    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "orderMarker", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
+    const second = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "orderMarker", groupId: "g1", color: "#ffffff", position: point(2) }, nowMs: 2 });
     expect(second).toEqual(first);
     const locked = await acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, nowMs: 10 });
     expect(locked).toMatchObject({ lockedByUid: "u1", lockRevision: 1, lockExpiresAtMs: 15_010 });
@@ -29,7 +49,7 @@ describe("map scene store", () => {
 
   it("rejects a competing lock and stale move revision", async () => {
     const { store } = createStore();
-    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor: { uid: "u1", role: "admin" }, draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
+    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor: { uid: "u1", role: "admin" }, draft: { type: "orderMarker", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
     const locked = await acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor: { uid: "u1", role: "admin" }, nowMs: 10 });
     await expect(acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor: { uid: "u2", role: "commander" }, nowMs: 11 }))
       .rejects.toEqual(new MapSceneStoreError("OBJECT_LOCKED", locked));
@@ -40,7 +60,7 @@ describe("map scene store", () => {
   it("commits only the locked object with a new revision", async () => {
     const { store } = createStore();
     const actor = { uid: "u1", role: "commander" as const };
-    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
+    const first = await createSceneObject(store, { roomId: "room", sceneId: "nyx--rockbreaker", actor, draft: { type: "orderMarker", groupId: "g1", color: "#0ea5e9", position: point(1) }, nowMs: 1 });
     const locked = await acquireSceneObjectLock(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, nowMs: 2 });
     const moved = await commitSceneObjectMove(store, { roomId: "room", sceneId: "nyx--rockbreaker", objectId: first.id, actor, expectedRevision: first.revision, expectedLockRevision: locked.lockRevision!, position: point(4), nowMs: 3 });
     expect(moved).toMatchObject({ revision: 1, position: point(4) });
@@ -52,7 +72,7 @@ describe("map scene store", () => {
       roomId: "room",
       sceneId: "nyx--rockbreaker",
       actor: { uid: "u1", role: "admin" },
-      draft: { type: "groupToken", groupId: "g1", color: "#0ea5e9", position: point(1) },
+      draft: { type: "enemyMarker", kind: "ground", color: "#0ea5e9", position: point(1) },
       nowMs: 1,
     })).rejects.toMatchObject({ code: "FEATURE_DISABLED" });
   });

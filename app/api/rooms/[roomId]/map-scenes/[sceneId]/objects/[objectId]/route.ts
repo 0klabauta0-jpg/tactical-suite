@@ -48,7 +48,7 @@ export async function DELETE(request: Request, context: Context) {
     return json({ deleted: true });
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
-    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : 404);
+    if (error instanceof MapSceneStoreError) return json({ error: error.code }, error.code === "FORBIDDEN" || error.code === "FEATURE_DISABLED" ? 403 : error.code === "PROTECTED_OBJECT" ? 409 : 404);
     return json({ error: "Objekt konnte nicht gelöscht werden." }, 500);
   }
 }
