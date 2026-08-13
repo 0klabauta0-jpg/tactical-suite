@@ -35,23 +35,25 @@ export const lockMapSceneObject = (roomId: string, sceneId: string, objectId: st
   api<SceneObject>(`${base(roomId, sceneId)}/objects/${encodeURIComponent(objectId)}/lock`, "POST", getIdToken);
 
 export const moveMapSceneObject = (
-  roomId: string, sceneId: string, object: SceneObject, position: WorldPoint, lockRevision: number, getIdToken: () => Promise<string>,
-) => api<SceneObject>(`${base(roomId, sceneId)}/objects/${encodeURIComponent(object.id)}`, "PATCH", getIdToken, {
-  position, expectedRevision: object.revision, expectedLockRevision: lockRevision,
+  roomId: string, sceneId: string, objectId: string, position: WorldPoint,
+  expectedRevision: number, expectedLockRevision: number, getIdToken: () => Promise<string>,
+) => api<SceneObject>(`${base(roomId, sceneId)}/objects/${encodeURIComponent(objectId)}`, "PATCH", getIdToken, {
+  position, expectedRevision, expectedLockRevision,
 });
 
 export const translateMapSceneObject = (
   roomId: string,
   sceneId: string,
-  object: StrokeSceneObject,
+  objectId: string,
   translation: Vec3,
-  lockRevision: number,
+  expectedRevision: number,
+  expectedLockRevision: number,
   getIdToken: () => Promise<string>,
 ) => api<StrokeSceneObject>(
-  `${base(roomId, sceneId)}/objects/${encodeURIComponent(object.id)}`,
+  `${base(roomId, sceneId)}/objects/${encodeURIComponent(objectId)}`,
   "PATCH",
   getIdToken,
-  { translation, expectedRevision: object.revision, expectedLockRevision: lockRevision },
+  { translation, expectedRevision, expectedLockRevision },
 );
 
 export const removeMapSceneObject = (roomId: string, sceneId: string, objectId: string, getIdToken: () => Promise<string>) =>

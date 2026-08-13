@@ -221,12 +221,12 @@ export function RockbreakerMap({
       const movePosition = async (object: PositionedSceneObject, position: WorldPoint, lockRevision: number) => {
         const customMove = sceneMutationsRef.current?.movePosition;
         if (customMove) await customMove(object, position);
-        else await moveMapSceneObject(roomId, sceneId, object, position, lockRevision, () => getIdTokenRef.current());
+        else await moveMapSceneObject(roomId, sceneId, object.id, position, object.revision, lockRevision, () => getIdTokenRef.current());
       };
       const translateStroke = async (object: StrokeSceneObject, translation: Vec3, lockRevision: number) => {
         const customTranslate = sceneMutationsRef.current?.translateStroke;
         if (customTranslate) await customTranslate(object, translation);
-        else await translateMapSceneObject(roomId, sceneId, object, translation, lockRevision, () => getIdTokenRef.current());
+        else await translateMapSceneObject(roomId, sceneId, object.id, translation, object.revision, lockRevision, () => getIdTokenRef.current());
       };
       const objectAtPointer = (event: PointerEvent, accepts: (object: SceneObject) => boolean) => {
         setRay(event);
@@ -435,7 +435,7 @@ export function RockbreakerMap({
             if (customTranslate) return customTranslate(current.object, current.translation);
             const locked = await lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current());
             if (locked.type !== "stroke") throw new Error("Zeichnung ist nicht mehr verfügbar.");
-            return translateStroke(locked, current.translation, locked.lockRevision ?? 0);
+            return translateStroke(current.object, current.translation, locked.lockRevision ?? 0);
           };
           void finish()
             .then(() => setMessage("3D-Zeichnung verschoben."))
@@ -456,14 +456,14 @@ export function RockbreakerMap({
                 ? onMoveGroupPositionRef.current(current.object, current.point)
                 : lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
                     if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
-                    return moveMapSceneObject(roomId, sceneId, locked, current.point, locked.lockRevision ?? 0, () => getIdTokenRef.current());
+                    return moveMapSceneObject(roomId, sceneId, current.object.id, current.point, current.object.revision, locked.lockRevision ?? 0, () => getIdTokenRef.current());
                   })
               : (() => {
                     const customMove = sceneMutationsRef.current?.movePosition;
                     if (customMove) return customMove(current.object, current.point);
                     return lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
                       if (!("position" in locked)) throw new Error("Objekt besitzt keine Position.");
-                      return movePosition(locked, current.point, locked.lockRevision ?? 0);
+                      return movePosition(current.object, current.point, locked.lockRevision ?? 0);
                     });
                   })();
           void mutation

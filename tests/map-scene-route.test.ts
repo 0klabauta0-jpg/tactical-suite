@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/rooms/[roomId]/map-scenes/[sceneId]/objects/route";
 import { PATCH } from "@/app/api/rooms/[roomId]/map-scenes/[sceneId]/objects/[objectId]/route";
-import { translateMapSceneObject } from "@/lib/map-scene/client";
+import { moveMapSceneObject, translateMapSceneObject } from "@/lib/map-scene/client";
 import {
   acquireSceneObjectLock,
   createSceneObject,
@@ -123,12 +123,52 @@ describe("map scene routes", () => {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
     vi.stubGlobal("fetch", fetchImpl);
-    await expect(translateMapSceneObject("r", "nyx--rockbreaker", object, [1, 2, 3], 4, async () => "id-token"))
+    await expect(translateMapSceneObject("r", "nyx--rockbreaker", object.id, [1, 2, 3], object.revision, 4, async () => "id-token"))
       .resolves.toMatchObject({ id: "stroke--1", type: "stroke" });
     expect(fetchImpl).toHaveBeenCalledWith("/api/rooms/r/map-scenes/nyx--rockbreaker/objects/stroke--1", expect.objectContaining({
       method: "PATCH",
       headers: { Authorization: "Bearer id-token", "Content-Type": "application/json" },
       body: JSON.stringify({ translation: [1, 2, 3], expectedRevision: 7, expectedLockRevision: 4 }),
+    }));
+  });
+
+  it("keeps the gesture-start revision when a positioned object's server revision is already ahead", async () => {
+    const fetchImpl = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { expectedRevision: number };
+      return new Response(JSON.stringify(body.expectedRevision === 3
+        ? { error: "Positionskonflikt – Serverstand übernommen." }
+        : { id: "point--1" }), {
+        status: body.expectedRevision === 3 ? 409 : 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(moveMapSceneObject(
+      "r", "nyx--rockbreaker", "point--1", free(4), 3, 8, async () => "id-token",
+    )).rejects.toThrow("Positionskonflikt");
+    expect(fetchImpl).toHaveBeenCalledWith("/api/rooms/r/map-scenes/nyx--rockbreaker/objects/point--1", expect.objectContaining({
+      body: JSON.stringify({ position: free(4), expectedRevision: 3, expectedLockRevision: 8 }),
+    }));
+  });
+
+  it("keeps the gesture-start revision when a stroke server revision is already ahead", async () => {
+    const fetchImpl = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { expectedRevision: number };
+      return new Response(JSON.stringify(body.expectedRevision === 5
+        ? { error: "Positionskonflikt – Serverstand übernommen." }
+        : { id: "stroke--stale" }), {
+        status: body.expectedRevision === 5 ? 409 : 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(translateMapSceneObject(
+      "r", "nyx--rockbreaker", "stroke--stale", [1, 0, 0], 5, 9, async () => "id-token",
+    )).rejects.toThrow("Positionskonflikt");
+    expect(fetchImpl).toHaveBeenCalledWith("/api/rooms/r/map-scenes/nyx--rockbreaker/objects/stroke--stale", expect.objectContaining({
+      body: JSON.stringify({ translation: [1, 0, 0], expectedRevision: 5, expectedLockRevision: 9 }),
     }));
   });
 });
