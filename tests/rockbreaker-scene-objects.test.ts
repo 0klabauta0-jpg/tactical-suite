@@ -38,6 +38,27 @@ describe("Rockbreaker scene objects", () => {
     })).toBeNull();
   });
 
+  it("parses one bounded stroke object", () => {
+    const free = (x: number, y = 0, z = 0) => ({
+      x, y, z, sceneVersion: 1 as const, anchor: { kind: "freeSpace" as const },
+    });
+
+    expect(parseSceneObject({
+      ...common, id: "stroke--1", type: "stroke", width: 3,
+      points: [free(1), free(2, 1)],
+    })).toMatchObject({ type: "stroke", width: 3, points: [{ x: 1 }, { x: 2, y: 1 }] });
+  });
+
+  it.each([
+    { width: 0, points: [{ ...position, anchor: { kind: "freeSpace" } }, { ...position, x: 2, anchor: { kind: "freeSpace" } }] },
+    { width: 2, points: [{ ...position, anchor: { kind: "freeSpace" } }, { ...position, x: 2, anchor: { kind: "freeSpace" } }] },
+    { width: 3, points: [{ ...position, anchor: { kind: "freeSpace" } }] },
+    { width: 3, points: Array.from({ length: 513 }, (_, index) => ({ x: index / 20, y: 0, z: 0, sceneVersion: 1, anchor: { kind: "freeSpace" } })) },
+    { width: 3, points: [{ ...position, anchor: { kind: "freeSpace" } }, { ...position, x: Number.NaN, anchor: { kind: "freeSpace" } }] },
+  ])("rejects malformed strokes", (stroke) => {
+    expect(parseSceneObject({ ...common, id: "bad", type: "stroke", ...stroke })).toBeNull();
+  });
+
   it("restores the latest confirmed position after a rejected drag", () => {
     const confirmed = parseSceneObject({
       id: "groupToken--g1", type: "groupToken", groupId: "g1", systemId: "nyx", mapId: "rockbreaker",

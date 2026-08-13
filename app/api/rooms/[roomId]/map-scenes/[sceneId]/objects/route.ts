@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { parseWorldPoint } from "@/lib/rockbreaker/scene-objects";
+import {
+  parseWorldPoint,
+  ROCKBREAKER_STROKE_WIDTHS,
+  type RockbreakerStrokeWidth,
+} from "@/lib/rockbreaker/scene-objects";
+import type { WorldPoint } from "@/lib/rockbreaker/coordinates";
 import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 import { MapSceneStoreError } from "@/lib/server/map-scene-store";
 import { RoomAuthError } from "@/lib/server/room-auth";
@@ -10,6 +15,15 @@ const json = (body: unknown, status = 200) => NextResponse.json(body, { status, 
 function draft(value: unknown): SceneObjectDraft | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  if (record.type === "stroke"
+    && typeof record.color === "string"
+    && ROCKBREAKER_STROKE_WIDTHS.includes(record.width as RockbreakerStrokeWidth)
+    && Array.isArray(record.points)) {
+    const points = record.points.map(parseWorldPoint);
+    if (points.every((point): point is WorldPoint => point !== null)) {
+      return { type: "stroke", color: record.color, width: record.width as RockbreakerStrokeWidth, points };
+    }
+  }
   const position = parseWorldPoint(record.position);
   if (!position || typeof record.color !== "string") return null;
   if ((record.type === "groupToken" || record.type === "orderMarker") && typeof record.groupId === "string" && record.groupId) {

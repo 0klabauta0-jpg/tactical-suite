@@ -4,14 +4,27 @@ import { useEffect, useRef, useState } from "react";
 import type * as Three from "three";
 import { ParentLevelDropTarget, TokenDropTarget, tokenDropIntentAtPoint } from "@/app/components/map/token-transfer-controls";
 import type { BoardGroup } from "@/lib/board/state";
-import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject } from "@/lib/map-scene/client";
+import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject, removeMapSceneObject, translateMapSceneObject } from "@/lib/map-scene/client";
+import { appendStrokeSample, clampStrokeTranslation, simplifyStrokePoints, type RockbreakerDrawingTool, type StrokeSample } from "@/lib/rockbreaker/drawing";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
 import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type Vec3, type WorldPoint } from "@/lib/rockbreaker/coordinates";
-import { confirmedObjectPosition, type SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { confirmedObjectPosition, type RockbreakerStrokeWidth, type SceneObject, type StrokeSceneObject } from "@/lib/rockbreaker/scene-objects";
 import { clampCanvasPoint, freeSpaceWorldPoint, intersectCameraDragPlane } from "@/lib/rockbreaker/drag";
+import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
+import { createRockbreakerObject3d, disposeRockbreakerObject3d } from "@/lib/rockbreaker/three-scene-objects";
+import { advanceAuthoritativeEpoch, operationEpochIsCurrent } from "@/lib/rockbreaker/authoritative-epoch";
+import { releasePositionDrag, releaseStrokeDrag } from "@/lib/rockbreaker/release";
 
 export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
+type CameraDragPlane = { point: Vec3; normal: Vec3 };
+type PointerOperation =
+  | { kind: "orbit"; pointerId: number; epoch: number; x: number; y: number; azimuth: number; elevation: number }
+  | { kind: "point-create"; pointerId: number; epoch: number; point: WorldPoint; x: number; y: number }
+  | { kind: "position-drag"; pointerId: number; epoch: number; object: PositionedSceneObject; mesh: Three.Object3D; point: WorldPoint; cameraPlane: CameraDragPlane }
+  | { kind: "stroke-drag"; pointerId: number; epoch: number; object: StrokeSceneObject; mesh: Three.Object3D; cameraPlane: CameraDragPlane; startHit: Vec3; translation: Vec3 }
+  | { kind: "stroke-create"; pointerId: number; epoch: number; samples: StrokeSample[]; cameraPlane: CameraDragPlane; line: Three.Line }
+  | { kind: "idle" };
 
 export function RockbreakerMap({
   roomId,
@@ -25,6 +38,11 @@ export function RockbreakerMap({
   onBack,
   onMoveGroupUp,
   onMoveGroupPosition,
+  drawingTool,
+  drawingColor,
+  drawingWidth,
+  sceneMutations,
+  onPreviewActiveChange,
   initialCameraAzimuth = 0.7,
   dropTargetId = "rockbreaker-scene-drop",
   dropTestId = "rockbreaker-scene-drop",
@@ -40,15 +58,32 @@ export function RockbreakerMap({
   onBack: () => void;
   onMoveGroupUp: (groupId: string, revision: number) => Promise<void>;
   onMoveGroupPosition?: (object: PositionedSceneObject, position: WorldPoint) => Promise<void>;
+  currentUid: string;
+  drawingTool: RockbreakerDrawingTool;
+  drawingColor: string;
+  drawingWidth: RockbreakerStrokeWidth;
+  sceneMutations?: {
+    create?: (draft: SceneObjectDraft) => Promise<void>;
+    remove?: (object: SceneObject) => Promise<void>;
+    movePosition?: (object: PositionedSceneObject, position: WorldPoint) => Promise<void>;
+    translateStroke?: (object: StrokeSceneObject, translation: Vec3) => Promise<void>;
+  };
+  onPreviewActiveChange?: (active: boolean) => void;
   initialCameraAzimuth?: number;
   dropTargetId?: string;
   dropTestId?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const objectsRef = useRef<SceneObject[]>(objects);
+  objectsRef.current = objects;
   const enemyPlacementRef = useRef<RockbreakerEnemyKind | null>(enemyPlacement);
   const onMoveGroupUpRef = useRef(onMoveGroupUp);
   const onMoveGroupPositionRef = useRef(onMoveGroupPosition);
+  const drawingToolRef = useRef(drawingTool);
+  const drawingColorRef = useRef(drawingColor);
+  const drawingWidthRef = useRef(drawingWidth);
+  const sceneMutationsRef = useRef(sceneMutations);
+  const onPreviewActiveChangeRef = useRef(onPreviewActiveChange);
   const groupLabelRefs = useRef(new Map<string, HTMLSpanElement>());
   const [sceneReady, setSceneReady] = useState(0);
   const [message, setMessage] = useState("Weltkoordinaten in km");
@@ -56,6 +91,10 @@ export function RockbreakerMap({
   const canWriteRef = useRef(canWrite);
   const showGridRef = useRef(showGrid);
   const initialCameraAzimuthRef = useRef(initialCameraAzimuth);
+  const cancelActiveOperationRef = useRef<(() => void) | null>(null);
+  const authoritativeObjectsSignatureRef = useRef(JSON.stringify(objects));
+  const authoritativeEpochRef = useRef({ signature: JSON.stringify(objects), epoch: 0 });
+  authoritativeEpochRef.current = advanceAuthoritativeEpoch(authoritativeEpochRef.current, JSON.stringify(objects));
   const sceneContext = useRef<{
     THREE: typeof import("three");
     scene: Three.Scene;
@@ -67,10 +106,14 @@ export function RockbreakerMap({
     objectMeshes: Map<string, Three.Object3D>;
   } | null>(null);
 
-  useEffect(() => { objectsRef.current = objects; }, [objects]);
   useEffect(() => { enemyPlacementRef.current = enemyPlacement; }, [enemyPlacement]);
   useEffect(() => { onMoveGroupUpRef.current = onMoveGroupUp; }, [onMoveGroupUp]);
   useEffect(() => { onMoveGroupPositionRef.current = onMoveGroupPosition; }, [onMoveGroupPosition]);
+  useEffect(() => { drawingToolRef.current = drawingTool; }, [drawingTool]);
+  useEffect(() => { drawingColorRef.current = drawingColor; }, [drawingColor]);
+  useEffect(() => { drawingWidthRef.current = drawingWidth; }, [drawingWidth]);
+  useEffect(() => { sceneMutationsRef.current = sceneMutations; }, [sceneMutations]);
+  useEffect(() => { onPreviewActiveChangeRef.current = onPreviewActiveChange; }, [onPreviewActiveChange]);
   useEffect(() => { getIdTokenRef.current = getIdToken; }, [getIdToken]);
   useEffect(() => { canWriteRef.current = canWrite; }, [canWrite]);
   useEffect(() => { showGridRef.current = showGrid; if (sceneContext.current) sceneContext.current.grid.visible = showGrid; }, [showGrid]);
@@ -125,6 +168,7 @@ export function RockbreakerMap({
       const objectRoot = new THREE.Group(); scene.add(objectRoot);
       const objectMeshes = new Map<string, Three.Object3D>();
       sceneContext.current = { THREE, scene, camera, renderer, grid, asteroidMeshes, objectRoot, objectMeshes };
+      canvas.dataset.sceneReady = "true";
       setSceneReady((revision) => revision + 1);
 
       const raycaster = new THREE.Raycaster();
@@ -155,27 +199,131 @@ export function RockbreakerMap({
         }, null);
       };
 
-      const orbit = { active: false, x: 0, y: 0, azimuth: 0, elevation: 0 };
-      let drag: {
-        object: PositionedSceneObject;
-        mesh: Three.Object3D;
-        lockRevision?: number;
-        point: WorldPoint;
-        cameraPlane?: { point: Vec3; normal: Vec3 };
-      } | null = null;
-      const down = (event: PointerEvent) => {
+      let operation: PointerOperation = { kind: "idle" };
+      const disposePreview = () => {
+        if (operation.kind !== "stroke-create") return;
+        scene.remove(operation.line);
+        operation.line.geometry.dispose();
+        const materials = Array.isArray(operation.line.material) ? operation.line.material : [operation.line.material];
+        materials.forEach((material) => material.dispose());
+        operation = { kind: "idle" };
+        onPreviewActiveChangeRef.current?.(false);
+      };
+      const createDraft = async (draft: SceneObjectDraft) => {
+        const customCreate = sceneMutationsRef.current?.create;
+        if (customCreate) await customCreate(draft);
+        else await createMapSceneObject(roomId, sceneId, draft, () => getIdTokenRef.current());
+      };
+      const removeObject = async (object: SceneObject) => {
+        const customRemove = sceneMutationsRef.current?.remove;
+        if (customRemove) await customRemove(object);
+        else await removeMapSceneObject(roomId, sceneId, object.id, () => getIdTokenRef.current());
+      };
+      const writePosition = async (
+        object: PositionedSceneObject, position: WorldPoint, expectedRevision: number, expectedLockRevision: number,
+      ) => {
+        const customMove = sceneMutationsRef.current?.movePosition;
+        if (customMove) await customMove(object, position);
+        else await moveMapSceneObject(roomId, sceneId, object.id, position, expectedRevision, expectedLockRevision, () => getIdTokenRef.current());
+      };
+      const writeStrokeTranslation = async (
+        object: StrokeSceneObject, translation: Vec3, expectedRevision: number, expectedLockRevision: number,
+      ) => {
+        const customTranslate = sceneMutationsRef.current?.translateStroke;
+        if (customTranslate) await customTranslate(object, translation);
+        else await translateMapSceneObject(roomId, sceneId, object.id, translation, expectedRevision, expectedLockRevision, () => getIdTokenRef.current());
+      };
+      const objectAtPointer = (event: PointerEvent, accepts: (object: SceneObject) => boolean) => {
         setRay(event);
-        const objectHit = raycaster.intersectObjects([...objectMeshes.values()], true).find((hit) => hit.object.userData.objectId || hit.object.parent?.userData.objectId);
-        const objectId = objectHit ? String(objectHit.object.userData.objectId ?? objectHit.object.parent?.userData.objectId) : "";
-        const object = objectsRef.current.find((candidate) => candidate.id === objectId);
+        for (const hit of raycaster.intersectObjects([...objectMeshes.values()], true)) {
+          const objectId = String(hit.object.userData.objectId ?? hit.object.parent?.userData.objectId ?? "");
+          const object = objectsRef.current.find((candidate) => candidate.id === objectId);
+          if (object && accepts(object)) return { hit, object };
+        }
+        return { hit: undefined, object: undefined };
+      };
+      const down = (event: PointerEvent) => {
+        if (operation.kind !== "idle") return;
+        const drawingTool = drawingToolRef.current;
+        if (canWriteRef.current && drawingTool === "stroke") {
+          const start = pointAt(event);
+          if (!start) return;
+          event.preventDefault();
+          const direction = new THREE.Vector3();
+          camera.getWorldDirection(direction);
+          const startPoint = freeSpaceWorldPoint(start);
+          const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(startPoint.x, startPoint.y, startPoint.z)]);
+          const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: drawingColorRef.current }));
+          operation = {
+            kind: "stroke-create",
+            pointerId: event.pointerId,
+            epoch: authoritativeEpochRef.current.epoch,
+            line,
+            samples: [{ screen: { x: event.clientX, y: event.clientY }, world: startPoint }],
+            cameraPlane: {
+              point: [startPoint.x, startPoint.y, startPoint.z],
+              normal: [direction.x, direction.y, direction.z],
+            },
+          };
+          scene.add(line);
+          canvas.setPointerCapture(event.pointerId);
+          onPreviewActiveChangeRef.current?.(true);
+          return;
+        }
+        if (canWriteRef.current && drawingTool === "point") {
+          const point = pointAt(event);
+          if (!point) return;
+          event.preventDefault();
+          operation = { kind: "point-create", pointerId: event.pointerId, epoch: authoritativeEpochRef.current.epoch, point, x: event.clientX, y: event.clientY };
+          canvas.setPointerCapture(event.pointerId);
+          return;
+        }
+        const accepts = drawingTool === "delete" || drawingTool === "move"
+          ? (candidate: SceneObject) => candidate.type === "point" || candidate.type === "stroke"
+          : (candidate: SceneObject) => "position" in candidate && (candidate.type === "groupToken" || candidate.type === "enemyMarker");
+        const { hit: objectHit, object } = objectAtPointer(event, accepts);
+        if (object && canWriteRef.current && drawingTool === "delete") {
+          event.preventDefault();
+          void removeObject(object)
+            .then(() => setMessage("Zeichnung gelöscht."))
+            .catch(() => setMessage("Zeichnung konnte nicht gelöscht werden."));
+          return;
+        }
+        if (object?.type === "stroke" && objectHit && canWriteRef.current && drawingTool === "move") {
+          event.preventDefault();
+          const mesh = objectMeshes.get(object.id);
+          if (!mesh) return;
+          const direction = new THREE.Vector3(); camera.getWorldDirection(direction);
+          operation = {
+            kind: "stroke-drag",
+            pointerId: event.pointerId,
+            epoch: authoritativeEpochRef.current.epoch,
+            object,
+            mesh,
+            cameraPlane: { point: [objectHit.point.x, objectHit.point.y, objectHit.point.z], normal: [direction.x, direction.y, direction.z] },
+            startHit: [objectHit.point.x, objectHit.point.y, objectHit.point.z],
+            translation: [0, 0, 0],
+          };
+          canvas.setPointerCapture(event.pointerId);
+          return;
+        }
         if (object && canWriteRef.current && "position" in object) {
+          const mayMove = object.type === "groupToken"
+            ? drawingTool === "pointer"
+            : object.type === "enemyMarker"
+              ? drawingTool === "pointer"
+              : drawingTool === "move";
+          if (!mayMove) return;
           event.preventDefault();
           canvas.setPointerCapture(event.pointerId);
-          if (object.type === "groupToken") {
+          if (object.type === "groupToken" || object.type === "enemyMarker" || object.type === "point") {
             const mesh = objectMeshes.get(object.id);
             const direction = new THREE.Vector3();
             camera.getWorldDirection(direction);
-            if (mesh) drag = {
+            if (mesh) operation = {
+              kind: "position-drag",
+              pointerId: event.pointerId,
+              epoch: authoritativeEpochRef.current.epoch,
               object,
               mesh,
               point: object.position,
@@ -186,18 +334,54 @@ export function RockbreakerMap({
             };
             return;
           }
-          void lockMapSceneObject(roomId, sceneId, object.id, () => getIdTokenRef.current()).then((locked) => {
-            const mesh = objectMeshes.get(object.id);
-            if (mesh && "position" in locked) drag = { object: locked, mesh, lockRevision: locked.lockRevision ?? 0, point: locked.position };
-          }).catch((reason) => setMessage(reason instanceof Error ? reason.message : "Objekt ist gesperrt."));
-          return;
         }
-        orbit.active = true; orbit.x = event.clientX; orbit.y = event.clientY; orbit.azimuth = cameraState.azimuth; orbit.elevation = cameraState.elevation;
+        if (drawingTool !== "pointer") return;
+        operation = { kind: "orbit", pointerId: event.pointerId, epoch: authoritativeEpochRef.current.epoch, x: event.clientX, y: event.clientY, azimuth: cameraState.azimuth, elevation: cameraState.elevation };
         canvas.setPointerCapture(event.pointerId);
       };
       const move = (event: PointerEvent) => {
-        if (drag) {
-          const point = drag.object.type === "groupToken" && drag.cameraPlane
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
+        if (operation.kind === "point-create") return;
+        if (operation.kind === "stroke-create") {
+          const rect = canvas.getBoundingClientRect();
+          const client = clampCanvasPoint({ x: event.clientX, y: event.clientY }, rect);
+          setRayAt(client.x, client.y);
+          const intersection = intersectCameraDragPlane({
+            origin: [raycaster.ray.origin.x, raycaster.ray.origin.y, raycaster.ray.origin.z],
+            direction: [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z],
+          }, operation.cameraPlane.point, operation.cameraPlane.normal);
+          if (!intersection) return;
+          operation.samples = appendStrokeSample(operation.samples, {
+            screen: client,
+            world: freeSpaceWorldPoint(intersection),
+          });
+          const oldGeometry = operation.line.geometry;
+          operation.line.geometry = new THREE.BufferGeometry().setFromPoints(
+            operation.samples.map(({ world }) => new THREE.Vector3(world.x, world.y, world.z)),
+          );
+          oldGeometry.dispose();
+          return;
+        }
+        if (operation.kind === "stroke-drag") {
+          const rect = canvas.getBoundingClientRect();
+          const client = clampCanvasPoint({ x: event.clientX, y: event.clientY }, rect);
+          setRayAt(client.x, client.y);
+          const intersection = intersectCameraDragPlane({
+            origin: [raycaster.ray.origin.x, raycaster.ray.origin.y, raycaster.ray.origin.z],
+            direction: [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z],
+          }, operation.cameraPlane.point, operation.cameraPlane.normal);
+          if (!intersection) return;
+          const desired: Vec3 = [
+            intersection[0] - operation.startHit[0],
+            intersection[1] - operation.startHit[1],
+            intersection[2] - operation.startHit[2],
+          ];
+          operation.translation = clampStrokeTranslation(operation.object.points, desired);
+          operation.mesh.position.set(...operation.translation);
+          return;
+        }
+        if (operation.kind === "position-drag") {
+          const point = operation.cameraPlane
             ? (() => {
                 const rect = canvas.getBoundingClientRect();
                 const client = clampCanvasPoint({ x: event.clientX, y: event.clientY }, rect);
@@ -205,34 +389,86 @@ export function RockbreakerMap({
                 const intersection = intersectCameraDragPlane({
                   origin: [raycaster.ray.origin.x, raycaster.ray.origin.y, raycaster.ray.origin.z],
                   direction: [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z],
-                }, drag.cameraPlane.point, drag.cameraPlane.normal);
+                }, operation.cameraPlane.point, operation.cameraPlane.normal);
                 return intersection ? freeSpaceWorldPoint(intersection) : null;
               })()
             : pointAt(event);
-          if (point) { drag.point = point; drag.mesh.position.set(point.x, point.y, point.z); }
+          if (point) { operation.point = point; operation.mesh.position.set(point.x, point.y, point.z); }
           return;
         }
-        if (orbit.active) {
-          cameraState.azimuth = orbit.azimuth - (event.clientX - orbit.x) * 0.008;
-          cameraState.elevation = Math.max(-1.25, Math.min(1.25, orbit.elevation + (event.clientY - orbit.y) * 0.006));
+        if (operation.kind === "orbit") {
+          cameraState.azimuth = operation.azimuth - (event.clientX - operation.x) * 0.008;
+          cameraState.elevation = Math.max(-1.25, Math.min(1.25, operation.elevation + (event.clientY - operation.y) * 0.006));
           updateCamera();
         }
       };
       const up = (event: PointerEvent) => {
-        if (drag) {
-          const current = drag; drag = null;
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
+        if (operation.kind !== "idle" && !operationEpochIsCurrent(operation.epoch, authoritativeEpochRef.current)) {
+          cancelActiveOperationRef.current?.();
+          return;
+        }
+        if (operation.kind === "point-create") {
+          const pending = operation;
+          operation = { kind: "idle" };
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+          if (Math.abs(event.clientX - pending.x) < 4 && Math.abs(event.clientY - pending.y) < 4) {
+            void createDraft({ type: "point", color: drawingColorRef.current, position: pending.point })
+              .then(() => setMessage("3D-Punkt gespeichert."))
+              .catch(() => setMessage("Zeichnung konnte nicht gespeichert werden."));
+          }
+          return;
+        }
+        if (operation.kind === "stroke-create") {
+          const samples = operation.samples;
+          disposePreview();
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+          const points = simplifyStrokePoints(samples.map(({ world }) => world));
+          const first = points[0];
+          const distinct = first && points.some((point) => point.x !== first.x || point.y !== first.y || point.z !== first.z);
+          if (points.length >= 2 && distinct) {
+            void createDraft({ type: "stroke", color: drawingColorRef.current, width: drawingWidthRef.current, points })
+              .then(() => setMessage("3D-Zeichnung gespeichert."))
+              .catch(() => setMessage("Zeichnung konnte nicht gespeichert werden."));
+          }
+          return;
+        }
+        if (operation.kind === "stroke-drag") {
+          const current = operation; operation = { kind: "idle" };
+          const finish = async () => sceneMutationsRef.current?.translateStroke
+            ? sceneMutationsRef.current.translateStroke(current.object, current.translation)
+            : releaseStrokeDrag(current.object, current.translation, {
+                lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                write: writeStrokeTranslation,
+              });
+          void finish()
+            .then(() => setMessage("3D-Zeichnung verschoben."))
+            .catch((reason) => {
+              current.mesh.position.set(0, 0, 0);
+              setMessage(reason instanceof Error ? reason.message : "Positionskonflikt – Serverstand übernommen.");
+            });
+          if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+          return;
+        }
+        if (operation.kind === "position-drag") {
+          const current = operation; operation = { kind: "idle" };
           const dropIntent = tokenDropIntentAtPoint(event.clientX, event.clientY);
-          const operation = current.object.type === "groupToken" && dropIntent?.kind === "moveUp"
+          const mutation = current.object.type === "groupToken" && dropIntent?.kind === "moveUp"
             ? onMoveGroupUpRef.current(current.object.groupId, current.object.revision)
             : current.object.type === "groupToken"
               ? onMoveGroupPositionRef.current
                 ? onMoveGroupPositionRef.current(current.object, current.point)
-                : lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
-                    if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
-                    return moveMapSceneObject(roomId, sceneId, locked, current.point, locked.lockRevision ?? 0, () => getIdTokenRef.current());
+                : releasePositionDrag(current.object, current.point, {
+                    lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                    write: writePosition,
                   })
-              : moveMapSceneObject(roomId, sceneId, current.object, current.point, current.lockRevision ?? 0, () => getIdTokenRef.current());
-          void operation
+              : sceneMutationsRef.current?.movePosition
+                ? sceneMutationsRef.current.movePosition(current.object, current.point)
+                : releasePositionDrag(current.object, current.point, {
+                    lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                    write: writePosition,
+                  });
+          void mutation
             .then(() => setMessage(dropIntent?.kind === "moveUp"
               ? "Trupp wurde nach Nyx verschoben."
               : `Gespeichert: ${current.point.x.toFixed(2)} / ${current.point.y.toFixed(2)} / ${current.point.z.toFixed(2)} km`))
@@ -245,19 +481,43 @@ export function RockbreakerMap({
           return;
         }
         const selected = enemyPlacementRef.current;
-        if (selected && canWriteRef.current && Math.abs(event.clientX - orbit.x) < 4 && Math.abs(event.clientY - orbit.y) < 4) {
+        const completedOrbit = operation.kind === "orbit" ? operation : null;
+        if (selected && completedOrbit && canWriteRef.current && Math.abs(event.clientX - completedOrbit.x) < 4 && Math.abs(event.clientY - completedOrbit.y) < 4) {
           const point = pointAt(event);
           if (point) {
             const draft = { type: "enemyMarker" as const, kind: selected, color: "#ef4444", position: point };
-            void createMapSceneObject(roomId, sceneId, draft, () => getIdTokenRef.current()).then(() => setMessage("3D-Objekt gespeichert.")).catch((reason) => setMessage(reason instanceof Error ? reason.message : "Objekt konnte nicht gesetzt werden."));
+            void createDraft(draft).then(() => setMessage("3D-Objekt gespeichert.")).catch((reason) => setMessage(reason instanceof Error ? reason.message : "Objekt konnte nicht gesetzt werden."));
           }
         }
-        orbit.active = false;
+        operation = { kind: "idle" };
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       };
+      const cancel = (event: PointerEvent) => {
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
+        disposePreview();
+        if (operation.kind === "stroke-drag") operation.mesh.position.set(0, 0, 0);
+        if (operation.kind === "position-drag") {
+          const confirmed = confirmedObjectPosition(objectsRef.current, operation.object.id, operation.object.position);
+          operation.mesh.position.set(confirmed.x, confirmed.y, confirmed.z);
+        }
+        operation = { kind: "idle" };
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      };
+      cancelActiveOperationRef.current = () => {
+        const active = operation;
+        const pointerId = active.kind === "idle" ? null : active.pointerId;
+        if (active.kind === "stroke-create") disposePreview();
+        if (active.kind === "stroke-drag") active.mesh.position.set(0, 0, 0);
+        if (active.kind === "position-drag") {
+          const confirmed = confirmedObjectPosition(objectsRef.current, active.object.id, active.object.position);
+          active.mesh.position.set(confirmed.x, confirmed.y, confirmed.z);
+        }
+        operation = { kind: "idle" };
+        if (pointerId !== null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+      };
       const wheel = (event: WheelEvent) => { event.preventDefault(); cameraState.distance = Math.max(8, Math.min(140, cameraState.distance * (event.deltaY > 0 ? 1.1 : 0.9))); updateCamera(); };
-      canvas.addEventListener("pointerdown", down); canvas.addEventListener("pointermove", move); canvas.addEventListener("pointerup", up); canvas.addEventListener("wheel", wheel, { passive: false });
-      cleanupListeners.push(() => canvas.removeEventListener("pointerdown", down), () => canvas.removeEventListener("pointermove", move), () => canvas.removeEventListener("pointerup", up), () => canvas.removeEventListener("wheel", wheel));
+      canvas.addEventListener("pointerdown", down); canvas.addEventListener("pointermove", move); canvas.addEventListener("pointerup", up); canvas.addEventListener("pointercancel", cancel); canvas.addEventListener("wheel", wheel, { passive: false });
+      cleanupListeners.push(() => canvas.removeEventListener("pointerdown", down), () => canvas.removeEventListener("pointermove", move), () => canvas.removeEventListener("pointerup", up), () => canvas.removeEventListener("pointercancel", cancel), () => canvas.removeEventListener("wheel", wheel), disposePreview);
 
       resizeObserver = new ResizeObserver(() => {
         const width = Math.max(1, canvas.clientWidth); const height = Math.max(1, canvas.clientHeight);
@@ -283,9 +543,11 @@ export function RockbreakerMap({
 
     return () => {
       disposed = true;
+      delete canvas.dataset.sceneReady;
       cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       cleanupListeners.forEach((cleanup) => cleanup());
+      cancelActiveOperationRef.current = null;
       const context = sceneContext.current;
       if (context) {
         context.scene.traverse((object) => {
@@ -304,23 +566,18 @@ export function RockbreakerMap({
   useEffect(() => {
     const context = sceneContext.current;
     if (!context) return;
+    const authoritativeSignature = JSON.stringify(objects);
+    if (authoritativeObjectsSignatureRef.current !== authoritativeSignature) {
+      cancelActiveOperationRef.current?.();
+      authoritativeObjectsSignatureRef.current = authoritativeSignature;
+    }
+    // Firestore/UI-test state is authoritative: discard every optimistic root offset.
     const { THREE, objectRoot, objectMeshes } = context;
-    objectRoot.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach((material) => material.dispose());
-      }
-    });
+    [...objectRoot.children].forEach(disposeRockbreakerObject3d);
     objectRoot.clear(); objectMeshes.clear();
     for (const object of objects) {
-      if (!("position" in object)) continue;
-      const geometry = object.type === "enemyMarker" ? new THREE.ConeGeometry(0.45, 1.2, 4) : new THREE.SphereGeometry(0.55, 16, 12);
-      const material = new THREE.MeshStandardMaterial({ color: object.color, emissive: object.color, emissiveIntensity: 0.25 });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(object.position.x, object.position.y, object.position.z);
-      mesh.userData.objectId = object.id;
-      objectRoot.add(mesh); objectMeshes.set(object.id, mesh);
+      const rendered = createRockbreakerObject3d(THREE, object);
+      objectRoot.add(rendered.root); objectMeshes.set(object.id, rendered.root);
     }
   }, [objects, sceneReady]);
 

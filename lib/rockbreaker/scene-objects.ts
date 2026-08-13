@@ -21,10 +21,17 @@ export type SceneObject = SceneObjectBase & (
   | { type: "enemyMarker"; kind: "infantry" | "ground" | "air"; position: WorldPoint }
   | { type: "point"; label?: string; position: WorldPoint }
   | { type: "line"; start: WorldPoint; end: WorldPoint }
+  | { type: "stroke"; width: RockbreakerStrokeWidth; points: WorldPoint[] }
 );
+
+export const ROCKBREAKER_STROKE_WIDTHS = [1, 3, 6] as const;
+export const ROCKBREAKER_STROKE_MAX_POINTS = 512;
+export type RockbreakerStrokeWidth = typeof ROCKBREAKER_STROKE_WIDTHS[number];
+export type StrokeSceneObject = Extract<SceneObject, { type: "stroke" }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isRockbreakerStrokeWidth = (value: unknown): value is RockbreakerStrokeWidth => ROCKBREAKER_STROKE_WIDTHS.some((candidate) => candidate === value);
 
 function parseVec3(value: unknown): Vec3 | null {
   return Array.isArray(value) && value.length === 3 && value.every(finite) ? value as unknown as Vec3 : null;
@@ -78,6 +85,16 @@ export function parseSceneObject(value: unknown): SceneObject | null {
     const start = parseWorldPoint(value.start);
     const end = parseWorldPoint(value.end);
     return start && end ? { ...base, type: "line", start, end } : null;
+  }
+  if (value.type === "stroke") {
+    const points = Array.isArray(value.points) ? value.points.map(parseWorldPoint) : null;
+    const width = value.width;
+    if (points && points.length >= 2 && points.length <= ROCKBREAKER_STROKE_MAX_POINTS
+      && points.every((point): point is WorldPoint => point !== null)
+      && isRockbreakerStrokeWidth(width)) {
+      return { ...base, type: "stroke", width, points };
+    }
+    return null;
   }
   const position = parseWorldPoint(value.position);
   if (!position) return null;
