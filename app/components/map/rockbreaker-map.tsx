@@ -458,9 +458,9 @@ export function RockbreakerMap({
             : current.object.type === "groupToken"
               ? onMoveGroupPositionRef.current
                 ? onMoveGroupPositionRef.current(current.object, current.point)
-                : lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
-                    if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
-                    return moveMapSceneObject(roomId, sceneId, current.object.id, current.point, current.object.revision, locked.lockRevision ?? 0, () => getIdTokenRef.current());
+                : releasePositionDrag(current.object, current.point, {
+                    lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                    write: writePosition,
                   })
               : sceneMutationsRef.current?.movePosition
                 ? sceneMutationsRef.current.movePosition(current.object, current.point)
