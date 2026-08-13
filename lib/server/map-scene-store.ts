@@ -1,16 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Role } from "@/lib/domain/roles";
-import type { WorldPoint } from "@/lib/rockbreaker/coordinates";
-import { parseWorldPoint, type SceneObject } from "@/lib/rockbreaker/scene-objects";
+import type { Vec3, WorldPoint } from "@/lib/rockbreaker/coordinates";
+import {
+  parseWorldPoint,
+  ROCKBREAKER_STROKE_MAX_POINTS,
+  ROCKBREAKER_STROKE_WIDTHS,
+  type RockbreakerStrokeWidth,
+  type SceneObject,
+  type StrokeSceneObject,
+} from "@/lib/rockbreaker/scene-objects";
 import { orderMarkerObjectId } from "@/lib/rockbreaker/scene-objects";
 import { isRockbreakerPositionWithinBounds } from "@/lib/rockbreaker/drag";
+import { translateStrokePoints } from "@/lib/rockbreaker/drawing";
 
 export type MapSceneActor = { uid: string; role: Role };
 export type SceneObjectDraft =
   | { type: "groupToken"; groupId: string; color: string; position: WorldPoint }
   | { type: "orderMarker"; groupId: string; color: string; position: WorldPoint }
   | { type: "enemyMarker"; kind: "infantry" | "ground" | "air"; color: string; position: WorldPoint }
-  | { type: "point"; label?: string; color: string; position: WorldPoint };
+  | { type: "point"; label?: string; color: string; position: WorldPoint }
+  | { type: "stroke"; color: string; width: RockbreakerStrokeWidth; points: WorldPoint[] };
 
 export type MapSceneTransactionStore = {
   runObjectTransaction: (
@@ -44,8 +53,25 @@ function assertFeatureEnabled(enabled: boolean) {
   if (!enabled) throw new MapSceneStoreError("FEATURE_DISABLED");
 }
 
+function validPosition(position: unknown): position is WorldPoint {
+  return parseWorldPoint(position) !== null;
+}
+
 function validDraft(draft: SceneObjectDraft) {
-  return /^#[0-9a-fA-F]{6}$/.test(draft.color) && parseWorldPoint(draft.position) !== null;
+  if (!/^#[0-9a-fA-F]{6}$/.test(draft.color)) return false;
+  if (draft.type === "stroke") {
+    return ROCKBREAKER_STROKE_WIDTHS.includes(draft.width)
+      && draft.points.length >= 2
+      && draft.points.length <= ROCKBREAKER_STROKE_MAX_POINTS
+      && draft.points.every(validPosition);
+  }
+  return validPosition(draft.position);
+}
+
+function draftPositionsWithinBounds(draft: SceneObjectDraft) {
+  return draft.type === "stroke"
+    ? draft.points.every(isRockbreakerPositionWithinBounds)
+    : isRockbreakerPositionWithinBounds(draft.position);
 }
 
 export async function createSceneObject(store: MapSceneTransactionStore, input: {
@@ -55,6 +81,7 @@ export async function createSceneObject(store: MapSceneTransactionStore, input: 
   assertBoundary(input.sceneId);
   if (input.draft.type === "groupToken") throw new MapSceneStoreError("PROTECTED_OBJECT");
   if (!validDraft(input.draft)) throw new MapSceneStoreError("INVALID_OBJECT");
+  if (!draftPositionsWithinBounds(input.draft)) throw new MapSceneStoreError("OUT_OF_BOUNDS");
   const objectId = input.draft.type === "orderMarker" ? orderMarkerObjectId(input.draft.groupId)
     : `${input.draft.type}--${randomUUID()}`;
   const result = await store.runObjectTransaction(input.roomId, input.sceneId, objectId, async ({ object, groupIds, rockbreakerEnabled }) => {
@@ -70,6 +97,7 @@ export async function createSceneObject(store: MapSceneTransactionStore, input: 
     };
     if (input.draft.type === "groupToken" || input.draft.type === "orderMarker") return { ...base, type: input.draft.type, groupId: input.draft.groupId, position: input.draft.position };
     if (input.draft.type === "enemyMarker") return { ...base, type: "enemyMarker", kind: input.draft.kind, position: input.draft.position };
+    if (input.draft.type === "stroke") return { ...base, type: "stroke", width: input.draft.width, points: input.draft.points };
     return { ...base, type: "point", ...(input.draft.label ? { label: input.draft.label } : {}), position: input.draft.position };
   });
   if (!result) throw new MapSceneStoreError("INVALID_OBJECT");
@@ -113,12 +141,42 @@ export async function commitSceneObjectMove(store: MapSceneTransactionStore, inp
       throw new MapSceneStoreError("LOCK_MISMATCH", object);
     }
     if (!("position" in object)) throw new MapSceneStoreError("INVALID_OBJECT", object);
-    if (object.type === "groupToken" && !isRockbreakerPositionWithinBounds(input.position)) {
+    if (!isRockbreakerPositionWithinBounds(input.position)) {
       throw new MapSceneStoreError("OUT_OF_BOUNDS", object);
     }
     return { ...object, position: input.position, revision: object.revision + 1, updatedBy: input.actor.uid, updatedAtMs: input.nowMs };
   });
   if (!result) throw new MapSceneStoreError("OBJECT_NOT_FOUND");
+  return result;
+}
+
+export async function commitSceneObjectTranslation(store: MapSceneTransactionStore, input: {
+  roomId: string; sceneId: string; objectId: string; actor: MapSceneActor;
+  expectedRevision: number; expectedLockRevision: number; translation: Vec3; nowMs: number;
+}): Promise<StrokeSceneObject> {
+  const result = await store.runObjectTransaction(input.roomId, input.sceneId, input.objectId, async ({ object, rockbreakerEnabled }) => {
+    assertWriter(input.actor);
+    assertBoundary(input.sceneId);
+    assertFeatureEnabled(rockbreakerEnabled);
+    if (!object) throw new MapSceneStoreError("OBJECT_NOT_FOUND");
+    if (object.revision !== input.expectedRevision) throw new MapSceneStoreError("REVISION_CONFLICT", object);
+    if (object.lockedByUid !== input.actor.uid || object.lockRevision !== input.expectedLockRevision || (object.lockExpiresAtMs ?? 0) <= input.nowMs) {
+      throw new MapSceneStoreError("LOCK_MISMATCH", object);
+    }
+    if (object.type !== "stroke") throw new MapSceneStoreError("INVALID_OBJECT", object);
+    if (input.translation.length !== 3 || !input.translation.every(Number.isFinite)) throw new MapSceneStoreError("INVALID_OBJECT", object);
+    const points = translateStrokePoints(object.points, input.translation);
+    if (!points.every(isRockbreakerPositionWithinBounds)) throw new MapSceneStoreError("OUT_OF_BOUNDS", object);
+    return {
+      ...object,
+      points,
+      revision: object.revision + 1,
+      updatedBy: input.actor.uid,
+      updatedAtMs: input.nowMs,
+    };
+  });
+  if (!result) throw new MapSceneStoreError("OBJECT_NOT_FOUND");
+  if (result.type !== "stroke") throw new MapSceneStoreError("INVALID_OBJECT", result);
   return result;
 }
 
