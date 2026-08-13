@@ -12,16 +12,17 @@ import { confirmedObjectPosition, type RockbreakerStrokeWidth, type SceneObject,
 import { clampCanvasPoint, freeSpaceWorldPoint, intersectCameraDragPlane } from "@/lib/rockbreaker/drag";
 import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 import { createRockbreakerObject3d, disposeRockbreakerObject3d } from "@/lib/rockbreaker/three-scene-objects";
+import { advanceAuthoritativeEpoch, operationEpochIsCurrent } from "@/lib/rockbreaker/authoritative-epoch";
 
 export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
 type CameraDragPlane = { point: Vec3; normal: Vec3 };
 type PointerOperation =
-  | { kind: "orbit"; pointerId: number; x: number; y: number; azimuth: number; elevation: number }
-  | { kind: "point-create"; pointerId: number; point: WorldPoint; x: number; y: number }
-  | { kind: "position-drag"; pointerId: number; object: PositionedSceneObject; mesh: Three.Object3D; point: WorldPoint; cameraPlane: CameraDragPlane }
-  | { kind: "stroke-drag"; pointerId: number; object: StrokeSceneObject; mesh: Three.Object3D; cameraPlane: CameraDragPlane; startHit: Vec3; translation: Vec3 }
-  | { kind: "stroke-create"; pointerId: number; samples: StrokeSample[]; cameraPlane: CameraDragPlane; line: Three.Line }
+  | { kind: "orbit"; pointerId: number; epoch: number; x: number; y: number; azimuth: number; elevation: number }
+  | { kind: "point-create"; pointerId: number; epoch: number; point: WorldPoint; x: number; y: number }
+  | { kind: "position-drag"; pointerId: number; epoch: number; object: PositionedSceneObject; mesh: Three.Object3D; point: WorldPoint; cameraPlane: CameraDragPlane }
+  | { kind: "stroke-drag"; pointerId: number; epoch: number; object: StrokeSceneObject; mesh: Three.Object3D; cameraPlane: CameraDragPlane; startHit: Vec3; translation: Vec3 }
+  | { kind: "stroke-create"; pointerId: number; epoch: number; samples: StrokeSample[]; cameraPlane: CameraDragPlane; line: Three.Line }
   | { kind: "idle" };
 
 export function RockbreakerMap({
@@ -73,6 +74,7 @@ export function RockbreakerMap({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const objectsRef = useRef<SceneObject[]>(objects);
+  objectsRef.current = objects;
   const enemyPlacementRef = useRef<RockbreakerEnemyKind | null>(enemyPlacement);
   const onMoveGroupUpRef = useRef(onMoveGroupUp);
   const onMoveGroupPositionRef = useRef(onMoveGroupPosition);
@@ -90,6 +92,8 @@ export function RockbreakerMap({
   const initialCameraAzimuthRef = useRef(initialCameraAzimuth);
   const cancelActiveOperationRef = useRef<(() => void) | null>(null);
   const authoritativeObjectsSignatureRef = useRef(JSON.stringify(objects));
+  const authoritativeEpochRef = useRef({ signature: JSON.stringify(objects), epoch: 0 });
+  authoritativeEpochRef.current = advanceAuthoritativeEpoch(authoritativeEpochRef.current, JSON.stringify(objects));
   const sceneContext = useRef<{
     THREE: typeof import("three");
     scene: Three.Scene;
@@ -101,7 +105,6 @@ export function RockbreakerMap({
     objectMeshes: Map<string, Three.Object3D>;
   } | null>(null);
 
-  useEffect(() => { objectsRef.current = objects; }, [objects]);
   useEffect(() => { enemyPlacementRef.current = enemyPlacement; }, [enemyPlacement]);
   useEffect(() => { onMoveGroupUpRef.current = onMoveGroupUp; }, [onMoveGroupUp]);
   useEffect(() => { onMoveGroupPositionRef.current = onMoveGroupPosition; }, [onMoveGroupPosition]);
@@ -249,6 +252,7 @@ export function RockbreakerMap({
           operation = {
             kind: "stroke-create",
             pointerId: event.pointerId,
+            epoch: authoritativeEpochRef.current.epoch,
             line,
             samples: [{ screen: { x: event.clientX, y: event.clientY }, world: startPoint }],
             cameraPlane: {
@@ -265,7 +269,7 @@ export function RockbreakerMap({
           const point = pointAt(event);
           if (!point) return;
           event.preventDefault();
-          operation = { kind: "point-create", pointerId: event.pointerId, point, x: event.clientX, y: event.clientY };
+          operation = { kind: "point-create", pointerId: event.pointerId, epoch: authoritativeEpochRef.current.epoch, point, x: event.clientX, y: event.clientY };
           canvas.setPointerCapture(event.pointerId);
           return;
         }
@@ -288,6 +292,7 @@ export function RockbreakerMap({
           operation = {
             kind: "stroke-drag",
             pointerId: event.pointerId,
+            epoch: authoritativeEpochRef.current.epoch,
             object,
             mesh,
             cameraPlane: { point: [objectHit.point.x, objectHit.point.y, objectHit.point.z], normal: [direction.x, direction.y, direction.z] },
@@ -313,6 +318,7 @@ export function RockbreakerMap({
             if (mesh) operation = {
               kind: "position-drag",
               pointerId: event.pointerId,
+              epoch: authoritativeEpochRef.current.epoch,
               object,
               mesh,
               point: object.position,
@@ -325,7 +331,7 @@ export function RockbreakerMap({
           }
         }
         if (drawingTool !== "pointer") return;
-        operation = { kind: "orbit", pointerId: event.pointerId, x: event.clientX, y: event.clientY, azimuth: cameraState.azimuth, elevation: cameraState.elevation };
+        operation = { kind: "orbit", pointerId: event.pointerId, epoch: authoritativeEpochRef.current.epoch, x: event.clientX, y: event.clientY, azimuth: cameraState.azimuth, elevation: cameraState.elevation };
         canvas.setPointerCapture(event.pointerId);
       };
       const move = (event: PointerEvent) => {
@@ -393,6 +399,10 @@ export function RockbreakerMap({
       };
       const up = (event: PointerEvent) => {
         if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
+        if (operation.kind !== "idle" && !operationEpochIsCurrent(operation.epoch, authoritativeEpochRef.current)) {
+          cancelActiveOperationRef.current?.();
+          return;
+        }
         if (operation.kind === "point-create") {
           const pending = operation;
           operation = { kind: "idle" };

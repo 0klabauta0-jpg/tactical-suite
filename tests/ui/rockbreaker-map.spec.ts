@@ -373,3 +373,17 @@ test("authoritative object update cancels an active drag without a stale write",
   await expect(page.getByTestId("scene-translation-count")).toHaveText("0");
   await expect(page.getByTestId("rockbreaker-preview-count")).toHaveText("0");
 });
+
+test("rejects a stroke release in the same turn as an authoritative render", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  const { path } = await drawBentStroke(page);
+  const authoritative = await page.getByTestId("camera-a-stroke-points").textContent();
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(path[1].x, path[1].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x + 45, path[1].y - 35, { steps: 12 });
+  await page.getByTestId("authoritative-update-and-release").evaluate((button: HTMLButtonElement) => button.click());
+  await page.mouse.up();
+  await expect(page.getByTestId("scene-translation-count")).toHaveText("0");
+  await expect(page.getByTestId("camera-a-stroke-points")).toHaveText(authoritative ?? "");
+});

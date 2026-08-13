@@ -2,6 +2,7 @@
 
 import { notFound } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { RockbreakerDrawingControls } from "@/app/components/map/rockbreaker-drawing-controls";
 import { RockbreakerMap } from "@/app/components/map/rockbreaker-map";
 import { DraggableTroopChip, TroopTransferProvider } from "@/app/components/map/token-transfer-controls";
@@ -202,6 +203,17 @@ export default function RockbreakerTestPage() {
           className="hidden"
           onClick={() => setObjects((current) => current.map((object) => ({ ...object, revision: object.revision + 1, updatedAtMs: Date.now() })))}
         >Authoritativen Stand aktualisieren</button>
+        <button
+          data-testid="authoritative-update-and-release"
+          className="hidden"
+          onClick={() => {
+            flushSync(() => setObjects((current) => current.map((object) => ({
+              ...object, revision: object.revision + 1, updatedAtMs: Date.now(),
+            }))));
+            document.querySelector<HTMLCanvasElement>('canvas[aria-label="Rockbreaker 3D Karte"]')
+              ?.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, pointerType: "mouse", bubbles: true }));
+          }}
+        >Authoritativen Stand aktualisieren und sofort loslassen</button>
         <DraggableTroopChip
           groupId="g2"
           label="Red Team"
