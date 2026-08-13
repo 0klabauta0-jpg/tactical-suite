@@ -13,6 +13,7 @@ import { clampCanvasPoint, freeSpaceWorldPoint, intersectCameraDragPlane } from 
 import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 import { createRockbreakerObject3d, disposeRockbreakerObject3d } from "@/lib/rockbreaker/three-scene-objects";
 import { advanceAuthoritativeEpoch, operationEpochIsCurrent } from "@/lib/rockbreaker/authoritative-epoch";
+import { releasePositionDrag, releaseStrokeDrag } from "@/lib/rockbreaker/release";
 
 export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
@@ -218,15 +219,19 @@ export function RockbreakerMap({
         if (customRemove) await customRemove(object);
         else await removeMapSceneObject(roomId, sceneId, object.id, () => getIdTokenRef.current());
       };
-      const movePosition = async (object: PositionedSceneObject, position: WorldPoint, lockRevision: number) => {
+      const writePosition = async (
+        object: PositionedSceneObject, position: WorldPoint, expectedRevision: number, expectedLockRevision: number,
+      ) => {
         const customMove = sceneMutationsRef.current?.movePosition;
         if (customMove) await customMove(object, position);
-        else await moveMapSceneObject(roomId, sceneId, object.id, position, object.revision, lockRevision, () => getIdTokenRef.current());
+        else await moveMapSceneObject(roomId, sceneId, object.id, position, expectedRevision, expectedLockRevision, () => getIdTokenRef.current());
       };
-      const translateStroke = async (object: StrokeSceneObject, translation: Vec3, lockRevision: number) => {
+      const writeStrokeTranslation = async (
+        object: StrokeSceneObject, translation: Vec3, expectedRevision: number, expectedLockRevision: number,
+      ) => {
         const customTranslate = sceneMutationsRef.current?.translateStroke;
         if (customTranslate) await customTranslate(object, translation);
-        else await translateMapSceneObject(roomId, sceneId, object.id, translation, object.revision, lockRevision, () => getIdTokenRef.current());
+        else await translateMapSceneObject(roomId, sceneId, object.id, translation, expectedRevision, expectedLockRevision, () => getIdTokenRef.current());
       };
       const objectAtPointer = (event: PointerEvent, accepts: (object: SceneObject) => boolean) => {
         setRay(event);
@@ -430,13 +435,12 @@ export function RockbreakerMap({
         }
         if (operation.kind === "stroke-drag") {
           const current = operation; operation = { kind: "idle" };
-          const finish = async () => {
-            const customTranslate = sceneMutationsRef.current?.translateStroke;
-            if (customTranslate) return customTranslate(current.object, current.translation);
-            const locked = await lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current());
-            if (locked.type !== "stroke") throw new Error("Zeichnung ist nicht mehr verfügbar.");
-            return translateStroke(current.object, current.translation, locked.lockRevision ?? 0);
-          };
+          const finish = async () => sceneMutationsRef.current?.translateStroke
+            ? sceneMutationsRef.current.translateStroke(current.object, current.translation)
+            : releaseStrokeDrag(current.object, current.translation, {
+                lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                write: writeStrokeTranslation,
+              });
           void finish()
             .then(() => setMessage("3D-Zeichnung verschoben."))
             .catch((reason) => {
@@ -458,14 +462,12 @@ export function RockbreakerMap({
                     if (!("position" in locked)) throw new Error("Truppenmarker besitzt keine Position.");
                     return moveMapSceneObject(roomId, sceneId, current.object.id, current.point, current.object.revision, locked.lockRevision ?? 0, () => getIdTokenRef.current());
                   })
-              : (() => {
-                    const customMove = sceneMutationsRef.current?.movePosition;
-                    if (customMove) return customMove(current.object, current.point);
-                    return lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()).then((locked) => {
-                      if (!("position" in locked)) throw new Error("Objekt besitzt keine Position.");
-                      return movePosition(current.object, current.point, locked.lockRevision ?? 0);
-                    });
-                  })();
+              : sceneMutationsRef.current?.movePosition
+                ? sceneMutationsRef.current.movePosition(current.object, current.point)
+                : releasePositionDrag(current.object, current.point, {
+                    lock: () => lockMapSceneObject(roomId, sceneId, current.object.id, () => getIdTokenRef.current()),
+                    write: writePosition,
+                  });
           void mutation
             .then(() => setMessage(dropIntent?.kind === "moveUp"
               ? "Trupp wurde nach Nyx verschoben."
