@@ -16,6 +16,7 @@
 /test-results
 /playwright-report
 /room-backups
+/.worktrees/
 
 # next.js
 /.next/
