@@ -103,3 +103,11 @@ test("moves a troop vertically in camera space and keeps it inside the shared fi
   expect(bounded.z).toBeGreaterThanOrEqual(-23);
   expect(bounded.z).toBeLessThanOrEqual(29);
 });
+
+test("shows persistent Rockbreaker drawing controls to writers", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  await expect(page.getByRole("button", { name: "Freihand zeichnen" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
+  await expect(page.getByRole("button", { name: "Freihand zeichnen" }).first()).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Strichstärke 3" }).first()).toBeVisible();
+});

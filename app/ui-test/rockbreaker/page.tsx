@@ -2,10 +2,12 @@
 
 import { notFound } from "next/navigation";
 import { useState } from "react";
+import { RockbreakerDrawingControls } from "@/app/components/map/rockbreaker-drawing-controls";
 import { RockbreakerMap } from "@/app/components/map/rockbreaker-map";
 import { DraggableTroopChip, TroopTransferProvider } from "@/app/components/map/token-transfer-controls";
 import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
-import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
+import type { RockbreakerDrawingTool } from "@/lib/rockbreaker/drawing";
+import type { RockbreakerStrokeWidth, SceneObject } from "@/lib/rockbreaker/scene-objects";
 
 function objectAt(x: number, y: number, z: number, groupId = "g1", color = "#3b82f6"): SceneObject {
   return {
@@ -38,6 +40,9 @@ export default function RockbreakerTestPage() {
   const [cameraA, setCameraA] = useState(0.2);
   const [, setSceneClock] = useState(0);
   const [navigationCount, setNavigationCount] = useState(0);
+  const [drawingTool, setDrawingTool] = useState<RockbreakerDrawingTool>("pointer");
+  const [drawingColor, setDrawingColor] = useState("#22d3ee");
+  const [drawingWidth, setDrawingWidth] = useState<RockbreakerStrokeWidth>(3);
   if (process.env.NEXT_PUBLIC_ENABLE_UI_TEST_ROUTES !== "1") notFound();
   const coordinate = objects[0] && "position" in objects[0]
     ? `${objects[0].position.x.toFixed(2)} / ${objects[0].position.y.toFixed(2)} / ${objects[0].position.z.toFixed(2)}`
@@ -66,6 +71,10 @@ export default function RockbreakerTestPage() {
         ? { ...candidate, position, revision: candidate.revision + 1 }
         : candidate));
     },
+    currentUid: "test",
+    drawingTool,
+    drawingColor,
+    drawingWidth,
   };
   async function handleTransfer({ groupId, intent }: { groupId: string; expectedSource: TokenLocation; intent: TokenTransferIntent }) {
     if (intent.kind !== "enterChild" || intent.childId !== "rockbreaker") return;
@@ -86,6 +95,18 @@ export default function RockbreakerTestPage() {
           label="Red Team"
           color="#dc2626"
           expectedSource={{ kind: "unplaced" }}
+        />
+      </div>
+      <div className="mb-3 max-w-[280px] rounded border border-gray-700 bg-gray-900 p-2">
+        <RockbreakerDrawingControls
+          tool={drawingTool}
+          color={drawingColor}
+          width={drawingWidth}
+          canUndo={false}
+          onToolChange={setDrawingTool}
+          onColorChange={setDrawingColor}
+          onWidthChange={setDrawingWidth}
+          onUndo={() => {}}
         />
       </div>
       <div className="grid h-[70vh] grid-cols-2 gap-2">

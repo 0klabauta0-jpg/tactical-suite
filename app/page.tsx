@@ -18,6 +18,7 @@ import { loginToRoom, roomLoginPlayerToDomain } from "@/lib/auth/room-login-clie
 import { changePlayerStatusClient } from "@/lib/player-status/client";
 import { parsePlayerStatus, type PlayerStatus, type PlayerStatusAction } from "@/lib/player-status/model";
 import { MapControlDock } from "@/app/components/map/map-control-dock";
+import { RockbreakerDrawingControls } from "@/app/components/map/rockbreaker-drawing-controls";
 import { RockbreakerMap, type RockbreakerEnemyKind } from "@/app/components/map/rockbreaker-map";
 import {
   DraggableTroopChip,
@@ -42,8 +43,9 @@ import { transferTokenClient, TokenTransferClientError } from "@/lib/map/token-t
 import { groupsForLocationMarker, locateGroup, type GroupLocation } from "@/lib/map/token-occupancy";
 import { resolveParentLocation, selectEntry2dPosition, selectReturn2dPosition } from "@/lib/map/token-placement";
 import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
-import { subscribeSceneObjects } from "@/lib/map-scene/client";
-import type { SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { removeMapSceneObject, subscribeSceneObjects } from "@/lib/map-scene/client";
+import { latestOwnDrawingObject, type RockbreakerDrawingTool } from "@/lib/rockbreaker/drawing";
+import type { RockbreakerStrokeWidth, SceneObject } from "@/lib/rockbreaker/scene-objects";
 import { rightPanelStack } from "@/lib/ui/session-panel-layout";
 import { parseBoardState, type BoardGroup as Group, type BoardState } from "@/lib/board/state";
 import {
@@ -3716,6 +3718,10 @@ function BoardApp() {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [rockbreakerObjects, setRockbreakerObjects] = useState<SceneObject[]>([]);
   const [rockbreakerEnemyPlacement, setRockbreakerEnemyPlacement] = useState<RockbreakerEnemyKind | null>(null);
+  const [rockbreakerDrawingTool, setRockbreakerDrawingTool] = useState<RockbreakerDrawingTool>("pointer");
+  const [rockbreakerDrawingColor, setRockbreakerDrawingColor] = useState("#22d3ee");
+  const [rockbreakerDrawingWidth, setRockbreakerDrawingWidth] = useState<RockbreakerStrokeWidth>(3);
+  const [rockbreakerDrawingBusy, setRockbreakerDrawingBusy] = useState(false);
   const rockbreakerObjectsRef = useRef<SceneObject[]>([]);
   const [pendingTokenTransfers, setPendingTokenTransfers] = useState<Set<string>>(() => new Set());
   const pendingTokenTransfersRef = useRef<Set<string>>(new Set());
@@ -5702,6 +5708,10 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 showGrid={showGrid}
                 canWrite={canWrite}
                 getIdToken={() => user.getIdToken()}
+                currentUid={user.uid}
+                drawingTool={rockbreakerDrawingTool}
+                drawingColor={rockbreakerDrawingColor}
+                drawingWidth={rockbreakerDrawingWidth}
                 onBack={() => setActiveMapId("main")}
                 onMoveGroupUp={moveRockbreakerGroupUp}
               />
@@ -5802,7 +5812,26 @@ drawingsBySystem: { ...drawingsBySystemRef.current, [sysId]: drawingsRef.current
                 </div>
               </div>
             ) : null}
-            drawing={activeRenderer === "image2d" && activeImage && canWrite ? (
+            drawing={activeRenderer === "rockbreaker3d" && canWrite && user ? (
+              <RockbreakerDrawingControls
+                tool={rockbreakerDrawingTool}
+                color={rockbreakerDrawingColor}
+                width={rockbreakerDrawingWidth}
+                canUndo={latestOwnDrawingObject(rockbreakerObjects, user.uid) !== null}
+                busy={rockbreakerDrawingBusy}
+                onToolChange={setRockbreakerDrawingTool}
+                onColorChange={setRockbreakerDrawingColor}
+                onWidthChange={setRockbreakerDrawingWidth}
+                onUndo={() => {
+                  const object = latestOwnDrawingObject(rockbreakerObjects, user.uid);
+                  if (!object || !activeMapEntry?.sceneId) return;
+                  setRockbreakerDrawingBusy(true);
+                  void removeMapSceneObject(roomId, activeMapEntry.sceneId, object.id, () => user.getIdToken())
+                    .catch((reason) => setTokenTransferMessage(getErrorMessage(reason, "Zeichnung konnte nicht gelöscht werden.")))
+                    .finally(() => setRockbreakerDrawingBusy(false));
+                }}
+              />
+            ) : activeRenderer === "image2d" && activeImage && canWrite ? (
               <DrawingToolbar
                 tool={drawTool} setTool={setDrawTool}
                 color={drawColor} setColor={setDrawColor}

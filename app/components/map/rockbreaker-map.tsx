@@ -5,10 +5,12 @@ import type * as Three from "three";
 import { ParentLevelDropTarget, TokenDropTarget, tokenDropIntentAtPoint } from "@/app/components/map/token-transfer-controls";
 import type { BoardGroup } from "@/lib/board/state";
 import { createMapSceneObject, lockMapSceneObject, moveMapSceneObject } from "@/lib/map-scene/client";
+import type { RockbreakerDrawingTool } from "@/lib/rockbreaker/drawing";
 import { loadRockbreakerField } from "@/lib/rockbreaker/field";
 import { resolveWorldPoint, worldPointFromHit, type AsteroidHit, type Mat4, type Vec3, type WorldPoint } from "@/lib/rockbreaker/coordinates";
-import { confirmedObjectPosition, type SceneObject } from "@/lib/rockbreaker/scene-objects";
+import { confirmedObjectPosition, type RockbreakerStrokeWidth, type SceneObject, type StrokeSceneObject } from "@/lib/rockbreaker/scene-objects";
 import { clampCanvasPoint, freeSpaceWorldPoint, intersectCameraDragPlane } from "@/lib/rockbreaker/drag";
+import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 
 export type RockbreakerEnemyKind = "infantry" | "ground" | "air";
 type PositionedSceneObject = Extract<SceneObject, { position: WorldPoint }>;
@@ -40,6 +42,17 @@ export function RockbreakerMap({
   onBack: () => void;
   onMoveGroupUp: (groupId: string, revision: number) => Promise<void>;
   onMoveGroupPosition?: (object: PositionedSceneObject, position: WorldPoint) => Promise<void>;
+  currentUid: string;
+  drawingTool: RockbreakerDrawingTool;
+  drawingColor: string;
+  drawingWidth: RockbreakerStrokeWidth;
+  sceneMutations?: {
+    create?: (draft: SceneObjectDraft) => Promise<void>;
+    remove?: (object: SceneObject) => Promise<void>;
+    movePosition?: (object: PositionedSceneObject, position: WorldPoint) => Promise<void>;
+    translateStroke?: (object: StrokeSceneObject, translation: Vec3) => Promise<void>;
+  };
+  onPreviewActiveChange?: (active: boolean) => void;
   initialCameraAzimuth?: number;
   dropTargetId?: string;
   dropTestId?: string;
