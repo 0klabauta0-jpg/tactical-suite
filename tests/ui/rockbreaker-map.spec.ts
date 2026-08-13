@@ -44,6 +44,28 @@ function coordinates(value: string | null) {
   return { x: parts[0], y: parts[1], z: parts[2] };
 }
 
+async function drawBentStroke(page: import("@playwright/test").Page, expectedStrokeCount = "1") {
+  await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
+  const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
+  if (!box) throw new Error("Rockbreaker canvas fehlt.");
+  const path = [
+    { x: box.x + 290, y: box.y + 220 },
+    { x: box.x + 350, y: box.y + 170 },
+    { x: box.x + 415, y: box.y + 235 },
+  ];
+  await page.mouse.move(path[0].x, path[0].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x, path[1].y, { steps: 16 });
+  await page.mouse.move(path[2].x, path[2].y, { steps: 16 });
+  await page.mouse.up();
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText(expectedStrokeCount);
+  return { box, path };
+}
+
+const readPoints = async (page: import("@playwright/test").Page) => JSON.parse(
+  await page.getByTestId("camera-a-stroke-points").textContent() ?? "[]",
+) as Array<[number, number, number]>;
+
 test("two cameras render one shared world coordinate", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker");
   await expect(page.getByLabel("Rockbreaker 3D Karte")).toHaveCount(2);
@@ -155,4 +177,127 @@ test("shows persistent Rockbreaker drawing controls to writers", async ({ page }
   await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
   await expect(page.getByRole("button", { name: "Freihand zeichnen" }).first()).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Strichstärke 3" }).first()).toBeVisible();
+});
+
+test("moves the complete stroke in xyz without changing its shape", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  const { path } = await drawBentStroke(page);
+  const before = await readPoints(page);
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(path[1].x, path[1].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x + 80, path[1].y - 70, { steps: 20 });
+  await page.mouse.up();
+  const after = await readPoints(page);
+  const deltas = after.map((point, index) => point.map((value, axis) => value - before[index][axis]));
+  expect(deltas.every((delta) => delta.every((value, axis) => Math.abs(value - deltas[0][axis]) < 0.001))).toBe(true);
+  expect(deltas[0].every((value) => Math.abs(value) > 0.01)).toBe(true);
+  const segment = (points: Array<[number, number, number]>, index: number) =>
+    points[index + 1].map((value, axis) => value - points[index][axis]);
+  const sameVector = (left: number[], right: number[]) => left.every((value, axis) => Math.abs(value - right[axis]) < 0.001);
+  expect(sameVector(segment(after, 0), segment(before, 0))).toBe(true);
+  expect(sameVector(segment(after, before.length - 2), segment(before, before.length - 2))).toBe(true);
+  const movedScreen = { x: path[1].x + 80, y: path[1].y - 70 };
+  await page.mouse.move(movedScreen.x, movedScreen.y);
+  await page.mouse.down();
+  await page.mouse.move(movedScreen.x + 2_000, movedScreen.y + 2_000, { steps: 24 });
+  await page.mouse.up();
+  const bounded = await readPoints(page);
+  expect(bounded.every(([x, y, z]) => x >= -36 && x <= 37 && y >= -31 && y <= 25 && z >= -23 && z <= 29)).toBe(true);
+});
+
+test("moves one drawing point in xyz", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
+  if (!box) throw new Error("Rockbreaker canvas fehlt.");
+  const start = { x: box.x + 470, y: box.y + 250 };
+  await page.getByRole("button", { name: "Punkt setzen" }).first().click();
+  await page.mouse.click(start.x, start.y);
+  const before = coordinates(await page.getByTestId("drawing-point-coordinate").textContent());
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 60, start.y - 60, { steps: 20 });
+  await page.mouse.up();
+  const after = coordinates(await page.getByTestId("drawing-point-coordinate").textContent());
+  expect(after.x).not.toBe(before.x);
+  expect(after.y).not.toBe(before.y);
+  expect(after.z).not.toBe(before.z);
+});
+
+test("deletes a selected point and stroke but never a troop", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  const { box, path } = await drawBentStroke(page);
+  await page.getByRole("button", { name: "Punkt setzen" }).first().click();
+  await page.mouse.click(box.x + 480, box.y + 260);
+  await expect(page.getByTestId("rockbreaker-point-count")).toHaveText("1");
+  await page.getByRole("button", { name: "Zeichnung löschen" }).first().click();
+  await page.mouse.click(path[1].x, path[1].y);
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("0");
+  await page.mouse.click(box.x + 480, box.y + 260);
+  await expect(page.getByTestId("rockbreaker-point-count")).toHaveText("0");
+  const troop = await page.getByTestId("rockbreaker-group-g1").first().boundingBox();
+  if (!troop) throw new Error("Trupp fehlt.");
+  await page.mouse.click(troop.x + troop.width / 2, troop.y + troop.height / 2);
+  await expect(page.getByTestId("rockbreaker-group-g1")).toHaveCount(2);
+});
+
+test("undo removes only the current user's latest drawing", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?foreignStroke=1");
+  const { box } = await drawBentStroke(page, "2");
+  await page.getByRole("button", { name: "Punkt setzen" }).first().click();
+  await page.mouse.click(box.x + 470, box.y + 250);
+  await page.getByRole("button", { name: "Eigene letzte Zeichnung rückgängig" }).first().click();
+  await expect(page.getByTestId("rockbreaker-point-count")).toHaveText("0");
+  await page.getByRole("button", { name: "Eigene letzte Zeichnung rückgängig" }).first().click();
+  await expect(page.getByTestId("foreign-stroke-count")).toHaveText("1");
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("1");
+});
+
+test("moves an enemy marker freely in xyz and remains bounded", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?emptyEnemy=1");
+  const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
+  if (!box) throw new Error("Rockbreaker canvas fehlt.");
+  const start = { x: box.x + 430, y: box.y + 230 };
+  await page.getByRole("button", { name: "Boden-Feindmarker setzen" }).click();
+  await page.mouse.click(start.x, start.y);
+  const before = coordinates(await page.getByTestId("enemy-coordinate").textContent());
+  await page.getByRole("button", { name: "Zeiger" }).first().click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x, start.y - 90, { steps: 20 });
+  await page.mouse.up();
+  const after = coordinates(await page.getByTestId("enemy-coordinate").textContent());
+  expect(after.y).not.toBe(before.y);
+  expect(after.x).toBeGreaterThanOrEqual(-36); expect(after.x).toBeLessThanOrEqual(37);
+  expect(after.y).toBeGreaterThanOrEqual(-31); expect(after.y).toBeLessThanOrEqual(25);
+  expect(after.z).toBeGreaterThanOrEqual(-23); expect(after.z).toBeLessThanOrEqual(29);
+});
+
+test("rolls a drawing back after a revision conflict", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?drawingConflict=1");
+  const { path } = await drawBentStroke(page);
+  const confirmed = await page.getByTestId("camera-a-stroke-points").textContent();
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(path[1].x, path[1].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x + 60, path[1].y - 60, { steps: 20 });
+  await page.mouse.up();
+  await expect(page.getByTestId("camera-a-stroke-points")).toHaveText(confirmed ?? "");
+  await expect(page.getByTestId("drawing-status")).toContainText("Positionskonflikt");
+});
+
+test("keeps a drawing visible when deletion fails", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?drawingDeleteFailure=1");
+  const { path } = await drawBentStroke(page);
+  await page.getByRole("button", { name: "Zeichnung löschen" }).first().click();
+  await page.mouse.click(path[1].x, path[1].y);
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("1");
+  await expect(page.getByTestId("drawing-status")).toContainText("konnte nicht gelöscht werden");
+});
+
+test("viewer sees shared paths without drawing controls", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?viewer=1");
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("1");
+  await expect(page.getByRole("button", { name: "Freihand zeichnen" })).toHaveCount(0);
 });
