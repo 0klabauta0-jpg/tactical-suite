@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { parseWorldPoint } from "@/lib/rockbreaker/scene-objects";
+import type { Vec3 } from "@/lib/rockbreaker/coordinates";
 import { MapSceneStoreError } from "@/lib/server/map-scene-store";
 import { RoomAuthError } from "@/lib/server/room-auth";
 
@@ -18,16 +19,26 @@ export async function PATCH(request: Request, context: Context) {
   let body: unknown;
   try { body = await request.json(); } catch { return json({ error: "Ungültige Anfrage." }, 400); }
   const record = typeof body === "object" && body !== null && !Array.isArray(body) ? body as Record<string, unknown> : {};
-  const position = parseWorldPoint(record.position);
-  if (!position || !Number.isInteger(record.expectedRevision) || !Number.isInteger(record.expectedLockRevision)) return json({ error: "Ungültige Anfrage." }, 400);
+  const hasPosition = "position" in record;
+  const hasTranslation = "translation" in record;
+  const position = hasPosition ? parseWorldPoint(record.position) : null;
+  const translation = hasTranslation && Array.isArray(record.translation)
+    && record.translation.length === 3 && record.translation.every((value) => typeof value === "number" && Number.isFinite(value))
+    ? record.translation as unknown as Vec3
+    : null;
+  if (hasPosition === hasTranslation || (!position && !translation)
+    || !Number.isInteger(record.expectedRevision) || !Number.isInteger(record.expectedLockRevision)) return json({ error: "Ungültige Anfrage." }, 400);
   const { roomId, sceneId, objectId } = await context.params;
   try {
     const { member, store, storeModule } = await dependencies(request, roomId);
-    return json(await storeModule.commitSceneObjectMove(store, {
+    const input = {
       roomId, sceneId, objectId, actor: { uid: member.uid, role: member.role },
       expectedRevision: record.expectedRevision as number, expectedLockRevision: record.expectedLockRevision as number,
-      position, nowMs: Date.now(),
-    }));
+      nowMs: Date.now(),
+    };
+    return json(position
+      ? await storeModule.commitSceneObjectMove(store, { ...input, position })
+      : await storeModule.commitSceneObjectTranslation(store, { ...input, translation: translation! }));
   } catch (error) {
     if (error instanceof RoomAuthError) return json({ error: "Nicht erlaubt." }, error.code === "UNAUTHENTICATED" ? 401 : 403);
     if (error instanceof MapSceneStoreError) {

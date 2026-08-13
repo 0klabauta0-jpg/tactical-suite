@@ -1,7 +1,7 @@
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { WorldPoint } from "@/lib/rockbreaker/coordinates";
-import { parseSceneObject, type SceneObject } from "@/lib/rockbreaker/scene-objects";
+import type { Vec3, WorldPoint } from "@/lib/rockbreaker/coordinates";
+import { parseSceneObject, type SceneObject, type StrokeSceneObject } from "@/lib/rockbreaker/scene-objects";
 import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 
 export function subscribeSceneObjects(roomId: string, sceneId: string, onChange: (objects: SceneObject[]) => void) {
@@ -39,6 +39,20 @@ export const moveMapSceneObject = (
 ) => api<SceneObject>(`${base(roomId, sceneId)}/objects/${encodeURIComponent(object.id)}`, "PATCH", getIdToken, {
   position, expectedRevision: object.revision, expectedLockRevision: lockRevision,
 });
+
+export const translateMapSceneObject = (
+  roomId: string,
+  sceneId: string,
+  object: StrokeSceneObject,
+  translation: Vec3,
+  lockRevision: number,
+  getIdToken: () => Promise<string>,
+) => api<StrokeSceneObject>(
+  `${base(roomId, sceneId)}/objects/${encodeURIComponent(object.id)}`,
+  "PATCH",
+  getIdToken,
+  { translation, expectedRevision: object.revision, expectedLockRevision: lockRevision },
+);
 
 export const removeMapSceneObject = (roomId: string, sceneId: string, objectId: string, getIdToken: () => Promise<string>) =>
   api<{ deleted: true }>(`${base(roomId, sceneId)}/objects/${encodeURIComponent(objectId)}`, "DELETE", getIdToken);
