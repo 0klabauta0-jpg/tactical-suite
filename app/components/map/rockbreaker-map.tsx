@@ -88,6 +88,8 @@ export function RockbreakerMap({
   const canWriteRef = useRef(canWrite);
   const showGridRef = useRef(showGrid);
   const initialCameraAzimuthRef = useRef(initialCameraAzimuth);
+  const cancelActiveOperationRef = useRef<(() => void) | null>(null);
+  const authoritativeObjectsSignatureRef = useRef(JSON.stringify(objects));
   const sceneContext = useRef<{
     THREE: typeof import("three");
     scene: Three.Scene;
@@ -162,6 +164,7 @@ export function RockbreakerMap({
       const objectRoot = new THREE.Group(); scene.add(objectRoot);
       const objectMeshes = new Map<string, Three.Object3D>();
       sceneContext.current = { THREE, scene, camera, renderer, grid, asteroidMeshes, objectRoot, objectMeshes };
+      canvas.dataset.sceneReady = "true";
       setSceneReady((revision) => revision + 1);
 
       const raycaster = new THREE.Raycaster();
@@ -222,17 +225,17 @@ export function RockbreakerMap({
         if (customTranslate) await customTranslate(object, translation);
         else await translateMapSceneObject(roomId, sceneId, object, translation, lockRevision, () => getIdTokenRef.current());
       };
-      const objectAtPointer = (event: PointerEvent) => {
+      const objectAtPointer = (event: PointerEvent, accepts: (object: SceneObject) => boolean) => {
         setRay(event);
-        const objectHit = raycaster.intersectObjects([...objectMeshes.values()], true)
-          .find((hit) => hit.object.userData.objectId || hit.object.parent?.userData.objectId);
-        const objectId = objectHit ? String(objectHit.object.userData.objectId ?? objectHit.object.parent?.userData.objectId) : "";
-        return {
-          hit: objectHit,
-          object: objectsRef.current.find((candidate) => candidate.id === objectId),
-        };
+        for (const hit of raycaster.intersectObjects([...objectMeshes.values()], true)) {
+          const objectId = String(hit.object.userData.objectId ?? hit.object.parent?.userData.objectId ?? "");
+          const object = objectsRef.current.find((candidate) => candidate.id === objectId);
+          if (object && accepts(object)) return { hit, object };
+        }
+        return { hit: undefined, object: undefined };
       };
       const down = (event: PointerEvent) => {
+        if (operation.kind !== "idle") return;
         const drawingTool = drawingToolRef.current;
         if (canWriteRef.current && drawingTool === "stroke") {
           const start = pointAt(event);
@@ -266,9 +269,11 @@ export function RockbreakerMap({
           canvas.setPointerCapture(event.pointerId);
           return;
         }
-        const { hit: objectHit, object } = objectAtPointer(event);
+        const accepts = drawingTool === "delete" || drawingTool === "move"
+          ? (candidate: SceneObject) => candidate.type === "point" || candidate.type === "stroke"
+          : (candidate: SceneObject) => "position" in candidate && (candidate.type === "groupToken" || candidate.type === "enemyMarker");
+        const { hit: objectHit, object } = objectAtPointer(event, accepts);
         if (object && canWriteRef.current && drawingTool === "delete") {
-          if (object.type !== "point" && object.type !== "stroke") return;
           event.preventDefault();
           void removeObject(object)
             .then(() => setMessage("Zeichnung gelöscht."))
@@ -324,6 +329,7 @@ export function RockbreakerMap({
         canvas.setPointerCapture(event.pointerId);
       };
       const move = (event: PointerEvent) => {
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
         if (operation.kind === "point-create") return;
         if (operation.kind === "stroke-create") {
           const rect = canvas.getBoundingClientRect();
@@ -386,6 +392,7 @@ export function RockbreakerMap({
         }
       };
       const up = (event: PointerEvent) => {
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
         if (operation.kind === "point-create") {
           const pending = operation;
           operation = { kind: "idle" };
@@ -474,6 +481,7 @@ export function RockbreakerMap({
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       };
       const cancel = (event: PointerEvent) => {
+        if (operation.kind !== "idle" && event.pointerId !== operation.pointerId) return;
         disposePreview();
         if (operation.kind === "stroke-drag") operation.mesh.position.set(0, 0, 0);
         if (operation.kind === "position-drag") {
@@ -482,6 +490,18 @@ export function RockbreakerMap({
         }
         operation = { kind: "idle" };
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      };
+      cancelActiveOperationRef.current = () => {
+        const active = operation;
+        const pointerId = active.kind === "idle" ? null : active.pointerId;
+        if (active.kind === "stroke-create") disposePreview();
+        if (active.kind === "stroke-drag") active.mesh.position.set(0, 0, 0);
+        if (active.kind === "position-drag") {
+          const confirmed = confirmedObjectPosition(objectsRef.current, active.object.id, active.object.position);
+          active.mesh.position.set(confirmed.x, confirmed.y, confirmed.z);
+        }
+        operation = { kind: "idle" };
+        if (pointerId !== null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
       };
       const wheel = (event: WheelEvent) => { event.preventDefault(); cameraState.distance = Math.max(8, Math.min(140, cameraState.distance * (event.deltaY > 0 ? 1.1 : 0.9))); updateCamera(); };
       canvas.addEventListener("pointerdown", down); canvas.addEventListener("pointermove", move); canvas.addEventListener("pointerup", up); canvas.addEventListener("pointercancel", cancel); canvas.addEventListener("wheel", wheel, { passive: false });
@@ -511,9 +531,11 @@ export function RockbreakerMap({
 
     return () => {
       disposed = true;
+      delete canvas.dataset.sceneReady;
       cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       cleanupListeners.forEach((cleanup) => cleanup());
+      cancelActiveOperationRef.current = null;
       const context = sceneContext.current;
       if (context) {
         context.scene.traverse((object) => {
@@ -532,6 +554,11 @@ export function RockbreakerMap({
   useEffect(() => {
     const context = sceneContext.current;
     if (!context) return;
+    const authoritativeSignature = JSON.stringify(objects);
+    if (authoritativeObjectsSignatureRef.current !== authoritativeSignature) {
+      cancelActiveOperationRef.current?.();
+      authoritativeObjectsSignatureRef.current = authoritativeSignature;
+    }
     // Firestore/UI-test state is authoritative: discard every optimistic root offset.
     const { THREE, objectRoot, objectMeshes } = context;
     [...objectRoot.children].forEach(disposeRockbreakerObject3d);

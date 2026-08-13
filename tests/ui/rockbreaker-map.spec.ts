@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+async function waitForRockbreakerScene(page: import("@playwright/test").Page) {
+  await expect(page.getByLabel("Rockbreaker 3D Karte").first()).toHaveAttribute("data-scene-ready", "true");
+}
+
 async function dragFirstGroupToParent(page: import("@playwright/test").Page) {
+  await waitForRockbreakerScene(page);
   const source = await page.getByTestId("rockbreaker-group-g1").first().boundingBox();
   const target = await page.getByTestId("rockbreaker-move-up").first().boundingBox();
   if (!source || !target) throw new Error("3D-Trupp oder Rückweg ist nicht sichtbar.");
@@ -29,6 +34,7 @@ async function dragBy(
   source: import("@playwright/test").Locator,
   delta: { x: number; y: number },
 ) {
+  await waitForRockbreakerScene(page);
   const box = await source.boundingBox();
   if (!box) throw new Error("3D-Trupp ist nicht sichtbar.");
   const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -45,6 +51,7 @@ function coordinates(value: string | null) {
 }
 
 async function drawBentStroke(page: import("@playwright/test").Page, expectedStrokeCount = "1") {
+  await waitForRockbreakerScene(page);
   await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
   const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
   if (!box) throw new Error("Rockbreaker canvas fehlt.");
@@ -128,6 +135,7 @@ test("moves a troop vertically in camera space and keeps it inside the shared fi
 
 test("draws one shared freehand 3d path", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker");
+  await waitForRockbreakerScene(page);
   await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
   const canvas = page.getByLabel("Rockbreaker 3D Karte").first();
   const box = await canvas.boundingBox();
@@ -147,6 +155,7 @@ test("draws one shared freehand 3d path", async ({ page }) => {
 
 test("removes a failed local preview without creating shared state", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker?drawingCreateFailure=1");
+  await waitForRockbreakerScene(page);
   await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
   const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
   if (!box) throw new Error("Rockbreaker canvas fehlt.");
@@ -161,6 +170,7 @@ test("removes a failed local preview without creating shared state", async ({ pa
 
 test("creates one shared point only when the click is released", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker");
+  await waitForRockbreakerScene(page);
   await page.getByRole("button", { name: "Punkt setzen" }).first().click();
   const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
   if (!box) throw new Error("Rockbreaker canvas fehlt.");
@@ -208,6 +218,7 @@ test("moves the complete stroke in xyz without changing its shape", async ({ pag
 
 test("moves one drawing point in xyz", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker");
+  await waitForRockbreakerScene(page);
   const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
   if (!box) throw new Error("Rockbreaker canvas fehlt.");
   const start = { x: box.x + 470, y: box.y + 250 };
@@ -256,6 +267,7 @@ test("undo removes only the current user's latest drawing", async ({ page }) => 
 
 test("moves an enemy marker freely in xyz and remains bounded", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker?emptyEnemy=1");
+  await waitForRockbreakerScene(page);
   const box = await page.getByLabel("Rockbreaker 3D Karte").first().boundingBox();
   if (!box) throw new Error("Rockbreaker canvas fehlt.");
   const start = { x: box.x + 430, y: box.y + 230 };
@@ -300,4 +312,64 @@ test("viewer sees shared paths without drawing controls", async ({ page }) => {
   await page.goto("/ui-test/rockbreaker?viewer=1");
   await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("1");
   await expect(page.getByRole("button", { name: "Freihand zeichnen" })).toHaveCount(0);
+});
+
+test("foreground troop and enemy do not block moving or deleting a drawing", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker?overlapDrawing=1");
+  const { path } = await drawBentStroke(page);
+  await expect(page.getByTestId("overlap-ready")).toHaveText("1");
+  const before = await page.getByTestId("camera-a-stroke-points").textContent();
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(path[1].x, path[1].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x + 55, path[1].y - 45, { steps: 16 });
+  await page.mouse.up();
+  await expect(page.getByTestId("camera-a-stroke-points")).not.toHaveText(before ?? "");
+  await page.getByRole("button", { name: "Zeichnung löschen" }).first().click();
+  await page.mouse.click(path[1].x + 55, path[1].y - 45);
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("0");
+  await expect(page.getByTestId("rockbreaker-group-g1")).toHaveCount(2);
+  await expect(page.getByTestId("rockbreaker-enemy-count")).toHaveText("1");
+});
+
+test("ignores foreign pointers and keeps one preview owned by its first pointer", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  await waitForRockbreakerScene(page);
+  await page.getByRole("button", { name: "Freihand zeichnen" }).first().click();
+  const canvas = page.getByLabel("Rockbreaker 3D Karte").first();
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("Rockbreaker canvas fehlt.");
+  await page.mouse.move(box.x + 280, box.y + 220);
+  await page.mouse.down();
+  await expect(page.getByTestId("rockbreaker-preview-count")).toHaveText("1");
+  const dispatchForeign = (type: string, x: number, y: number) => canvas.evaluate((element, detail) => {
+    element.dispatchEvent(new PointerEvent(detail.type, {
+      pointerId: 22, pointerType: "touch", clientX: detail.x, clientY: detail.y,
+      buttons: detail.type === "pointerup" ? 0 : 1, bubbles: true,
+    }));
+  }, { type, x, y });
+  await dispatchForeign("pointerdown", box.x + 360, box.y + 180);
+  await dispatchForeign("pointermove", box.x + 410, box.y + 150);
+  await dispatchForeign("pointerup", box.x + 410, box.y + 150);
+  await expect(page.getByTestId("rockbreaker-preview-count")).toHaveText("1");
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("0");
+  await page.mouse.move(box.x + 350, box.y + 170, { steps: 10 });
+  await page.mouse.move(box.x + 410, box.y + 230, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.getByTestId("rockbreaker-preview-count")).toHaveText("0");
+  await expect(page.getByTestId("rockbreaker-stroke-count")).toHaveText("1");
+});
+
+test("authoritative object update cancels an active drag without a stale write", async ({ page }) => {
+  await page.goto("/ui-test/rockbreaker");
+  const { path } = await drawBentStroke(page);
+  await page.getByRole("button", { name: "Zeichnung verschieben" }).first().click();
+  await page.mouse.move(path[1].x, path[1].y);
+  await page.mouse.down();
+  await page.mouse.move(path[1].x + 45, path[1].y - 35, { steps: 12 });
+  await page.getByTestId("authoritative-scene-update").evaluate((button: HTMLButtonElement) => button.click());
+  await page.mouse.move(path[1].x + 80, path[1].y - 65, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByTestId("scene-translation-count")).toHaveText("0");
+  await expect(page.getByTestId("rockbreaker-preview-count")).toHaveText("0");
 });

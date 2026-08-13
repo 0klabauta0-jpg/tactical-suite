@@ -62,6 +62,7 @@ export default function RockbreakerTestPage() {
   const [drawingStatus, setDrawingStatus] = useState("");
   const [enemyPlacement, setEnemyPlacement] = useState<"ground" | null>(null);
   const [viewer, setViewer] = useState(false);
+  const [translationCount, setTranslationCount] = useState(0);
   const sequence = useRef(10);
   const conflictConsumed = useRef(false);
   useEffect(() => {
@@ -112,7 +113,17 @@ export default function RockbreakerTestPage() {
       : draft.type === "enemyMarker"
         ? { ...base, type: "enemyMarker", kind: draft.kind, position: draft.position }
         : { ...base, type: "point", ...(draft.label ? { label: draft.label } : {}), position: draft.position };
-    setObjects((current) => [...current, object]);
+    setObjects((current) => {
+      if (draft.type !== "stroke" || new URLSearchParams(window.location.search).get("overlapDrawing") !== "1") {
+        return [...current, object];
+      }
+      const middle = draft.points[Math.floor(draft.points.length / 2)];
+      return [...current.map((candidate) => (
+        (candidate.type === "groupToken" && candidate.groupId === "g1") || candidate.type === "enemyMarker"
+          ? { ...candidate, position: { ...middle, anchor: { kind: "freeSpace" as const } } }
+          : candidate
+      )), object];
+    });
     if (draft.type === "enemyMarker") setEnemyPlacement(null);
     setDrawingStatus("Zeichnung gespeichert.");
   };
@@ -139,6 +150,7 @@ export default function RockbreakerTestPage() {
     setObjects((current) => current.map((candidate) => candidate.id === object.id && candidate.type === "stroke"
       ? { ...candidate, points: translateStrokePoints(candidate.points, translation), revision: candidate.revision + 1, updatedAtMs: Date.now() }
       : candidate));
+    setTranslationCount((count) => count + 1);
   };
   const shared = {
     roomId: "test",
@@ -185,6 +197,11 @@ export default function RockbreakerTestPage() {
         <button className="rounded bg-gray-700 px-3 py-2" onClick={() => setSceneClock((value) => value + 365 * 24 * 60 * 60 * 1000)}>3D-Zeit ein Jahr vorspulen</button>
         <button className="rounded bg-red-800 px-3 py-2" onClick={() => setObjects((current) => current.filter((object) => object.type !== "enemyMarker"))}>3D-Feindmarker löschen</button>
         <button className="rounded bg-red-700 px-3 py-2" onClick={() => setEnemyPlacement("ground")}>Boden-Feindmarker setzen</button>
+        <button
+          data-testid="authoritative-scene-update"
+          className="hidden"
+          onClick={() => setObjects((current) => current.map((object) => ({ ...object, revision: object.revision + 1, updatedAtMs: Date.now() })))}
+        >Authoritativen Stand aktualisieren</button>
         <DraggableTroopChip
           groupId="g2"
           label="Red Team"
@@ -227,6 +244,8 @@ export default function RockbreakerTestPage() {
       <div data-testid="drawing-status">{drawingStatus}</div>
       <div data-testid="drawing-point-coordinate">{drawingPoint?.type === "point" ? formatPosition(drawingPoint.position) : ""}</div>
       <div data-testid="enemy-coordinate">{enemy?.type === "enemyMarker" ? formatPosition(enemy.position) : ""}</div>
+      <div data-testid="overlap-ready">{objects.some((object) => object.type === "stroke") && new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("overlapDrawing") === "1" ? "1" : "0"}</div>
+      <div data-testid="scene-translation-count">{translationCount}</div>
       <div>Grid sichtbar · Fight Team</div>
     </main>
   );
