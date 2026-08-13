@@ -8,6 +8,7 @@ import { DraggableTroopChip, TroopTransferProvider } from "@/app/components/map/
 import type { TokenLocation, TokenTransferIntent } from "@/lib/map/token-transfer";
 import type { RockbreakerDrawingTool } from "@/lib/rockbreaker/drawing";
 import type { RockbreakerStrokeWidth, SceneObject } from "@/lib/rockbreaker/scene-objects";
+import type { SceneObjectDraft } from "@/lib/server/map-scene-store";
 
 function objectAt(x: number, y: number, z: number, groupId = "g1", color = "#3b82f6"): SceneObject {
   return {
@@ -43,11 +44,39 @@ export default function RockbreakerTestPage() {
   const [drawingTool, setDrawingTool] = useState<RockbreakerDrawingTool>("pointer");
   const [drawingColor, setDrawingColor] = useState("#22d3ee");
   const [drawingWidth, setDrawingWidth] = useState<RockbreakerStrokeWidth>(3);
+  const [previewCount, setPreviewCount] = useState(0);
+  const [drawingStatus, setDrawingStatus] = useState("");
   if (process.env.NEXT_PUBLIC_ENABLE_UI_TEST_ROUTES !== "1") notFound();
   const coordinate = objects[0] && "position" in objects[0]
     ? `${objects[0].position.x.toFixed(2)} / ${objects[0].position.y.toFixed(2)} / ${objects[0].position.z.toFixed(2)}`
     : "";
   const anchor = objects[0] && "position" in objects[0] ? objects[0].position.anchor.kind : "";
+  const strokePoints = JSON.stringify(objects.find((object) => object.type === "stroke")?.points ?? []);
+  const createDrawing = async (draft: SceneObjectDraft) => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("drawingCreateFailure")) {
+      setDrawingStatus("Zeichnung konnte nicht gespeichert werden.");
+      throw new Error("Zeichnung konnte nicht gespeichert werden.");
+    }
+    if (draft.type !== "point" && draft.type !== "stroke") throw new Error("Nicht unterstÃ¼tzter UI-Test-Entwurf.");
+    const now = Date.now();
+    const base = {
+      id: `${draft.type}--ui-${now}`,
+      systemId: "nyx" as const,
+      mapId: "rockbreaker" as const,
+      sceneVersion: 1 as const,
+      color: draft.color,
+      revision: 0,
+      createdBy: "test",
+      createdAtMs: now,
+      updatedBy: "test",
+      updatedAtMs: now,
+    };
+    const object: SceneObject = draft.type === "stroke"
+      ? { ...base, type: "stroke", width: draft.width, points: draft.points }
+      : { ...base, type: "point", ...(draft.label ? { label: draft.label } : {}), position: draft.position };
+    setObjects((current) => [...current, object]);
+    setDrawingStatus("Zeichnung gespeichert.");
+  };
   const shared = {
     roomId: "test",
     sceneId: "nyx--rockbreaker",
@@ -75,6 +104,8 @@ export default function RockbreakerTestPage() {
     drawingTool,
     drawingColor,
     drawingWidth,
+    sceneMutations: { create: createDrawing },
+    onPreviewActiveChange: (active: boolean) => setPreviewCount(active ? 1 : 0),
   };
   async function handleTransfer({ groupId, intent }: { groupId: string; expectedSource: TokenLocation; intent: TokenTransferIntent }) {
     if (intent.kind !== "enterChild" || intent.childId !== "rockbreaker") return;
@@ -120,6 +151,11 @@ export default function RockbreakerTestPage() {
       <div data-testid="scene-object-count">{objects.length}</div>
       <div data-testid="rockbreaker-enemy-count">{objects.filter((object) => object.type === "enemyMarker").length}</div>
       <div data-testid="rockbreaker-navigation-count">{navigationCount}</div>
+      <div data-testid="rockbreaker-stroke-count">{objects.filter((object) => object.type === "stroke").length}</div>
+      <div data-testid="rockbreaker-preview-count">{previewCount}</div>
+      <div data-testid="camera-a-stroke-points">{strokePoints}</div>
+      <div data-testid="camera-b-stroke-points">{strokePoints}</div>
+      <div data-testid="drawing-status">{drawingStatus}</div>
       <div>Grid sichtbar · Fight Team</div>
     </main>
   );
